@@ -1,6 +1,7 @@
 {
   "name": "north-bot-2-webseite",
-  "version": "2.0.0",
+  "version": "1.0.0",
+  "description": "North-Bot-2 Webseite",
   "main": "webseite.js",
   "scripts": {
     "start": "node webseite.js"
