@@ -20,7 +20,7 @@ const PORT = 10000;
 
 // NEUEN DISCORD WEBHOOK HIER EINTRAGEN
 const DISCORD_WEBHOOK_URL =
-    "DEIN_NEUER_DISCORD_WEBHOOK_HIER";
+    "https://discord.com/api/webhooks/1543921362794717194/hhfOv1sAQJz2vuq1VCuZGvxdCOApGxSwyfG7__xKAIlRbvo11kfygoI28fOVUSWT-RXa";
 
 // Discord Server
 const DISCORD_INVITE =
