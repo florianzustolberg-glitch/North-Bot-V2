@@ -1,7 +1,37 @@
-// ============================================================
-// NORTH-BOT-2 WEBSEITE
-// Komplettes Websystem
-// ============================================================
+/*
+========================================================
+                 NORTH-BOT-2 WEBSEITE
+========================================================
+
+Node.js / Express
+Keine .env erforderlich.
+
+Automatisch erstellte Dateien:
+- users.json
+- tickets.json
+- codes.json
+- products.json
+- giveaways.json
+- logs.json
+- messages.json
+- settings.json
+- orders.json
+- sessions.json
+
+Start:
+    node webseite.js
+
+Standard-Port:
+    process.env.PORT || 10000
+
+Owner:
+    florianzustolberg@gmail.com
+
+Discord:
+    https://discord.gg/NJEVq6Pk6x
+
+========================================================
+*/
 
 const express = require("express");
 const fs = require("fs");
@@ -9,42 +39,77 @@ const path = require("path");
 const crypto = require("crypto");
 
 const app = express();
-const PORT = process.env.PORT || 10000;
 
+const PORT = process.env.PORT || 10000;
+const HOST = "0.0.0.0";
+
+const SITE_NAME = "North-Bot-2";
 const DISCORD_INVITE = "https://discord.gg/NJEVq6Pk6x";
 const OWNER_EMAIL = "florianzustolberg@gmail.com";
-const OWNER_PASSWORD = "278263";
 
-const DATA_DIR = path.join(__dirname, "data");
+const TICKET_CATEGORY_ID = "1493423287118729328";
+
+const DATA_DIR = __dirname;
 
 const FILES = {
-    users: path.join(__dirname, "users.json"),
-    tickets: path.join(__dirname, "tickets.json"),
-    codes: path.join(__dirname, "codes.json"),
-    logs: path.join(__dirname, "logs.json"),
-    products: path.join(__dirname, "products.json"),
-    giveaways: path.join(__dirname, "giveaways.json"),
-    announcements: path.join(__dirname, "announcements.json"),
-    settings: path.join(__dirname, "settings.json")
+    users: path.join(DATA_DIR, "users.json"),
+    tickets: path.join(DATA_DIR, "tickets.json"),
+    codes: path.join(DATA_DIR, "codes.json"),
+    products: path.join(DATA_DIR, "products.json"),
+    giveaways: path.join(DATA_DIR, "giveaways.json"),
+    logs: path.join(DATA_DIR, "logs.json"),
+    messages: path.join(DATA_DIR, "messages.json"),
+    settings: path.join(DATA_DIR, "settings.json"),
+    orders: path.join(DATA_DIR, "orders.json"),
+    sessions: path.join(DATA_DIR, "sessions.json")
 };
 
 app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 
-app.use((req, res, next) => {
-    res.setHeader("X-Powered-By", "North-Bot-2");
-    next();
-});
+/* ======================================================
+   JSON DATABASE
+====================================================== */
 
-// ============================================================
-// DATEIEN
-// ============================================================
+const DEFAULTS = {
+    users: [],
+    tickets: [],
+    codes: [],
+    products: [],
+    giveaways: [],
+    logs: [],
+    messages: [],
+    orders: [],
+    sessions: [],
+    settings: {
+        status: "normal",
+        statusText: "",
+        announcement: "",
+        maintenance: false,
+        incident: false
+    }
+};
 
-function ensureFile(file, defaultValue) {
+function ensureFile(file, value) {
     if (!fs.existsSync(file)) {
-        fs.writeFileSync(file, JSON.stringify(defaultValue, null, 2));
+        fs.writeFileSync(file, JSON.stringify(value, null, 2), "utf8");
     }
 }
+
+function ensureDatabase() {
+    ensureFile(FILES.users, DEFAULTS.users);
+    ensureFile(FILES.tickets, DEFAULTS.tickets);
+    ensureFile(FILES.codes, DEFAULTS.codes);
+    ensureFile(FILES.products, DEFAULTS.products);
+    ensureFile(FILES.giveaways, DEFAULTS.giveaways);
+    ensureFile(FILES.logs, DEFAULTS.logs);
+    ensureFile(FILES.messages, DEFAULTS.messages);
+    ensureFile(FILES.settings, DEFAULTS.settings);
+    ensureFile(FILES.orders, DEFAULTS.orders);
+    ensureFile(FILES.sessions, DEFAULTS.sessions);
+}
+
+ensureDatabase();
 
 function readJSON(file, fallback) {
     try {
@@ -61,136 +126,486 @@ function readJSON(file, fallback) {
         }
 
         return JSON.parse(raw);
-    } catch (err) {
-        console.error("JSON Fehler:", file, err.message);
+    } catch (error) {
+        console.error("JSON Fehler:", file, error.message);
         return fallback;
     }
 }
 
 function writeJSON(file, data) {
-    fs.writeFileSync(file, JSON.stringify(data, null, 2));
-}
+    const temp = file + ".tmp";
 
-ensureFile(FILES.users, []);
-ensureFile(FILES.tickets, []);
-ensureFile(FILES.codes, []);
-ensureFile(FILES.logs, []);
-ensureFile(FILES.products, []);
-ensureFile(FILES.giveaways, []);
-ensureFile(FILES.announcements, []);
-ensureFile(FILES.settings, {
-    maintenance: false,
-    maintenanceText: "Die Webseite befindet sich momentan in Wartung.",
-    incident: false,
-    incidentText: "",
-    announcement: ""
-});
-
-// ============================================================
-// KONTO-RESET
-// ============================================================
-
-// Alle alten Konten werden entfernt.
-// Danach wird nur der Owner neu angelegt.
-
-let users = readJSON(FILES.users, []);
-
-if (!users.some(u => String(u.email).toLowerCase() === OWNER_EMAIL.toLowerCase())) {
-    users = [];
-    writeJSON(FILES.users, users);
-}
-
-// ============================================================
-// PASSWORT
-// ============================================================
-
-function hashPassword(password) {
-    return crypto
-        .createHash("sha256")
-        .update(String(password))
-        .digest("hex");
-}
-
-function createId(prefix = "") {
-    return (
-        prefix +
-        Date.now().toString(36) +
-        crypto.randomBytes(5).toString("hex")
+    fs.writeFileSync(
+        temp,
+        JSON.stringify(data, null, 2),
+        "utf8"
     );
+
+    fs.renameSync(temp, file);
 }
 
-function clean(value, max = 500) {
+function db(name) {
+    return readJSON(FILES[name], DEFAULTS[name]);
+}
+
+/* ======================================================
+   HELPERS
+====================================================== */
+
+function now() {
+    return new Date().toISOString();
+}
+
+function id(prefix) {
+    return prefix + "_" + crypto.randomBytes(10).toString("hex");
+}
+
+function randomCodePart() {
+    return crypto.randomBytes(3).toString("hex").toUpperCase();
+}
+
+function createRedeemCode() {
+    return "NORTH-" + randomCodePart() + "-" + randomCodePart();
+}
+
+function createOrderNumber() {
+    return "NORTH-" +
+        Date.now().toString().slice(-8) +
+        "-" +
+        crypto.randomBytes(2).toString("hex").toUpperCase();
+}
+
+function createTicketNumber() {
+    return "TICKET-" +
+        Date.now().toString().slice(-8);
+}
+
+function createGiveawayNumber() {
+    return "GW-" +
+        Date.now().toString().slice(-8);
+}
+
+function clean(value, max = 1000) {
     return String(value || "")
         .replace(/[<>]/g, "")
         .trim()
         .slice(0, max);
 }
 
-// ============================================================
-// OWNER
-// ============================================================
-
-users = readJSON(FILES.users, []);
-
-const ownerExists = users.some(
-    u => String(u.email).toLowerCase() === OWNER_EMAIL.toLowerCase()
-);
-
-if (!ownerExists) {
-    users.push({
-        id: createId("USR-"),
-        email: OWNER_EMAIL,
-        password: hashPassword(OWNER_PASSWORD),
-        username: "Florian",
-        role: "Owner",
-        coins: 0,
-        banned: false,
-        banReason: null,
-        banUntil: null,
-        createdAt: new Date().toISOString(),
-        lastLogin: null
-    });
-
-    writeJSON(FILES.users, users);
+function escapeHTML(value) {
+    return String(value == null ? "" : value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
 }
 
-// ============================================================
-// SESSION-SYSTEM OHNE EXPRESS-SESSION
-// ============================================================
+function hashPassword(password) {
+    const salt = crypto.randomBytes(16).toString("hex");
 
-const sessions = new Map();
+    const hash = crypto
+        .scryptSync(String(password), salt, 64)
+        .toString("hex");
 
-function createSession(userId) {
+    return salt + ":" + hash;
+}
+
+function verifyPassword(password, stored) {
+    try {
+        const parts = String(stored).split(":");
+
+        if (parts.length !== 2) {
+            return false;
+        }
+
+        const salt = parts[0];
+        const original = Buffer.from(parts[1], "hex");
+
+        const current = crypto.scryptSync(
+            String(password),
+            salt,
+            64
+        );
+
+        return crypto.timingSafeEqual(
+            original,
+            current
+        );
+    } catch {
+        return false;
+    }
+}
+
+function getSettings() {
+    return Object.assign(
+        {},
+        DEFAULTS.settings,
+        db("settings")
+    );
+}
+
+function saveSettings(settings) {
+    writeJSON(FILES.settings, settings);
+}
+
+function addLog(type, actor, details) {
+    const logs = db("logs");
+
+    logs.unshift({
+        id: id("log"),
+        type: clean(type, 100),
+        actor: clean(actor, 200),
+        details: clean(details, 1000),
+        createdAt: now()
+    });
+
+    writeJSON(
+        FILES.logs,
+        logs.slice(0, 5000)
+    );
+}
+
+function findUserByEmail(email) {
+    const users = db("users");
+
+    return users.find(function(user) {
+        return user.email.toLowerCase() ===
+            String(email).toLowerCase();
+    });
+}
+
+function findUserById(userId) {
+    return db("users").find(function(user) {
+        return user.id === userId;
+    });
+}
+
+function isBanned(user) {
+    if (!user || !user.banned) {
+        return false;
+    }
+
+    if (!user.banUntil) {
+        return true;
+    }
+
+    const until = new Date(user.banUntil).getTime();
+
+    if (Date.now() >= until) {
+        user.banned = false;
+        user.banUntil = null;
+        user.banReason = "";
+
+        const users = db("users");
+        const index = users.findIndex(function(x) {
+            return x.id === user.id;
+        });
+
+        if (index !== -1) {
+            users[index] = user;
+            writeJSON(FILES.users, users);
+        }
+
+        return false;
+    }
+
+    return true;
+}
+
+function roleLevel(role) {
+    const levels = {
+        user: 0,
+        supporter: 1,
+        moderator: 2,
+        developer: 3,
+        manager: 4,
+        admin: 5,
+        owner: 6
+    };
+
+    return levels[role] || 0;
+}
+
+function canAdmin(user) {
+    return !!user &&
+        roleLevel(user.role) >= roleLevel("admin");
+}
+
+function canManage(user) {
+    return !!user &&
+        roleLevel(user.role) >= roleLevel("manager");
+}
+
+function canTeam(user) {
+    return !!user &&
+        roleLevel(user.role) >= roleLevel("supporter");
+}
+
+function formatDate(value) {
+    if (!value) {
+        return "-";
+    }
+
+    try {
+        return new Date(value).toLocaleString("de-DE");
+    } catch {
+        return "-";
+    }
+}
+
+function formatBan(user) {
+    if (!user || !user.banned) {
+        return "Nicht gebannt";
+    }
+
+    if (!user.banUntil) {
+        return "Dauerhaft";
+    }
+
+    return "Bis " + formatDate(user.banUntil);
+}
+
+function generateSession(userId) {
+    const sessions = db("sessions");
+
     const token = crypto.randomBytes(32).toString("hex");
 
-    sessions.set(token, {
-        userId,
-        createdAt: Date.now(),
-        lastActivity: Date.now()
+    sessions.push({
+        token: token,
+        userId: userId,
+        createdAt: now(),
+        expiresAt: new Date(
+            Date.now() + 1000 * 60 * 60 * 24 * 7
+        ).toISOString()
     });
+
+    writeJSON(
+        FILES.sessions,
+        sessions.slice(-1000)
+    );
 
     return token;
 }
 
 function getUserFromRequest(req) {
     const token = req.headers.cookie
-        ?.split(";")
-        .map(x => x.trim())
-        .find(x => x.startsWith("north_session="))
-        ?.split("=")[1];
+        ? parseCookie(req.headers.cookie).north_session
+        : null;
 
-    if (!token) return null;
+    if (!token) {
+        return null;
+    }
 
-    const session = sessions.get(token);
+    const sessions = db("sessions");
 
-    if (!session) return null;
+    const session = sessions.find(function(item) {
+        return item.token === token;
+    });
 
-    session.lastActivity = Date.now();
+    if (!session) {
+        return null;
+    }
 
-    const list = readJSON(FILES.users, []);
+    if (Date.now() >
+        new Date(session.expiresAt).getTime()) {
 
-    return list.find(u => u.id === session.userId) || null;
+        return null;
+    }
+
+    return findUserById(session.userId) || null;
 }
+
+function parseCookie(header) {
+    const result = {};
+
+    String(header || "")
+        .split(";")
+        .forEach(function(part) {
+            const index = part.indexOf("=");
+
+            if (index === -1) {
+                return;
+            }
+
+            const key = part.slice(0, index).trim();
+            const value = part.slice(index + 1).trim();
+
+            result[key] = decodeURIComponent(value);
+        });
+
+    return result;
+}
+
+function setSession(res, token) {
+    res.setHeader(
+        "Set-Cookie",
+        "north_session=" +
+        encodeURIComponent(token) +
+        "; HttpOnly; Path=/; SameSite=Lax; Max-Age=604800"
+    );
+}
+
+function clearSession(res, req) {
+    const cookies = parseCookie(req.headers.cookie || "");
+    const token = cookies.north_session;
+
+    if (token) {
+        const sessions = db("sessions")
+            .filter(function(item) {
+                return item.token !== token;
+            });
+
+        writeJSON(FILES.sessions, sessions);
+    }
+
+    res.setHeader(
+        "Set-Cookie",
+        "north_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax"
+    );
+}
+
+/* ======================================================
+   HTML
+====================================================== */
+
+function layout(title, content, user) {
+    const settings = getSettings();
+
+    let statusHTML = "";
+
+    if (settings.maintenance) {
+        statusHTML =
+            '<div class="status maintenance">' +
+            "🔧 Wartung: " +
+            escapeHTML(settings.statusText ||
+                "Die Webseite befindet sich momentan in Wartung.") +
+            "</div>";
+    } else if (settings.incident) {
+        statusHTML =
+            '<div class="status incident">' +
+            "⚠️ Störung: " +
+            escapeHTML(settings.statusText ||
+                "Aktuell kann es zu Einschränkungen kommen.") +
+            "</div>";
+    }
+
+    let nav = "";
+
+    if (user) {
+        nav += '<a href="/dashboard">Dashboard</a>';
+        nav += '<a href="/tickets">Tickets</a>';
+        nav += '<a href="/shop">Shop</a>';
+        nav += '<a href="/codes">Codes</a>';
+        nav += '<a href="/giveaways">Gewinnspiele</a>';
+        nav += '<a href="/chat">Chat</a>';
+
+        if (canAdmin(user)) {
+            nav += '<a href="/admin">Adminpanel</a>';
+        }
+
+        nav += '<a href="/logout">Logout</a>';
+    } else {
+        nav += '<a href="/login">Login</a>';
+        nav += '<a href="/register">Registrieren</a>';
+    }
+
+    return [
+        "<!DOCTYPE html>",
+        "<html lang=\"de\">",
+        "<head>",
+        '<meta charset="UTF-8">',
+        '<meta name="viewport" content="width=device-width,initial-scale=1">',
+        "<title>" +
+            escapeHTML(title) +
+            " | North-Bot-2</title>",
+        "<style>",
+        css(),
+        "</style>",
+        "</head>",
+        "<body>",
+        '<header class="header">',
+        '<div class="brand">',
+        '<div class="logo">N</div>',
+        '<div>',
+        "<strong>North-Bot-2</strong>",
+        "<small>Websystem</small>",
+        "</div>",
+        "</div>",
+        '<nav>' + nav + "</nav>",
+        "</header>",
+        statusHTML,
+        '<main class="container">',
+        content,
+        "</main>",
+        '<footer>',
+        "<span>North-Bot-2</span>",
+        '<a href="' + DISCORD_INVITE + '" target="_blank">Discord</a>',
+        "</footer>",
+        "</body>",
+        "</html>"
+    ].join("");
+}
+
+function css() {
+    return [
+        "*{box-sizing:border-box}",
+        "body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#0b0e13;color:#eef2f7}",
+        "a{color:#8db7ff;text-decoration:none}",
+        "a:hover{text-decoration:underline}",
+        ".header{height:72px;background:#10141c;border-bottom:1px solid #252b36;display:flex;align-items:center;justify-content:space-between;padding:0 5%;position:sticky;top:0;z-index:10}",
+        ".brand{display:flex;gap:12px;align-items:center}",
+        ".logo{width:42px;height:42px;border-radius:10px;background:#fff;color:#111;display:grid;place-items:center;font-weight:900;font-size:22px}",
+        ".brand strong{display:block;font-size:16px}",
+        ".brand small{display:block;color:#7f8997;margin-top:2px}",
+        "nav{display:flex;gap:18px;align-items:center;flex-wrap:wrap}",
+        "nav a{font-size:14px;color:#aeb8c8}",
+        ".container{width:min(1180px,92%);margin:40px auto}",
+        ".hero{padding:65px 0}",
+        ".hero h1{font-size:52px;line-height:1;margin:0 0 16px}",
+        ".hero p{color:#9da7b5;max-width:680px;font-size:18px;line-height:1.6}",
+        ".buttons{display:flex;gap:12px;flex-wrap:wrap;margin-top:24px}",
+        ".button{display:inline-block;background:#fff;color:#101319;padding:12px 18px;border-radius:9px;font-weight:700;border:0;cursor:pointer}",
+        ".button.secondary{background:#1b222d;color:#fff}",
+        ".button.danger{background:#d84848;color:#fff}",
+        ".button.green{background:#319b65;color:#fff}",
+        ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}",
+        ".box{background:#11161e;border:1px solid #252c38;border-radius:14px;padding:20px}",
+        ".box h2,.box h3{margin-top:0}",
+        ".muted{color:#8993a2}",
+        ".big{font-size:30px;font-weight:800}",
+        ".form{max-width:520px;margin:auto}",
+        "label{display:block;margin:14px 0 7px;color:#adb6c3;font-size:14px}",
+        "input,textarea,select{width:100%;background:#0c1016;border:1px solid #303744;color:#fff;padding:12px;border-radius:8px;outline:none}",
+        "input:focus,textarea:focus,select:focus{border-color:#7899d6}",
+        "textarea{min-height:120px;resize:vertical}",
+        "form button{margin-top:18px}",
+        ".alert{padding:13px 15px;border-radius:9px;background:#2a1717;border:1px solid #653333;margin-bottom:20px;color:#ffb2b2}",
+        ".success{padding:13px 15px;border-radius:9px;background:#12251c;border:1px solid #285c3e;margin-bottom:20px;color:#a8edc5}",
+        ".status{padding:13px;text-align:center;font-weight:700}",
+        ".maintenance{background:#403319;color:#ffd982}",
+        ".incident{background:#3c1c1c;color:#ffaaaa}",
+        ".table-wrap{overflow:auto}",
+        "table{width:100%;border-collapse:collapse}",
+        "th,td{text-align:left;padding:12px;border-bottom:1px solid #252c38;vertical-align:top}",
+        "th{color:#8993a2;font-size:12px;text-transform:uppercase}",
+        ".tag{display:inline-block;padding:4px 8px;border-radius:5px;background:#202735;color:#c7d2e4;font-size:12px}",
+        ".tag.admin{background:#493527;color:#ffd6a1}",
+        ".tag.owner{background:#3f315d;color:#e6d2ff}",
+        ".tag.banned{background:#552525;color:#ffb1b1}",
+        ".message{padding:13px;border-bottom:1px solid #242a34}",
+        ".message strong{margin-right:8px}",
+        ".ticket{display:flex;justify-content:space-between;gap:20px;align-items:center}",
+        ".ticket-title{font-weight:700}",
+        "footer{border-top:1px solid #252b36;margin-top:80px;padding:30px 5%;display:flex;justify-content:space-between;color:#7f8997}",
+        ".center{text-align:center}",
+        "@media(max-width:800px){.header{height:auto;padding:15px 4%;align-items:flex-start;gap:15px;flex-direction:column}.hero h1{font-size:38px}nav{gap:10px}.container{margin-top:25px}}"
+    ].join("");
+}
+
+/* ======================================================
+   MIDDLEWARE
+====================================================== */
 
 function requireLogin(req, res, next) {
     const user = getUserFromRequest(req);
@@ -218,660 +633,230 @@ function requireAdmin(req, res, next) {
         return res.redirect("/banned");
     }
 
-    if (!["Owner", "Admin", "Manager", "Developer"].includes(user.role)) {
-        return res.status(403).send(page(
-            "Kein Zugriff",
-            `
-            <div class="card">
-                <h1>Kein Zugriff</h1>
-                <p>Du hast keine Berechtigung für diesen Bereich.</p>
-                <a class="button" href="/">Zur Startseite</a>
-            </div>
-            `
-        ));
+    if (!canAdmin(user)) {
+        return res.status(403).send(
+            layout(
+                "Kein Zugriff",
+                '<div class="box center">' +
+                "<h1>403</h1>" +
+                "<p>Du hast keine Berechtigung für diesen Bereich.</p>" +
+                "</div>",
+                user
+            )
+        );
     }
 
     req.user = user;
     next();
 }
 
-// ============================================================
-// BAN
-// ============================================================
-
-function isBanned(user) {
-    if (!user.banned) return false;
-
-    if (user.banUntil) {
-        const until = new Date(user.banUntil).getTime();
-
-        if (Date.now() >= until) {
-            user.banned = false;
-            user.banUntil = null;
-            user.banReason = null;
-
-            const list = readJSON(FILES.users, []);
-            const index = list.findIndex(x => x.id === user.id);
-
-            if (index !== -1) {
-                list[index] = user;
-                writeJSON(FILES.users, list);
-            }
-
-            return false;
-        }
-    }
-
-    return true;
-}
-
-// ============================================================
-// LOGS
-// ============================================================
-
-function addLog(type, message, user = null) {
-    const logs = readJSON(FILES.logs, []);
-
-    logs.unshift({
-        id: createId("LOG-"),
-        type,
-        message,
-        userId: user?.id || null,
-        email: user?.email || null,
-        date: new Date().toISOString()
-    });
-
-    writeJSON(FILES.logs, logs.slice(0, 1000));
-}
-
-// ============================================================
-// HTML
-// ============================================================
-
-function page(title, content, user = null) {
-    const logged = !!user;
-
-    return `
-<!DOCTYPE html>
-<html lang="de">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-
-<title>${clean(title, 100)} | North-Bot-2</title>
-
-<style>
-
-* {
-    box-sizing: border-box;
-}
-
-body {
-    margin: 0;
-    font-family: Arial, Helvetica, sans-serif;
-    background: #0b0d12;
-    color: #f2f3f5;
-}
-
-a {
-    color: inherit;
-    text-decoration: none;
-}
-
-.nav {
-    height: 70px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 35px;
-    background: #11141b;
-    border-bottom: 1px solid #242936;
-}
-
-.logo {
-    font-size: 22px;
-    font-weight: 800;
-}
-
-.navlinks {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-}
-
-.navlinks a {
-    padding: 10px 14px;
-    border-radius: 8px;
-    color: #b8beca;
-}
-
-.navlinks a:hover {
-    background: #1c212b;
-    color: white;
-}
-
-.container {
-    width: min(1180px, calc(100% - 30px));
-    margin: 35px auto;
-}
-
-.hero {
-    padding: 70px 30px;
-    text-align: center;
-}
-
-.hero h1 {
-    font-size: 52px;
-    margin-bottom: 15px;
-}
-
-.hero p {
-    color: #aeb5c1;
-    font-size: 18px;
-}
-
-.grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit,minmax(230px,1fr));
-    gap: 18px;
-}
-
-.card {
-    background: #11141b;
-    border: 1px solid #242936;
-    border-radius: 14px;
-    padding: 22px;
-    margin-bottom: 18px;
-}
-
-.card h2,
-.card h3 {
-    margin-top: 0;
-}
-
-.muted {
-    color: #9ca3af;
-}
-
-.button {
-    display: inline-block;
-    padding: 11px 17px;
-    border-radius: 8px;
-    background: #5865f2;
-    color: white;
-    border: 0;
-    cursor: pointer;
-    margin: 4px;
-}
-
-.button.secondary {
-    background: #252b37;
-}
-
-.button.danger {
-    background: #d83b3b;
-}
-
-.button.success {
-    background: #268c5a;
-}
-
-input,
-textarea,
-select {
-    width: 100%;
-    padding: 12px;
-    margin: 7px 0 14px;
-    border-radius: 8px;
-    border: 1px solid #303744;
-    background: #0c0f15;
-    color: white;
-    outline: none;
-}
-
-textarea {
-    min-height: 120px;
-    resize: vertical;
-}
-
-label {
-    color: #c7ccd5;
-    font-size: 14px;
-}
-
-table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-th,
-td {
-    text-align: left;
-    padding: 12px;
-    border-bottom: 1px solid #252b35;
-}
-
-.badge {
-    display: inline-block;
-    padding: 5px 9px;
-    border-radius: 6px;
-    background: #252b37;
-    font-size: 12px;
-}
-
-.warning {
-    padding: 14px;
-    background: #352b16;
-    border: 1px solid #715b28;
-    border-radius: 8px;
-    margin-bottom: 20px;
-}
-
-.dangerbox {
-    padding: 14px;
-    background: #351a1a;
-    border: 1px solid #713333;
-    border-radius: 8px;
-    margin-bottom: 20px;
-}
-
-.successbox {
-    padding: 14px;
-    background: #163524;
-    border: 1px solid #286544;
-    border-radius: 8px;
-    margin-bottom: 20px;
-}
-
-.footer {
-    text-align: center;
-    padding: 40px;
-    color: #707784;
-}
-
-@media(max-width:700px) {
-    .nav {
-        padding: 0 15px;
-    }
-
-    .navlinks {
-        gap: 3px;
-    }
-
-    .navlinks a {
-        padding: 8px;
-        font-size: 13px;
-    }
-
-    .hero h1 {
-        font-size: 36px;
-    }
-}
-
-</style>
-</head>
-
-<body>
-
-<nav class="nav">
-
-<div class="logo">
-North-Bot-2
-</div>
-
-<div class="navlinks">
-
-<a href="/">Start</a>
-<a href="/shop">Shop</a>
-<a href="/giveaways">Gewinnspiele</a>
-
-${
-logged
-? `
-<a href="/dashboard">Dashboard</a>
-<a href="/tickets">Tickets</a>
-<a href="/profile">Profil</a>
-${["Owner","Admin","Manager","Developer"].includes(user.role)
-? `<a href="/admin">Admin</a>`
-: ""}
-<a href="/logout">Logout</a>
-`
-: `
-<a href="/login">Login</a>
-<a href="/register">Registrieren</a>
-`
-}
-
-<a href="${DISCORD_INVITE}" target="_blank">Discord</a>
-
-</div>
-
-</nav>
-
-<div class="container">
-
-${content}
-
-</div>
-
-<div class="footer">
-North-Bot-2 · <a href="${DISCORD_INVITE}" target="_blank">Discord</a>
-</div>
-
-</body>
-</html>
-`;
-}
-
-// ============================================================
-// STARTSEITE
-// ============================================================
-
-app.get("/", (req, res) => {
-
+function requireManager(req, res, next) {
     const user = getUserFromRequest(req);
-    const settings = readJSON(FILES.settings, {});
 
-    let alert = "";
-
-    if (settings.maintenance) {
-        alert += `
-        <div class="warning">
-            <strong>Wartung</strong><br>
-            ${clean(settings.maintenanceText)}
-        </div>
-        `;
+    if (!user || !canManage(user)) {
+        return res.status(403).send(
+            layout(
+                "Kein Zugriff",
+                '<div class="box center"><h1>Kein Zugriff</h1></div>',
+                user
+            )
+        );
     }
 
-    if (settings.incident) {
-        alert += `
-        <div class="dangerbox">
-            <strong>Störung</strong><br>
-            ${clean(settings.incidentText)}
-        </div>
-        `;
-    }
+    req.user = user;
+    next();
+}
 
-    if (settings.announcement) {
-        alert += `
-        <div class="successbox">
-            <strong>Ankündigung</strong><br>
-            ${clean(settings.announcement)}
-        </div>
-        `;
-    }
+/* ======================================================
+   HOME
+====================================================== */
 
-    res.send(page(
-        "Startseite",
-        `
-        ${alert}
+app.get("/", function(req, res) {
+    const user = getUserFromRequest(req);
+    const settings = getSettings();
 
-        <section class="hero">
-
-            <h1>North-Bot-2</h1>
-
-            <p>
-                Deine zentrale North-Bot-2 Plattform.
-            </p>
-
-            <a class="button" href="/register">
-                Konto erstellen
-            </a>
-
-            <a class="button secondary" href="${DISCORD_INVITE}" target="_blank">
-                Discord beitreten
-            </a>
-
-        </section>
-
-        <div class="grid">
-
-            <div class="card">
-                <h3>🎫 Tickets</h3>
-                <p class="muted">
-                    Erstelle Support-Tickets direkt über die Webseite.
-                </p>
-            </div>
-
-            <div class="card">
-                <h3>💰 Coins</h3>
-                <p class="muted">
-                    Sammle Coins und löse sie im Shop ein.
-                </p>
-            </div>
-
-            <div class="card">
-                <h3>🎉 Gewinnspiele</h3>
-                <p class="muted">
-                    Nimm an laufenden Gewinnspielen teil.
-                </p>
-            </div>
-
-            <div class="card">
-                <h3>🛠️ Support</h3>
-                <p class="muted">
-                    Erhalte Hilfe vom North-Bot-2 Team.
-                </p>
-            </div>
-
-        </div>
-        `,
+    const content = [
+        '<section class="hero">',
+        "<span class=\"tag\">NORTH-BOT-2</span>",
+        "<h1>Dein modernes Websystem.</h1>",
+        "<p>",
+        "Accounts, Coins, Shop, Tickets, Gewinnspiele, ",
+        "Community-Chat und ein umfangreiches Adminpanel ",
+        "in einer Webseite.",
+        "</p>",
+        '<div class="buttons">',
         user
-    ));
+            ? '<a class="button" href="/dashboard">Zum Dashboard</a>'
+            : '<a class="button" href="/register">Konto erstellen</a>',
+        '<a class="button secondary" href="' +
+            DISCORD_INVITE +
+            '" target="_blank">Discord beitreten</a>',
+        "</div>",
+        "</section>",
+        '<div class="grid">',
+        '<div class="box"><h3>💰 Coins</h3><p class="muted">Daily-Bonus und Coin-Shop.</p></div>',
+        '<div class="box"><h3>🎫 Tickets</h3><p class="muted">Support direkt über die Webseite.</p></div>',
+        '<div class="box"><h3>🎉 Gewinnspiele</h3><p class="muted">Nimm an laufenden Gewinnspielen teil.</p></div>',
+        '<div class="box"><h3>🛡️ Sicherheit</h3><p class="muted">Rollen, Bans und Protokollierung.</p></div>',
+        "</div>"
+    ].join("");
+
+    res.send(layout(SITE_NAME, content, user));
 });
 
-// ============================================================
-// REGISTER
-// ============================================================
+/* ======================================================
+   REGISTER
+====================================================== */
 
-app.get("/register", (req, res) => {
-
+app.get("/register", function(req, res) {
     const user = getUserFromRequest(req);
 
     if (user) {
         return res.redirect("/dashboard");
     }
 
-    res.send(page(
-        "Registrieren",
-        `
-        <div class="card">
+    const content = [
+        '<div class="box form">',
+        "<h1>Registrieren</h1>",
+        '<form method="POST" action="/register">',
+        "<label>Name</label>",
+        '<input name="name" required minlength="2" maxlength="32">',
+        "<label>E-Mail</label>",
+        '<input name="email" type="email" required>',
+        "<label>Passwort</label>",
+        '<input name="password" type="password" required minlength="6">',
+        "<button class=\"button\" type=\"submit\">Konto erstellen</button>",
+        "</form>",
+        '<p class="muted">Bereits registriert? <a href="/login">Login</a></p>',
+        "</div>"
+    ].join("");
 
-            <h1>Registrieren</h1>
-
-            <p class="muted">
-                Erstelle dein neues North-Bot-2 Konto.
-            </p>
-
-            <form method="POST" action="/register">
-
-                <label>Benutzername</label>
-                <input
-                    name="username"
-                    minlength="2"
-                    maxlength="32"
-                    required
-                >
-
-                <label>E-Mail</label>
-                <input
-                    type="email"
-                    name="email"
-                    placeholder="deine@email.de"
-                    required
-                >
-
-                <label>Passwort</label>
-                <input
-                    type="password"
-                    name="password"
-                    minlength="6"
-                    required
-                >
-
-                <button class="button" type="submit">
-                    Registrieren
-                </button>
-
-            </form>
-
-            <p>
-                Bereits registriert?
-                <a href="/login">Login</a>
-            </p>
-
-        </div>
-        `
-    ));
+    res.send(layout("Registrieren", content, null));
 });
 
-app.post("/register", (req, res) => {
-
-    const username = clean(req.body.username, 32);
-    const email = clean(req.body.email, 150).toLowerCase();
+app.post("/register", function(req, res) {
+    const name = clean(req.body.name, 32);
+    const email = clean(req.body.email, 160).toLowerCase();
     const password = String(req.body.password || "");
 
-    if (!username || !email || password.length < 6) {
-        return res.status(400).send(
-            page(
+    if (name.length < 2 ||
+        !email.includes("@") ||
+        password.length < 6) {
+
+        return res.send(
+            layout(
                 "Fehler",
-                `
-                <div class="dangerbox">
-                    Bitte fülle alle Felder korrekt aus.
-                </div>
-                <a class="button" href="/register">Zurück</a>
-                `
+                '<div class="box form">' +
+                '<div class="alert">Bitte überprüfe deine Angaben.</div>' +
+                '<a href="/register">Zurück</a>' +
+                "</div>",
+                null
             )
         );
     }
 
-    const list = readJSON(FILES.users, []);
+    const users = db("users");
 
-    if (list.some(u => String(u.email).toLowerCase() === email)) {
-        return res.status(409).send(
-            page(
+    if (users.some(function(user) {
+        return user.email.toLowerCase() === email;
+    })) {
+        return res.send(
+            layout(
                 "Fehler",
-                `
-                <div class="dangerbox">
-                    Diese E-Mail ist bereits registriert.
-                </div>
-                <a class="button" href="/login">Zum Login</a>
-                `
+                '<div class="box form">' +
+                '<div class="alert">Diese E-Mail-Adresse ist bereits registriert.</div>' +
+                '<a href="/login">Zum Login</a>' +
+                "</div>",
+                null
             )
         );
     }
 
-    const newUser = {
-        id: createId("USR-"),
-        email,
+    const user = {
+        id: id("user"),
+        name: name,
+        email: email,
         password: hashPassword(password),
-        username,
-        role: "User",
+        role: email === OWNER_EMAIL
+            ? "owner"
+            : "user",
         coins: 0,
+        dailyClaimAt: null,
         banned: false,
-        banReason: null,
         banUntil: null,
-        createdAt: new Date().toISOString(),
-        lastLogin: null
+        banReason: "",
+        createdAt: now(),
+        lastLoginAt: null
     };
 
-    list.push(newUser);
-    writeJSON(FILES.users, list);
+    users.push(user);
+
+    writeJSON(FILES.users, users);
 
     addLog(
-        "REGISTER",
-        "Neuer Benutzer registriert: " + email,
-        newUser
+        "registration",
+        email,
+        "Neuer Account: " + email
     );
 
-    res.redirect("/login?registered=1");
+    const token = generateSession(user.id);
+
+    setSession(res, token);
+
+    res.redirect("/dashboard");
 });
 
-// ============================================================
-// LOGIN
-// ============================================================
+/* ======================================================
+   LOGIN
+====================================================== */
 
-app.get("/login", (req, res) => {
-
+app.get("/login", function(req, res) {
     const user = getUserFromRequest(req);
 
     if (user) {
         return res.redirect("/dashboard");
     }
 
-    const registered = req.query.registered === "1";
+    const content = [
+        '<div class="box form">',
+        "<h1>Login</h1>",
+        '<form method="POST" action="/login">',
+        "<label>E-Mail</label>",
+        '<input name="email" type="email" required>',
+        "<label>Passwort</label>",
+        '<input name="password" type="password" required>',
+        "<button class=\"button\" type=\"submit\">Einloggen</button>",
+        "</form>",
+        '<p class="muted">Noch kein Konto? <a href="/register">Registrieren</a></p>',
+        "</div>"
+    ].join("");
 
-    res.send(page(
-        "Login",
-        `
-        ${registered
-        ? `
-        <div class="successbox">
-            Registrierung erfolgreich. Du kannst dich jetzt anmelden.
-        </div>
-        `
-        : ""}
-
-        <div class="card">
-
-            <h1>Login</h1>
-
-            <form method="POST" action="/login">
-
-                <label>E-Mail</label>
-
-                <input
-                    type="email"
-                    name="email"
-                    required
-                >
-
-                <label>Passwort</label>
-
-                <input
-                    type="password"
-                    name="password"
-                    required
-                >
-
-                <button class="button" type="submit">
-                    Einloggen
-                </button>
-
-            </form>
-
-            <p>
-                Noch kein Konto?
-                <a href="/register">Registrieren</a>
-            </p>
-
-        </div>
-        `
-    ));
+    res.send(layout("Login", content, null));
 });
 
-app.post("/login", (req, res) => {
-
-    const email = clean(req.body.email, 150).toLowerCase();
+app.post("/login", function(req, res) {
+    const email = clean(req.body.email, 160).toLowerCase();
     const password = String(req.body.password || "");
 
-    const list = readJSON(FILES.users, []);
+    const user = findUserByEmail(email);
 
-    const user = list.find(
-        u => String(u.email).toLowerCase() === email
-    );
+    if (!user ||
+        !verifyPassword(password, user.password)) {
 
-    if (!user) {
-        return res.status(401).send(
-            page(
-                "Login fehlgeschlagen",
-                `
-                <div class="dangerbox">
-                    E-Mail oder Passwort ist falsch.
-                </div>
+        addLog(
+            "login_failed",
+            email || "unknown",
+            "Fehlgeschlagener Login"
+        );
 
-                <a class="button" href="/login">Erneut versuchen</a>
-                `
+        return res.send(
+            layout(
+                "Login",
+                '<div class="box form">' +
+                '<div class="alert">E-Mail oder Passwort ist falsch.</div>' +
+                '<a href="/login">Erneut versuchen</a>' +
+                "</div>",
+                null
             )
         );
     }
@@ -880,329 +865,341 @@ app.post("/login", (req, res) => {
         return res.redirect("/banned");
     }
 
-    if (user.password !== hashPassword(password)) {
-        return res.status(401).send(
-            page(
-                "Login fehlgeschlagen",
-                `
-                <div class="dangerbox">
-                    E-Mail oder Passwort ist falsch.
-                </div>
+    user.lastLoginAt = now();
 
-                <a class="button" href="/login">Erneut versuchen</a>
-                `
-            )
-        );
-    }
+    const users = db("users");
 
-    user.lastLogin = new Date().toISOString();
-
-    const index = list.findIndex(x => x.id === user.id);
+    const index = users.findIndex(function(item) {
+        return item.id === user.id;
+    });
 
     if (index !== -1) {
-        list[index] = user;
-        writeJSON(FILES.users, list);
+        users[index] = user;
     }
 
-    const token = createSession(user.id);
+    writeJSON(FILES.users, users);
 
-    res.setHeader(
-        "Set-Cookie",
-        `north_session=${token}; HttpOnly; Path=/; SameSite=Lax`
-    );
+    const token = generateSession(user.id);
+
+    setSession(res, token);
 
     addLog(
-        "LOGIN",
-        "Benutzer hat sich eingeloggt.",
-        user
+        "login",
+        user.email,
+        "Login erfolgreich"
     );
 
     res.redirect("/dashboard");
 });
 
-// ============================================================
-// LOGOUT
-// ============================================================
+/* ======================================================
+   LOGOUT
+====================================================== */
 
-app.get("/logout", (req, res) => {
+app.get("/logout", function(req, res) {
+    const user = getUserFromRequest(req);
 
-    const cookie = req.headers.cookie
-        ?.split(";")
-        .map(x => x.trim())
-        .find(x => x.startsWith("north_session="));
-
-    if (cookie) {
-        const token = cookie.split("=")[1];
-        sessions.delete(token);
+    if (user) {
+        addLog(
+            "logout",
+            user.email,
+            "Logout"
+        );
     }
 
-    res.setHeader(
-        "Set-Cookie",
-        "north_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax"
-    );
+    clearSession(res, req);
 
     res.redirect("/");
 });
 
-// ============================================================
-// BANNED
-// ============================================================
+/* ======================================================
+   BANNED
+====================================================== */
 
-app.get("/banned", (req, res) => {
-
+app.get("/banned", function(req, res) {
     const user = getUserFromRequest(req);
 
     let reason = "Kein Grund angegeben.";
-    let until = "Unbefristet";
+    let until = "Dauerhaft";
 
     if (user) {
         reason = user.banReason || reason;
+        until = user.banUntil
+            ? formatDate(user.banUntil)
+            : "Dauerhaft";
+    }
 
-        if (user.banUntil) {
-            until = new Date(user.banUntil).toLocaleString("de-DE");
+    const content = [
+        '<div class="box center">',
+        "<h1>🚫 Konto gesperrt</h1>",
+        "<p>Dein North-Bot-2 Konto ist momentan gesperrt.</p>",
+        "<p><strong>Grund:</strong> " +
+            escapeHTML(reason) +
+            "</p>",
+        "<p><strong>Ende:</strong> " +
+            escapeHTML(until) +
+            "</p>",
+        '<div class="buttons" style="justify-content:center">',
+        '<a class="button" href="' +
+            DISCORD_INVITE +
+            '" target="_blank">Auf Discord Entbannung anfragen</a>',
+        "</div>",
+        "</div>"
+    ].join("");
+
+    res.send(layout("Gebannt", content, user));
+});
+
+/* ======================================================
+   DASHBOARD
+====================================================== */
+
+app.get("/dashboard", requireLogin, function(req, res) {
+    const user = req.user;
+
+    let daily = "Verfügbar";
+
+    if (user.dailyClaimAt) {
+        const next = new Date(
+            new Date(user.dailyClaimAt).getTime() +
+            14 * 60 * 60 * 1000
+        );
+
+        if (Date.now() < next.getTime()) {
+            daily = "Ab " + formatDate(next);
         }
     }
 
-    res.send(page(
-        "Gebannt",
-        `
-        <div class="card">
+    const content = [
+        "<h1>Willkommen, " +
+            escapeHTML(user.name) +
+            ".</h1>",
+        '<div class="grid">',
+        '<div class="box">',
+        "<h3>💰 Coins</h3>",
+        '<div class="big">' +
+            Number(user.coins || 0) +
+            "</div>",
+        "</div>",
+        '<div class="box">',
+        "<h3>👑 Rolle</h3>",
+        '<div class="big" style="font-size:22px">' +
+            escapeHTML(user.role) +
+            "</div>",
+        "</div>",
+        '<div class="box">',
+        "<h3>🎁 Daily</h3>",
+        "<p>" + escapeHTML(daily) + "</p>",
+        '<form method="POST" action="/daily">',
+        '<button class="button green">100 Coins abholen</button>',
+        "</form>",
+        "</div>",
+        "</div>",
+        '<div class="box" style="margin-top:20px">',
+        "<h2>Profil</h2>",
+        "<p>E-Mail: " +
+            escapeHTML(user.email) +
+            "</p>",
+        "<p>Registriert: " +
+            escapeHTML(formatDate(user.createdAt)) +
+            "</p>",
+        '<a class="button secondary" href="/profile">Profil bearbeiten</a>',
+        "</div>"
+    ].join("");
 
-            <h1>Du wurdest gebannt</h1>
-
-            <p>
-                Dein Zugang zu North-Bot-2 wurde gesperrt.
-            </p>
-
-            <p>
-                <strong>Grund:</strong>
-                ${clean(reason)}
-            </p>
-
-            <p>
-                <strong>Ende:</strong>
-                ${clean(until)}
-            </p>
-
-            <a
-                class="button"
-                href="${DISCORD_INVITE}"
-                target="_blank"
-            >
-                Im Discord entbannen lassen
-            </a>
-
-        </div>
-        `
-    ));
+    res.send(layout("Dashboard", content, user));
 });
 
-// ============================================================
-// DASHBOARD
-// ============================================================
+/* ======================================================
+   DAILY
+====================================================== */
 
-app.get("/dashboard", requireLogin, (req, res) => {
-
+app.post("/daily", requireLogin, function(req, res) {
     const user = req.user;
 
-    res.send(page(
-        "Dashboard",
-        `
-        <div class="card">
+    if (user.dailyClaimAt) {
+        const next =
+            new Date(user.dailyClaimAt).getTime() +
+            14 * 60 * 60 * 1000;
 
-            <h1>Willkommen, ${clean(user.username)}!</h1>
+        if (Date.now() < next) {
+            return res.redirect("/dashboard");
+        }
+    }
 
-            <p class="muted">
-                Deine North-Bot-2 Übersicht.
-            </p>
+    user.coins = Number(user.coins || 0) + 100;
+    user.dailyClaimAt = now();
 
-        </div>
+    const users = db("users");
 
-        <div class="grid">
+    const index = users.findIndex(function(item) {
+        return item.id === user.id;
+    });
 
-            <div class="card">
-                <h3>💰 Coins</h3>
-                <h2>${Number(user.coins || 0)}</h2>
-            </div>
+    users[index] = user;
 
-            <div class="card">
-                <h3>👤 Rolle</h3>
-                <p>${clean(user.role)}</p>
-            </div>
+    writeJSON(FILES.users, users);
 
-            <div class="card">
-                <h3>🎫 Tickets</h3>
-                <a class="button" href="/tickets">
-                    Tickets öffnen
-                </a>
-            </div>
+    addLog(
+        "daily",
+        user.email,
+        "100 Coins erhalten"
+    );
 
-            <div class="card">
-                <h3>🛒 Shop</h3>
-                <a class="button" href="/shop">
-                    Shop öffnen
-                </a>
-            </div>
-
-        </div>
-        `,
-        user
-    ));
+    res.redirect("/dashboard");
 });
 
-// ============================================================
-// PROFIL
-// ============================================================
+/* ======================================================
+   PROFILE
+====================================================== */
 
-app.get("/profile", requireLogin, (req, res) => {
+app.get("/profile", requireLogin, function(req, res) {
+    const user = req.user;
 
-    res.send(page(
-        "Profil",
-        `
-        <div class="card">
+    const content = [
+        '<div class="box form">',
+        "<h1>Profil bearbeiten</h1>",
+        '<form method="POST" action="/profile">',
+        "<label>Name</label>",
+        '<input name="name" value="' +
+            escapeHTML(user.name) +
+            '" required maxlength="32">',
+        "<label>Neue E-Mail</label>",
+        '<input name="email" type="email" value="' +
+            escapeHTML(user.email) +
+            '" required>',
+        "<label>Neues Passwort</label>",
+        '<input name="password" type="password" minlength="6">',
+        "<button class=\"button\" type=\"submit\">Speichern</button>",
+        "</form>",
+        "</div>"
+    ].join("");
 
-            <h1>Profil bearbeiten</h1>
-
-            <form method="POST" action="/profile">
-
-                <label>Benutzername</label>
-
-                <input
-                    name="username"
-                    value="${clean(req.user.username)}"
-                    minlength="2"
-                    maxlength="32"
-                    required
-                >
-
-                <button class="button" type="submit">
-                    Speichern
-                </button>
-
-            </form>
-
-        </div>
-        `,
-        req.user
-    ));
+    res.send(layout("Profil", content, user));
 });
 
-app.post("/profile", requireLogin, (req, res) => {
+app.post("/profile", requireLogin, function(req, res) {
+    const user = req.user;
 
-    const username = clean(req.body.username, 32);
+    const newName = clean(req.body.name, 32);
+    const newEmail = clean(req.body.email, 160).toLowerCase();
+    const newPassword = String(req.body.password || "");
 
-    if (!username) {
+    if (newName.length < 2 ||
+        !newEmail.includes("@")) {
+
         return res.redirect("/profile");
     }
 
-    const list = readJSON(FILES.users, []);
+    const existing = findUserByEmail(newEmail);
 
-    const index = list.findIndex(x => x.id === req.user.id);
-
-    if (index === -1) {
-        return res.redirect("/login");
+    if (existing && existing.id !== user.id) {
+        return res.send(
+            layout(
+                "Fehler",
+                '<div class="box form">' +
+                '<div class="alert">Die E-Mail wird bereits verwendet.</div>' +
+                '<a href="/profile">Zurück</a>' +
+                "</div>",
+                user
+            )
+        );
     }
 
-    list[index].username = username;
+    user.name = newName;
+    user.email = newEmail;
 
-    writeJSON(FILES.users, list);
+    if (newPassword) {
+        user.password = hashPassword(newPassword);
+    }
+
+    if (newEmail === OWNER_EMAIL) {
+        user.role = "owner";
+    }
+
+    const users = db("users");
+    const index = users.findIndex(function(item) {
+        return item.id === user.id;
+    });
+
+    users[index] = user;
+
+    writeJSON(FILES.users, users);
 
     addLog(
-        "PROFILE",
-        "Benutzername geändert.",
-        list[index]
+        "profile_update",
+        user.email,
+        "Profil aktualisiert"
     );
 
-    res.redirect("/profile");
+    res.redirect("/dashboard");
 });
 
-// ============================================================
-// TICKETS
-// ============================================================
+/* ======================================================
+   TICKETS
+====================================================== */
 
-app.get("/tickets", requireLogin, (req, res) => {
+app.get("/tickets", requireLogin, function(req, res) {
+    const tickets = db("tickets");
 
-    const tickets = readJSON(FILES.tickets, []);
+    const visible = tickets.filter(function(ticket) {
+        return ticket.userId === req.user.id ||
+            canTeam(req.user);
+    });
 
-    const ownTickets = tickets.filter(
-        t => t.userId === req.user.id
-    );
+    let rows = "";
 
-    let rows = ownTickets.map(t => `
-        <div class="card">
-
-            <h3>${clean(t.subject)}</h3>
-
-            <p>${clean(t.message)}</p>
-
-            <span class="badge">
-                ${clean(t.status)}
-            </span>
-
-            <p class="muted">
-                ${new Date(t.createdAt).toLocaleString("de-DE")}
-            </p>
-
-        </div>
-    `).join("");
-
-    if (!rows) {
-        rows = `
-        <div class="card">
-            <p class="muted">
-                Du hast noch keine Tickets.
-            </p>
-        </div>
-        `;
+    if (!visible.length) {
+        rows =
+            '<div class="box">' +
+            '<p class="muted">Noch keine Tickets vorhanden.</p>' +
+            "</div>";
+    } else {
+        rows = visible.map(function(ticket) {
+            return [
+                '<div class="box">',
+                '<div class="ticket">',
+                "<div>",
+                '<div class="ticket-title">' +
+                    escapeHTML(ticket.number) +
+                    "</div>",
+                "<p>" +
+                    escapeHTML(ticket.subject) +
+                    "</p>",
+                '<span class="tag">' +
+                    escapeHTML(ticket.status) +
+                    "</span>",
+                "</div>",
+                '<a class="button secondary" href="/tickets/' +
+                    encodeURIComponent(ticket.id) +
+                    '">Öffnen</a>',
+                "</div>",
+                "</div>"
+            ].join("");
+        }).join("");
     }
 
-    res.send(page(
-        "Tickets",
-        `
-        <div class="card">
+    const content = [
+        "<h1>Tickets</h1>",
+        '<div class="box">',
+        "<h2>Neues Ticket</h2>",
+        '<form method="POST" action="/tickets/create">',
+        "<label>Betreff</label>",
+        '<input name="subject" required maxlength="100">',
+        "<label>Nachricht</label>",
+        '<textarea name="message" required maxlength="3000"></textarea>',
+        '<button class="button" type="submit">Ticket erstellen</button>',
+        "</form>",
+        "</div>",
+        '<div style="margin-top:20px">',
+        rows,
+        "</div>"
+    ].join("");
 
-            <h1>Support</h1>
-
-            <p>
-                Erstelle ein Ticket. Es ist für dich und das Team sichtbar.
-            </p>
-
-            <form method="POST" action="/tickets">
-
-                <label>Betreff</label>
-
-                <input
-                    name="subject"
-                    maxlength="100"
-                    required
-                >
-
-                <label>Nachricht</label>
-
-                <textarea
-                    name="message"
-                    maxlength="3000"
-                    required
-                ></textarea>
-
-                <button class="button" type="submit">
-                    Ticket erstellen
-                </button>
-
-            </form>
-
-        </div>
-
-        <h2>Meine Tickets</h2>
-
-        ${rows}
-        `,
-        req.user
-    ));
+    res.send(layout("Tickets", content, req.user));
 });
 
-app.post("/tickets", requireLogin, (req, res) => {
-
+app.post("/tickets/create", requireLogin, function(req, res) {
     const subject = clean(req.body.subject, 100);
     const message = clean(req.body.message, 3000);
 
@@ -1210,18 +1207,21 @@ app.post("/tickets", requireLogin, (req, res) => {
         return res.redirect("/tickets");
     }
 
-    const tickets = readJSON(FILES.tickets, []);
+    const tickets = db("tickets");
 
     const ticket = {
-        id: createId("TICKET-"),
+        id: id("ticket"),
+        number: createTicketNumber(),
         userId: req.user.id,
-        username: req.user.username,
-        email: req.user.email,
-        subject,
-        message,
-        status: "Offen",
+        userEmail: req.user.email,
+        subject: subject,
+        message: message,
+        status: "offen",
         claimedBy: null,
-        createdAt: new Date().toISOString()
+        categoryId: TICKET_CATEGORY_ID,
+        createdAt: now(),
+        closedAt: null,
+        discordChannelId: null
     };
 
     tickets.push(ticket);
@@ -1229,1039 +1229,1826 @@ app.post("/tickets", requireLogin, (req, res) => {
     writeJSON(FILES.tickets, tickets);
 
     addLog(
-        "TICKET_CREATE",
-        `Ticket erstellt: ${ticket.id}`,
-        req.user
+        "ticket_create",
+        req.user.email,
+        ticket.number
+    );
+
+    /*
+      Hier wird bewusst KEIN Bot-Token gespeichert.
+      Dein Discord-Bot kann die tickets.json bzw. eine API
+      überwachen und das Discord-Ticket in Kategorie
+      1493423287118729328 erstellen.
+    */
+
+    res.redirect("/tickets/" + encodeURIComponent(ticket.id));
+});
+
+app.get("/tickets/:id", requireLogin, function(req, res) {
+    const ticket = db("tickets").find(function(item) {
+        return item.id === req.params.id;
+    });
+
+    if (!ticket) {
+        return res.status(404).send(
+            layout(
+                "Ticket",
+                '<div class="box"><h1>Ticket nicht gefunden.</h1></div>',
+                req.user
+            )
+        );
+    }
+
+    if (ticket.userId !== req.user.id &&
+        !canTeam(req.user)) {
+
+        return res.status(403).send(
+            layout(
+                "Kein Zugriff",
+                '<div class="box"><h1>Kein Zugriff.</h1></div>',
+                req.user
+            )
+        );
+    }
+
+    const content = [
+        '<div class="box">',
+        "<h1>" + escapeHTML(ticket.number) + "</h1>",
+        "<p><strong>" +
+            escapeHTML(ticket.subject) +
+            "</strong></p>",
+        "<p>" +
+            escapeHTML(ticket.message) +
+            "</p>",
+        '<span class="tag">' +
+            escapeHTML(ticket.status) +
+            "</span>",
+        "<p class=\"muted\">Erstellt: " +
+            escapeHTML(formatDate(ticket.createdAt)) +
+            "</p>",
+        ticket.claimedBy
+            ? "<p>Übernommen von: " +
+              escapeHTML(ticket.claimedBy) +
+              "</p>"
+            : "",
+        '<div class="buttons">',
+        canTeam(req.user) &&
+        ticket.status !== "geschlossen"
+            ? '<form method="POST" action="/tickets/' +
+              ticket.id +
+              '/claim"><button class="button green">Übernehmen</button></form>'
+            : "",
+        canTeam(req.user) &&
+        ticket.claimedBy
+            ? '<form method="POST" action="/tickets/' +
+              ticket.id +
+              '/unclaim"><button class="button secondary">Nicht übernehmen</button></form>'
+            : "",
+        ticket.status !== "geschlossen"
+            ? '<form method="POST" action="/tickets/' +
+              ticket.id +
+              '/close"><button class="button danger">Schließen</button></form>'
+            : "",
+        "</div>",
+        "</div>"
+    ].join("");
+
+    res.send(layout(ticket.number, content, req.user));
+});
+
+app.post("/tickets/:id/claim", requireManager, function(req, res) {
+    const tickets = db("tickets");
+
+    const ticket = tickets.find(function(item) {
+        return item.id === req.params.id;
+    });
+
+    if (!ticket) {
+        return res.redirect("/tickets");
+    }
+
+    ticket.claimedBy = req.user.email;
+    ticket.status = "in_bearbeitung";
+
+    writeJSON(FILES.tickets, tickets);
+
+    addLog(
+        "ticket_claim",
+        req.user.email,
+        ticket.number
+    );
+
+    res.redirect("/tickets/" + ticket.id);
+});
+
+app.post("/tickets/:id/unclaim", requireManager, function(req, res) {
+    const tickets = db("tickets");
+
+    const ticket = tickets.find(function(item) {
+        return item.id === req.params.id;
+    });
+
+    if (!ticket) {
+        return res.redirect("/tickets");
+    }
+
+    ticket.claimedBy = null;
+    ticket.status = "offen";
+
+    writeJSON(FILES.tickets, tickets);
+
+    addLog(
+        "ticket_unclaim",
+        req.user.email,
+        ticket.number
+    );
+
+    res.redirect("/tickets/" + ticket.id);
+});
+
+app.post("/tickets/:id/close", requireLogin, function(req, res) {
+    const tickets = db("tickets");
+
+    const ticket = tickets.find(function(item) {
+        return item.id === req.params.id;
+    });
+
+    if (!ticket) {
+        return res.redirect("/tickets");
+    }
+
+    if (ticket.userId !== req.user.id &&
+        !canTeam(req.user)) {
+
+        return res.status(403).send("Kein Zugriff.");
+    }
+
+    ticket.status = "geschlossen";
+    ticket.closedAt = now();
+
+    writeJSON(FILES.tickets, tickets);
+
+    addLog(
+        "ticket_close",
+        req.user.email,
+        ticket.number
     );
 
     res.redirect("/tickets");
 });
 
-// ============================================================
-// ADMIN PANEL
-// ============================================================
-
-app.get("/admin", requireAdmin, (req, res) => {
-
-    const usersList = readJSON(FILES.users, []);
-    const tickets = readJSON(FILES.tickets, []);
-    const logs = readJSON(FILES.logs, []);
-    const codes = readJSON(FILES.codes, []);
-    const giveaways = readJSON(FILES.giveaways, []);
-
-    const totalCoins = usersList.reduce(
-        (sum, u) => sum + Number(u.coins || 0),
-        0
-    );
-
-    const userRows = usersList.map(u => `
-        <tr>
-
-            <td>${clean(u.username)}</td>
-
-            <td>${clean(u.email)}</td>
-
-            <td>
-                <span class="badge">
-                    ${clean(u.role)}
-                </span>
-            </td>
-
-            <td>
-                ${Number(u.coins || 0)}
-            </td>
-
-            <td>
-                ${u.banned ? "Gebannt" : "Aktiv"}
-            </td>
-
-            <td>
-
-                <form
-                    method="POST"
-                    action="/admin/user/ban"
-                    style="display:inline"
-                >
-
-                    <input
-                        type="hidden"
-                        name="id"
-                        value="${clean(u.id)}"
-                    >
-
-                    <input
-                        type="hidden"
-                        name="minutes"
-                        value="1"
-                    >
-
-                    <input
-                        type="hidden"
-                        name="reason"
-                        value="Test-Ban"
-                    >
-
-                    <button
-                        class="button danger"
-                        type="submit"
-                    >
-                        1 Min Ban
-                    </button>
-
-                </form>
-
-                <form
-                    method="POST"
-                    action="/admin/user/unban"
-                    style="display:inline"
-                >
-
-                    <input
-                        type="hidden"
-                        name="id"
-                        value="${clean(u.id)}"
-                    >
-
-                    <button
-                        class="button success"
-                        type="submit"
-                    >
-                        Entbannen
-                    </button>
-
-                </form>
-
-            </td>
-
-        </tr>
-    `).join("");
-
-    res.send(page(
-        "Admin Panel",
-        `
-
-        <h1>Admin Panel</h1>
-
-        <div class="grid">
-
-            <div class="card">
-                <h3>Benutzer</h3>
-                <h2>${usersList.length}</h2>
-            </div>
-
-            <div class="card">
-                <h3>Coins</h3>
-                <h2>${totalCoins}</h2>
-            </div>
-
-            <div class="card">
-                <h3>Tickets</h3>
-                <h2>${tickets.length}</h2>
-            </div>
-
-            <div class="card">
-                <h3>Codes</h3>
-                <h2>${codes.length}</h2>
-            </div>
-
-            <div class="card">
-                <h3>Gewinnspiele</h3>
-                <h2>${giveaways.length}</h2>
-            </div>
-
-        </div>
-
-        <div class="card">
-
-            <h2>Wartung / Störung / Ankündigung</h2>
-
-            <form method="POST" action="/admin/settings">
-
-                <label>
-                    Wartung aktiv
-                </label>
-
-                <select name="maintenance">
-
-                    <option value="false">Nein</option>
-                    <option value="true">Ja</option>
-
-                </select>
-
-                <label>Wartungstext</label>
-
-                <textarea name="maintenanceText"></textarea>
-
-                <label>
-                    Störung aktiv
-                </label>
-
-                <select name="incident">
-
-                    <option value="false">Nein</option>
-                    <option value="true">Ja</option>
-
-                </select>
-
-                <label>Störungstext</label>
-
-                <textarea name="incidentText"></textarea>
-
-                <label>Ankündigung</label>
-
-                <textarea name="announcement"></textarea>
-
-                <button class="button" type="submit">
-                    Speichern
-                </button>
-
-            </form>
-
-        </div>
-
-        <div class="card">
-
-            <h2>Benutzer</h2>
-
-            <div style="overflow:auto">
-
-            <table>
-
-                <thead>
-
-                    <tr>
-                        <th>Name</th>
-                        <th>E-Mail</th>
-                        <th>Rolle</th>
-                        <th>Coins</th>
-                        <th>Status</th>
-                        <th>Aktionen</th>
-                    </tr>
-
-                </thead>
-
-                <tbody>
-
-                    ${userRows}
-
-                </tbody>
-
-            </table>
-
-            </div>
-
-        </div>
-
-        <div class="card">
-
-            <h2>Neuen Code erstellen</h2>
-
-            <form method="POST" action="/admin/code">
-
-                <label>Coins</label>
-
-                <input
-                    type="number"
-                    name="coins"
-                    min="1"
-                    max="100000"
-                    required
-                >
-
-                <button class="button" type="submit">
-                    Code erstellen
-                </button>
-
-            </form>
-
-            <p class="muted">
-                Jeder Code kann pro Benutzer nur einmal eingelöst werden.
-            </p>
-
-        </div>
-
-        <div class="card">
-
-            <h2>Logs</h2>
-
-            ${logs.slice(0, 100).map(log => `
-                <div style="
-                    padding:10px 0;
-                    border-bottom:1px solid #252b35;
-                ">
-
-                    <strong>${clean(log.type)}</strong>
-
-                    <br>
-
-                    ${clean(log.message)}
-
-                    <br>
-
-                    <small class="muted">
-                        ${new Date(log.date).toLocaleString("de-DE")}
-                    </small>
-
-                </div>
-            `).join("")}
-
-        </div>
-
-        <div class="card">
-
-            <h2>Team-Chat</h2>
-
-            <form method="POST" action="/admin/team-chat">
-
-                <textarea
-                    name="message"
-                    placeholder="Nachricht an das Team..."
-                    required
-                ></textarea>
-
-                <button class="button" type="submit">
-                    Senden
-                </button>
-
-            </form>
-
-        </div>
-
-        `,
-        req.user
-    ));
+/* ======================================================
+   CODES
+====================================================== */
+
+app.get("/codes", requireLogin, function(req, res) {
+    const content = [
+        '<div class="box form">',
+        "<h1>Coin-Code einlösen</h1>",
+        '<form method="POST" action="/codes/redeem">',
+        "<label>Code</label>",
+        '<input name="code" placeholder="NORTH-XXXXXX-XXXXXX" required>',
+        '<button class="button green">Code einlösen</button>',
+        "</form>",
+        "</div>"
+    ].join("");
+
+    res.send(layout("Codes", content, req.user));
 });
 
-// ============================================================
-// ADMIN SETTINGS
-// ============================================================
+app.post("/codes/redeem", requireLogin, function(req, res) {
+    const input = clean(req.body.code, 100)
+        .toUpperCase();
 
-app.post("/admin/settings", requireAdmin, (req, res) => {
+    const codes = db("codes");
 
-    const settings = {
-        maintenance: req.body.maintenance === "true",
-        maintenanceText: clean(req.body.maintenanceText, 2000),
-        incident: req.body.incident === "true",
-        incidentText: clean(req.body.incidentText, 2000),
-        announcement: clean(req.body.announcement, 2000)
-    };
-
-    writeJSON(FILES.settings, settings);
-
-    addLog(
-        "SETTINGS",
-        "Webseiten-Einstellungen geändert.",
-        req.user
-    );
-
-    res.redirect("/admin");
-});
-
-// ============================================================
-// ADMIN BAN
-// ============================================================
-
-app.post("/admin/user/ban", requireAdmin, (req, res) => {
-
-    const id = clean(req.body.id);
-    const reason = clean(req.body.reason, 500) || "Kein Grund";
-    const minutes = Math.max(
-        1,
-        Math.min(
-            525600,
-            Number(req.body.minutes) || 1
-        )
-    );
-
-    const list = readJSON(FILES.users, []);
-
-    const target = list.find(u => u.id === id);
-
-    if (!target) {
-        return res.redirect("/admin");
-    }
-
-    if (target.role === "Owner") {
-        return res.redirect("/admin");
-    }
-
-    target.banned = true;
-    target.banReason = reason;
-    target.banUntil = new Date(
-        Date.now() + minutes * 60 * 1000
-    ).toISOString();
-
-    writeJSON(FILES.users, list);
-
-    addLog(
-        "BAN",
-        `${target.email} für ${minutes} Minuten gebannt. Grund: ${reason}`,
-        req.user
-    );
-
-    res.redirect("/admin");
-});
-
-// ============================================================
-// ADMIN UNBAN
-// ============================================================
-
-app.post("/admin/user/unban", requireAdmin, (req, res) => {
-
-    const id = clean(req.body.id);
-
-    const list = readJSON(FILES.users, []);
-
-    const target = list.find(u => u.id === id);
-
-    if (!target) {
-        return res.redirect("/admin");
-    }
-
-    target.banned = false;
-    target.banReason = null;
-    target.banUntil = null;
-
-    writeJSON(FILES.users, list);
-
-    addLog(
-        "UNBAN",
-        `${target.email} wurde entbannt.`,
-        req.user
-    );
-
-    res.redirect("/admin");
-});
-
-// ============================================================
-// COIN CODES
-// ============================================================
-
-function generateCode() {
-
-    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-
-    function part() {
-
-        let output = "";
-
-        for (let i = 0; i < 4; i++) {
-            output += chars[
-                crypto.randomInt(0, chars.length)
-            ];
-        }
-
-        return output;
-    }
-
-    return `NORTH-${part()}-${part()}`;
-}
-
-app.post("/admin/code", requireAdmin, (req, res) => {
-
-    const coins = Math.max(
-        1,
-        Math.min(
-            100000,
-            Number(req.body.coins) || 0
-        )
-    );
-
-    const codes = readJSON(FILES.codes, []);
-
-    let code = generateCode();
-
-    while (codes.some(c => c.code === code)) {
-        code = generateCode();
-    }
-
-    codes.push({
-        id: createId("CODE-"),
-        code,
-        coins,
-        usedBy: [],
-        createdBy: req.user.id,
-        createdAt: new Date().toISOString()
+    const code = codes.find(function(item) {
+        return item.code.toUpperCase() === input &&
+            item.active !== false;
     });
 
-    writeJSON(FILES.codes, codes);
-
-    addLog(
-        "CODE_CREATE",
-        `Code ${code} mit ${coins} Coins erstellt.`,
-        req.user
-    );
-
-    res.send(page(
-        "Code erstellt",
-        `
-        <div class="card">
-
-            <h1>Code erstellt</h1>
-
-            <p>
-                Dein neuer Code:
-            </p>
-
-            <h2>${clean(code)}</h2>
-
-            <p>
-                Wert:
-                <strong>${coins} Coins</strong>
-            </p>
-
-            <p class="muted">
-                Dieser Code kann von jedem Benutzer nur einmal eingelöst werden.
-            </p>
-
-            <a class="button" href="/admin">
-                Zurück zum Admin Panel
-            </a>
-
-        </div>
-        `,
-        req.user
-    ));
-});
-
-// ============================================================
-// CODE EINLÖSEN
-// ============================================================
-
-app.get("/redeem", requireLogin, (req, res) => {
-
-    res.send(page(
-        "Code einlösen",
-        `
-        <div class="card">
-
-            <h1>Code einlösen</h1>
-
-            <form method="POST" action="/redeem">
-
-                <label>Code</label>
-
-                <input
-                    name="code"
-                    placeholder="NORTH-XXXX-XXXX"
-                    required
-                >
-
-                <button class="button" type="submit">
-                    Einlösen
-                </button>
-
-            </form>
-
-        </div>
-        `,
-        req.user
-    ));
-});
-
-app.post("/redeem", requireLogin, (req, res) => {
-
-    const input = clean(req.body.code, 100).toUpperCase();
-
-    const codes = readJSON(FILES.codes, []);
-
-    const code = codes.find(
-        c => String(c.code).toUpperCase() === input
-    );
-
     if (!code) {
-        return res.send(page(
-            "Code ungültig",
-            `
-            <div class="dangerbox">
-                Dieser Code existiert nicht.
-            </div>
-
-            <a class="button" href="/redeem">
-                Zurück
-            </a>
-            `,
-            req.user
-        ));
+        return res.send(
+            layout(
+                "Code",
+                '<div class="box form">' +
+                '<div class="alert">Der Code existiert nicht oder ist deaktiviert.</div>' +
+                '<a href="/codes">Zurück</a>' +
+                "</div>",
+                req.user
+            )
+        );
     }
 
-    if (!Array.isArray(code.usedBy)) {
-        code.usedBy = [];
-    }
+    code.usedBy = Array.isArray(code.usedBy)
+        ? code.usedBy
+        : [];
 
     if (code.usedBy.includes(req.user.id)) {
-        return res.send(page(
-            "Code bereits verwendet",
-            `
-            <div class="warning">
-                Du hast diesen Code bereits eingelöst.
-            </div>
-
-            <a class="button" href="/dashboard">
-                Dashboard
-            </a>
-            `,
-            req.user
-        ));
+        return res.send(
+            layout(
+                "Code",
+                '<div class="box form">' +
+                '<div class="alert">Du hast diesen Code bereits eingelöst.</div>' +
+                '<a href="/codes">Zurück</a>' +
+                "</div>",
+                req.user
+            )
+        );
     }
 
-    const usersList = readJSON(FILES.users, []);
+    if (code.maxUses &&
+        code.usedBy.length >= Number(code.maxUses)) {
 
-    const index = usersList.findIndex(
-        u => u.id === req.user.id
-    );
+        return res.send(
+            layout(
+                "Code",
+                '<div class="box form">' +
+                '<div class="alert">Dieser Code wurde bereits vollständig verwendet.</div>' +
+                "</div>",
+                req.user
+            )
+        );
+    }
 
-    if (index === -1) {
+    const users = db("users");
+
+    const userIndex = users.findIndex(function(user) {
+        return user.id === req.user.id;
+    });
+
+    if (userIndex === -1) {
         return res.redirect("/login");
     }
 
-    usersList[index].coins =
-        Number(usersList[index].coins || 0) +
+    users[userIndex].coins =
+        Number(users[userIndex].coins || 0) +
         Number(code.coins || 0);
 
     code.usedBy.push(req.user.id);
 
-    writeJSON(FILES.users, usersList);
+    writeJSON(FILES.users, users);
     writeJSON(FILES.codes, codes);
 
     addLog(
-        "CODE_REDEEM",
-        `${req.user.email} hat ${code.coins} Coins erhalten.`,
-        req.user
+        "code_redeem",
+        req.user.email,
+        code.code + " / +" + code.coins + " Coins"
     );
 
-    res.send(page(
-        "Code eingelöst",
-        `
-        <div class="successbox">
-
-            <h2>Code erfolgreich eingelöst!</h2>
-
-            <p>
-                Du hast
-                <strong>${Number(code.coins)} Coins</strong>
-                erhalten.
-            </p>
-
-        </div>
-
-        <a class="button" href="/dashboard">
-            Dashboard
-        </a>
-        `,
-        usersList[index]
-    ));
+    res.send(
+        layout(
+            "Code eingelöst",
+            '<div class="box form">' +
+            '<div class="success">Code erfolgreich eingelöst. +' +
+            Number(code.coins || 0) +
+            " Coins.</div>" +
+            '<a href="/dashboard">Zum Dashboard</a>' +
+            "</div>",
+            req.user
+        )
+    );
 });
 
-// ============================================================
-// DAILY COINS
-// ============================================================
+/* ======================================================
+   SHOP
+====================================================== */
 
-app.post("/daily", requireLogin, (req, res) => {
+app.get("/shop", requireLogin, function(req, res) {
+    const products = db("products")
+        .filter(function(product) {
+            return product.active !== false;
+        });
 
-    const list = readJSON(FILES.users, []);
+    let cards = "";
 
-    const index = list.findIndex(
-        u => u.id === req.user.id
-    );
+    if (!products.length) {
+        cards =
+            '<div class="box">' +
+            '<p class="muted">Noch keine Produkte vorhanden.</p>' +
+            "</div>";
+    } else {
+        cards = products.map(function(product) {
+            return [
+                '<div class="box">',
+                "<h2>" +
+                    escapeHTML(product.name) +
+                    "</h2>",
+                "<p class=\"muted\">" +
+                    escapeHTML(product.description) +
+                    "</p>",
+                '<div class="big">' +
+                    Number(product.price || 0) +
+                    " Coins</div>",
+                "<p>Bestand: " +
+                    (product.stock == null
+                        ? "∞"
+                        : Number(product.stock)) +
+                    "</p>",
+                '<form method="POST" action="/shop/buy/' +
+                    product.id +
+                    '">',
+                '<button class="button green">Kaufen</button>',
+                "</form>",
+                "</div>"
+            ].join("");
+        }).join("");
+    }
+
+    const content = [
+        "<h1>Coin-Shop</h1>",
+        "<p class=\"muted\">Deine Coins: " +
+            Number(req.user.coins || 0) +
+            "</p>",
+        '<div class="grid">',
+        cards,
+        "</div>"
+    ].join("");
+
+    res.send(layout("Shop", content, req.user));
+});
+
+app.post("/shop/buy/:id", requireLogin, function(req, res) {
+    const products = db("products");
+
+    const product = products.find(function(item) {
+        return item.id === req.params.id &&
+            item.active !== false;
+    });
+
+    if (!product) {
+        return res.redirect("/shop");
+    }
+
+    const users = db("users");
+
+    const index = users.findIndex(function(item) {
+        return item.id === req.user.id;
+    });
 
     if (index === -1) {
         return res.redirect("/login");
     }
 
-    const now = Date.now();
+    const price = Number(product.price || 0);
 
-    if (list[index].lastDaily) {
-
-        const diff =
-            now - new Date(list[index].lastDaily).getTime();
-
-        const fourteenHours =
-            14 * 60 * 60 * 1000;
-
-        if (diff < fourteenHours) {
-            return res.send(page(
-                "Daily",
-                `
-                <div class="warning">
-                    Du kannst deine 100 Coins erst wieder nach 14 Stunden abholen.
-                </div>
-
-                <a class="button" href="/dashboard">
-                    Dashboard
-                </a>
-                `,
-                list[index]
-            ));
-        }
+    if (Number(users[index].coins || 0) < price) {
+        return res.send(
+            layout(
+                "Shop",
+                '<div class="box form">' +
+                '<div class="alert">Du hast nicht genug Coins.</div>' +
+                '<a href="/shop">Zurück zum Shop</a>' +
+                "</div>",
+                req.user
+            )
+        );
     }
 
-    list[index].coins =
-        Number(list[index].coins || 0) + 100;
+    if (product.stock != null &&
+        Number(product.stock) <= 0) {
 
-    list[index].lastDaily =
-        new Date().toISOString();
-
-    writeJSON(FILES.users, list);
-
-    addLog(
-        "DAILY",
-        `${list[index].email} hat 100 Daily-Coins erhalten.`,
-        list[index]
-    );
-
-    res.redirect("/dashboard");
-});
-
-// ============================================================
-// SHOP
-// ============================================================
-
-app.get("/shop", (req, res) => {
-
-    const user = getUserFromRequest(req);
-    const products = readJSON(FILES.products, []);
-
-    let content = `
-    <div class="card">
-
-        <h1>Coins Shop</h1>
-
-        <p class="muted">
-            Kaufe Produkte mit deinen Coins.
-        </p>
-
-    </div>
-    `;
-
-    if (!products.length) {
-
-        content += `
-        <div class="card">
-            <p class="muted">
-                Aktuell sind keine Produkte verfügbar.
-            </p>
-        </div>
-        `;
-
-    } else {
-
-        content += `<div class="grid">`;
-
-        for (const product of products) {
-
-            content += `
-            <div class="card">
-
-                <h3>${clean(product.name)}</h3>
-
-                <p>
-                    ${clean(product.description)}
-                </p>
-
-                <strong>
-                    ${Number(product.price)} Coins
-                </strong>
-
-                ${
-                    user
-                    ? `
-                    <form method="POST" action="/shop/buy">
-
-                        <input
-                            type="hidden"
-                            name="id"
-                            value="${clean(product.id)}"
-                        >
-
-                        <button class="button" type="submit">
-                            Kaufen
-                        </button>
-
-                    </form>
-                    `
-                    : `
-                    <p>
-                        <a class="button" href="/login">
-                            Einloggen
-                        </a>
-                    </p>
-                    `
-                }
-
-            </div>
-            `;
-        }
-
-        content += `</div>`;
-    }
-
-    res.send(page("Shop", content, user));
-});
-
-app.post("/shop/buy", requireLogin, (req, res) => {
-
-    const products = readJSON(FILES.products, []);
-    const list = readJSON(FILES.users, []);
-
-    const product = products.find(
-        p => p.id === clean(req.body.id)
-    );
-
-    const index = list.findIndex(
-        u => u.id === req.user.id
-    );
-
-    if (!product || index === -1) {
         return res.redirect("/shop");
     }
 
-    const price = Number(product.price || 0);
+    users[index].coins -= price;
 
-    if (Number(list[index].coins || 0) < price) {
-        return res.send(page(
-            "Nicht genug Coins",
-            `
-            <div class="warning">
-                Du hast nicht genügend Coins.
-            </div>
-
-            <a class="button" href="/shop">
-                Zum Shop
-            </a>
-            `,
-            list[index]
-        ));
+    if (product.stock != null) {
+        product.stock =
+            Number(product.stock) - 1;
     }
 
-    list[index].coins -= price;
+    const orders = db("orders");
 
-    writeJSON(FILES.users, list);
+    const order = {
+        id: id("order"),
+        orderNumber: createOrderNumber(),
+        userId: req.user.id,
+        userEmail: req.user.email,
+        productId: product.id,
+        productName: product.name,
+        price: price,
+        status: "offen",
+        createdAt: now()
+    };
+
+    orders.push(order);
+
+    writeJSON(FILES.users, users);
+    writeJSON(FILES.products, products);
+    writeJSON(FILES.orders, orders);
 
     addLog(
-        "SHOP_PURCHASE",
-        `${list[index].email} kaufte ${product.name}.`,
-        list[index]
+        "shop_purchase",
+        req.user.email,
+        order.orderNumber + " / " + product.name
     );
 
-    res.send(page(
-        "Bestellung",
-        `
-        <div class="successbox">
-
-            <h2>Bestellung erfolgreich</h2>
-
-            <p>
-                Produkt:
-                <strong>${clean(product.name)}</strong>
-            </p>
-
-            <p>
-                Bestellnummer:
-                <strong>${createId("ORDER-").toUpperCase()}</strong>
-            </p>
-
-        </div>
-
-        <a class="button" href="/shop">
-            Zurück zum Shop
-        </a>
-        `,
-        list[index]
-    ));
-});
-
-// ============================================================
-// GEWINNSPIELE
-// ============================================================
-
-app.get("/giveaways", (req, res) => {
-
-    const user = getUserFromRequest(req);
-    const giveaways = readJSON(FILES.giveaways, []);
-
-    let content = `
-    <div class="card">
-
-        <h1>Gewinnspiele</h1>
-
-        <p class="muted">
-            Nimm an den aktuellen North-Bot-2 Gewinnspielen teil.
-        </p>
-
-    </div>
-    `;
-
-    if (!giveaways.length) {
-
-        content += `
-        <div class="card">
-            <p class="muted">
-                Aktuell läuft kein Gewinnspiel.
-            </p>
-        </div>
-        `;
-
-    } else {
-
-        for (const giveaway of giveaways) {
-
-            content += `
-            <div class="card">
-
-                <h2>${clean(giveaway.title)}</h2>
-
-                <p>
-                    ${clean(giveaway.description)}
-                </p>
-
-                <p>
-                    Preis:
-                    <strong>${clean(giveaway.prize)}</strong>
-                </p>
-
-                <p>
-                    Teilnehmer:
-                    ${Array.isArray(giveaway.entries)
-                    ? giveaway.entries.length
-                    : 0}
-                </p>
-
-                ${
-                    user
-                    ? `
-                    <form method="POST" action="/giveaways/join">
-
-                        <input
-                            type="hidden"
-                            name="id"
-                            value="${clean(giveaway.id)}"
-                        >
-
-                        <button class="button" type="submit">
-                            Teilnehmen
-                        </button>
-
-                    </form>
-                    `
-                    : `
-                    <a class="button" href="/login">
-                        Einloggen
-                    </a>
-                    `
-                }
-
-            </div>
-            `;
-        }
-    }
-
-    res.send(page(
-        "Gewinnspiele",
-        content,
-        user
-    ));
-});
-
-app.post("/giveaways/join", requireLogin, (req, res) => {
-
-    const giveaways = readJSON(FILES.giveaways, []);
-
-    const giveaway = giveaways.find(
-        g => g.id === clean(req.body.id)
+    res.send(
+        layout(
+            "Bestellung",
+            '<div class="box form">' +
+            '<div class="success">' +
+            "<h2>Bestellung erstellt</h2>" +
+            "<p>Bestellnummer:</p>" +
+            '<div class="big">' +
+            escapeHTML(order.orderNumber) +
+            "</div>" +
+            "<p>Produkt: " +
+            escapeHTML(product.name) +
+            "</p>" +
+            "</div>" +
+            '<a href="/shop">Zum Shop</a>' +
+            "</div>",
+            req.user
+        )
     );
+});
+
+/* ======================================================
+   GIVEAWAYS
+====================================================== */
+
+app.get("/giveaways", requireLogin, function(req, res) {
+    const giveaways = db("giveaways");
+
+    const cards = giveaways.map(function(giveaway) {
+        const participants =
+            Array.isArray(giveaway.participants)
+                ? giveaway.participants
+                : [];
+
+        const ended =
+            Date.now() >=
+            new Date(giveaway.endsAt).getTime();
+
+        return [
+            '<div class="box">',
+            "<h2>" +
+                escapeHTML(giveaway.title) +
+                "</h2>",
+            "<p>" +
+                escapeHTML(giveaway.description) +
+                "</p>",
+            "<p><strong>Gewinn:</strong> " +
+                Number(giveaway.coins) +
+                " Coins</p>",
+            "<p><strong>Ende:</strong> " +
+                escapeHTML(formatDate(giveaway.endsAt)) +
+                "</p>",
+            "<p>Teilnehmer: " +
+                participants.length +
+                "</p>",
+            ended
+                ? '<span class="tag">Beendet</span>'
+                : '<form method="POST" action="/giveaways/' +
+                  giveaway.id +
+                  '/join">' +
+                  '<button class="button green">Teilnehmen</button>' +
+                  "</form>",
+            "</div>"
+        ].join("");
+    }).join("");
+
+    const content = [
+        "<h1>🎉 Gewinnspiele</h1>",
+        cards ||
+            '<div class="box"><p class="muted">Keine Gewinnspiele.</p></div>'
+    ].join("");
+
+    res.send(layout("Gewinnspiele", content, req.user));
+});
+
+app.post("/giveaways/:id/join", requireLogin, function(req, res) {
+    const giveaways = db("giveaways");
+
+    const giveaway = giveaways.find(function(item) {
+        return item.id === req.params.id;
+    });
 
     if (!giveaway) {
         return res.redirect("/giveaways");
     }
 
-    if (!Array.isArray(giveaway.entries)) {
-        giveaway.entries = [];
+    if (Date.now() >=
+        new Date(giveaway.endsAt).getTime()) {
+
+        return res.redirect("/giveaways");
     }
 
-    if (!giveaway.entries.includes(req.user.id)) {
-        giveaway.entries.push(req.user.id);
+    giveaway.participants =
+        Array.isArray(giveaway.participants)
+            ? giveaway.participants
+            : [];
 
-        writeJSON(
-            FILES.giveaways,
-            giveaways
-        );
+    if (!giveaway.participants.includes(req.user.id)) {
+        giveaway.participants.push(req.user.id);
+
+        writeJSON(FILES.giveaways, giveaways);
 
         addLog(
-            "GIVEAWAY",
-            `${req.user.email} nimmt an ${giveaway.title} teil.`,
-            req.user
+            "giveaway_join",
+            req.user.email,
+            giveaway.title
         );
     }
 
     res.redirect("/giveaways");
 });
 
-// ============================================================
-// ADMIN GEWINNSPIEL ERSTELLEN
-// ============================================================
+/* ======================================================
+   CHAT
+====================================================== */
 
-app.post("/admin/giveaway", requireAdmin, (req, res) => {
+app.get("/chat", requireLogin, function(req, res) {
+    const messages = db("messages")
+        .filter(function(message) {
+            return message.type === "public";
+        })
+        .slice(-100);
 
-    const title = clean(req.body.title, 100);
-    const description = clean(req.body.description, 1000);
-    const prize = clean(req.body.prize, 200);
+    let html = "";
 
-    if (!title || !prize) {
-        return res.redirect("/admin");
+    messages.forEach(function(message) {
+        html += [
+            '<div class="message">',
+            "<strong>" +
+                escapeHTML(message.name) +
+                "</strong>",
+            '<span class="muted">' +
+                escapeHTML(formatDate(message.createdAt)) +
+                "</span>",
+            "<div>" +
+                escapeHTML(message.text) +
+                "</div>",
+            "</div>"
+        ].join("");
+    });
+
+    const content = [
+        '<div class="box">',
+        "<h1>💬 Community Chat</h1>",
+        '<div class="box" style="padding:0;overflow:hidden">',
+        html ||
+            '<p class="muted" style="padding:15px">Noch keine Nachrichten.</p>',
+        "</div>",
+        '<form method="POST" action="/chat/send">',
+        "<label>Nachricht</label>",
+        '<textarea name="text" maxlength="1000" required></textarea>',
+        '<button class="button">Senden</button>',
+        "</form>",
+        "</div>"
+    ].join("");
+
+    res.send(layout("Chat", content, req.user));
+});
+
+app.post("/chat/send", requireLogin, function(req, res) {
+    const text = clean(req.body.text, 1000);
+
+    if (!text) {
+        return res.redirect("/chat");
     }
 
-    const giveaways = readJSON(
-        FILES.giveaways,
-        []
-    );
+    const messages = db("messages");
 
-    giveaways.push({
-        id: createId("GIVE-"),
-        title,
-        description,
-        prize,
-        entries: [],
-        createdAt: new Date().toISOString(),
-        createdBy: req.user.id
+    messages.push({
+        id: id("msg"),
+        type: "public",
+        userId: req.user.id,
+        name: req.user.name,
+        text: text,
+        createdAt: now()
     });
 
     writeJSON(
-        FILES.giveaways,
-        giveaways
+        FILES.messages,
+        messages.slice(-5000)
     );
 
     addLog(
-        "GIVEAWAY_CREATE",
-        `Gewinnspiel erstellt: ${title}`,
-        req.user
+        "chat_message",
+        req.user.email,
+        "Community Chat"
     );
 
-    res.redirect("/admin");
+    res.redirect("/chat");
 });
 
-// ============================================================
-// SERVER
-// ============================================================
+/* ======================================================
+   TEAM CHAT
+====================================================== */
 
-app.get("/health", (req, res) => {
+app.get("/team-chat", requireManager, function(req, res) {
+    const messages = db("messages")
+        .filter(function(message) {
+            return message.type === "team";
+        })
+        .slice(-200);
 
-    res.json({
-        status: "ok",
-        name: "North-Bot-2",
-        uptime: process.uptime()
+    let html = "";
+
+    messages.forEach(function(message) {
+        html += [
+            '<div class="message">',
+            "<strong>" +
+                escapeHTML(message.name) +
+                "</strong>",
+            '<span class="muted">' +
+                escapeHTML(formatDate(message.createdAt)) +
+                "</span>",
+            "<div>" +
+                escapeHTML(message.text) +
+                "</div>",
+            "</div>"
+        ].join("");
     });
 
+    const content = [
+        '<div class="box">',
+        "<h1>🔒 Team-Chat</h1>",
+        '<div class="box" style="padding:0;overflow:hidden">',
+        html ||
+            '<p class="muted" style="padding:15px">Noch keine Nachrichten.</p>',
+        "</div>",
+        '<form method="POST" action="/team-chat/send">',
+        "<label>Nachricht</label>",
+        '<textarea name="text" maxlength="2000" required></textarea>',
+        '<button class="button">Senden</button>',
+        "</form>",
+        "</div>"
+    ].join("");
+
+    res.send(layout("Team-Chat", content, req.user));
 });
 
-app.listen(PORT, "0.0.0.0", () => {
+app.post("/team-chat/send", requireManager, function(req, res) {
+    const text = clean(req.body.text, 2000);
 
-    console.log("======================================");
-    console.log(" North-Bot-2 Webseite");
-    console.log("======================================");
-    console.log("Server läuft auf Port:", PORT);
-    console.log("Discord:", DISCORD_INVITE);
-    console.log("Owner:", OWNER_EMAIL);
-    console.log("======================================");
+    if (!text) {
+        return res.redirect("/team-chat");
+    }
 
+    const messages = db("messages");
+
+    messages.push({
+        id: id("msg"),
+        type: "team",
+        userId: req.user.id,
+        name: req.user.name,
+        text: text,
+        createdAt: now()
+    });
+
+    writeJSON(
+        FILES.messages,
+        messages.slice(-5000)
+    );
+
+    addLog(
+        "team_chat",
+        req.user.email,
+        "Team Chat Nachricht"
+    );
+
+    res.redirect("/team-chat");
+});
+
+/* ======================================================
+   ADMIN PANEL
+====================================================== */
+
+app.get("/admin", requireAdmin, function(req, res) {
+    const users = db("users");
+    const tickets = db("tickets");
+    const orders = db("orders");
+    const giveaways = db("giveaways");
+    const codes = db("codes");
+    const products = db("products");
+    const logs = db("logs");
+
+    const settings = getSettings();
+
+    const content = [
+        "<h1>Adminpanel</h1>",
+        '<div class="grid">',
+        '<div class="box"><h3>👥 User</h3><div class="big">' +
+            users.length +
+            "</div></div>",
+        '<div class="box"><h3>💰 Coins</h3><div class="big">' +
+            users.reduce(function(sum, user) {
+                return sum + Number(user.coins || 0);
+            }, 0) +
+            "</div></div>",
+        '<div class="box"><h3>🎫 Tickets</h3><div class="big">' +
+            tickets.filter(function(ticket) {
+                return ticket.status !== "geschlossen";
+            }).length +
+            "</div></div>",
+        '<div class="box"><h3>🛒 Bestellungen</h3><div class="big">' +
+            orders.length +
+            "</div></div>",
+        '<div class="box"><h3>🎟️ Codes</h3><div class="big">' +
+            codes.length +
+            "</div></div>",
+        '<div class="box"><h3>🛍️ Produkte</h3><div class="big">' +
+            products.length +
+            "</div></div>",
+        '<div class="box"><h3>🎉 Gewinnspiele</h3><div class="big">' +
+            giveaways.length +
+            "</div></div>",
+        '<div class="box"><h3>📋 Logs</h3><div class="big">' +
+            logs.length +
+            "</div></div>",
+        "</div>",
+        '<div class="grid" style="margin-top:20px">',
+        '<div class="box"><h2>Verwaltung</h2>',
+        '<div class="buttons">',
+        '<a class="button secondary" href="/admin/users">User</a>',
+        '<a class="button secondary" href="/admin/codes">Codes</a>',
+        '<a class="button secondary" href="/admin/products">Shop</a>',
+        '<a class="button secondary" href="/admin/giveaways">Gewinnspiele</a>',
+        '<a class="button secondary" href="/admin/orders">Bestellungen</a>',
+        '<a class="button secondary" href="/admin/tickets">Tickets</a>',
+        '<a class="button secondary" href="/admin/logs">Logs</a>',
+        '<a class="button secondary" href="/team-chat">Team-Chat</a>',
+        "</div>",
+        "</div>",
+        '<div class="box"><h2>Status</h2>',
+        "<p>Aktuell: <strong>" +
+            escapeHTML(
+                settings.maintenance
+                    ? "Wartung"
+                    : settings.incident
+                        ? "Störung"
+                        : "Normal"
+            ) +
+            "</strong></p>",
+        '<a class="button secondary" href="/admin/settings">Status verwalten</a>',
+        "</div>",
+        "</div>"
+    ].join("");
+
+    res.send(layout("Adminpanel", content, req.user));
+});
+
+/* ======================================================
+   ADMIN USERS
+====================================================== */
+
+app.get("/admin/users", requireAdmin, function(req, res) {
+    const users = db("users");
+
+    let rows = "";
+
+    users.forEach(function(user) {
+        rows += [
+            "<tr>",
+            "<td>" + escapeHTML(user.name) + "</td>",
+            "<td>" + escapeHTML(user.email) + "</td>",
+            "<td>" + escapeHTML(user.role) + "</td>",
+            "<td>" + Number(user.coins || 0) + "</td>",
+            "<td>" +
+                (isBanned(user)
+                    ? '<span class="tag banned">Gebannt</span>'
+                    : '<span class="tag">Aktiv</span>') +
+                "</td>",
+            "<td>",
+            '<a class="button secondary" href="/admin/users/' +
+                user.id +
+                '">Verwalten</a>',
+            "</td>",
+            "</tr>"
+        ].join("");
+    });
+
+    const content = [
+        "<h1>Userverwaltung</h1>",
+        '<div class="box table-wrap">',
+        "<table>",
+        "<thead><tr>",
+        "<th>Name</th>",
+        "<th>E-Mail</th>",
+        "<th>Rolle</th>",
+        "<th>Coins</th>",
+        "<th>Status</th>",
+        "<th></th>",
+        "</tr></thead>",
+        "<tbody>",
+        rows,
+        "</tbody>",
+        "</table>",
+        "</div>"
+    ].join("");
+
+    res.send(layout("Userverwaltung", content, req.user));
+});
+
+app.get("/admin/users/:id", requireAdmin, function(req, res) {
+    const user = findUserById(req.params.id);
+
+    if (!user) {
+        return res.redirect("/admin/users");
+    }
+
+    const content = [
+        '<div class="box form">',
+        "<h1>User verwalten</h1>",
+        "<p><strong>" +
+            escapeHTML(user.name) +
+            "</strong></p>",
+        "<p>" +
+            escapeHTML(user.email) +
+            "</p>",
+        "<p>Coins: " +
+            Number(user.coins || 0) +
+            "</p>",
+        "<p>Status: " +
+            escapeHTML(formatBan(user)) +
+            "</p>",
+
+        "<h2>Coins</h2>",
+        '<form method="POST" action="/admin/users/' +
+            user.id +
+            '/coins">',
+        "<label>Betrag</label>",
+        '<input type="number" name="amount" required>',
+        "<label>Aktion</label>",
+        "<select name=\"action\">",
+        '<option value="add">Coins hinzufügen</option>',
+        '<option value="remove">Coins abziehen</option>',
+        "</select>",
+        '<button class="button green">Speichern</button>',
+        "</form>",
+
+        "<h2>Rolle</h2>",
+        '<form method="POST" action="/admin/users/' +
+            user.id +
+            '/role">',
+        "<select name=\"role\">",
+        '<option value="user">User</option>',
+        '<option value="supporter">Supporter</option>',
+        '<option value="moderator">Moderator</option>',
+        '<option value="developer">Developer</option>',
+        '<option value="manager">Manager</option>',
+        '<option value="admin">Admin</option>',
+        '<option value="owner">Owner</option>',
+        "</select>",
+        '<button class="button">Rolle setzen</button>',
+        "</form>",
+
+        "<h2>Ban</h2>",
+        '<form method="POST" action="/admin/users/' +
+            user.id +
+            '/ban">',
+        "<label>Dauer</label>",
+        "<select name=\"duration\">",
+        '<option value="1m">1 Minute</option>',
+        '<option value="5m">5 Minuten</option>',
+        '<option value="1h">1 Stunde</option>',
+        '<option value="1d">1 Tag</option>',
+        '<option value="7d">7 Tage</option>',
+        '<option value="permanent">Dauerhaft</option>',
+        "</select>",
+        "<label>Grund</label>",
+        '<input name="reason" maxlength="500" required>',
+        '<button class="button danger">User bannnen</button>',
+        "</form>",
+
+        '<form method="POST" action="/admin/users/' +
+            user.id +
+            '/unban">',
+        '<button class="button green">Entbannen</button>',
+        "</form>",
+
+        "</div>"
+    ].join("");
+
+    res.send(layout("User verwalten", content, req.user));
+});
+
+app.post("/admin/users/:id/coins", requireAdmin, function(req, res) {
+    const amount = Number(req.body.amount || 0);
+    const action = req.body.action;
+
+    if (!Number.isFinite(amount) ||
+        amount < 0 ||
+        amount > 100000000) {
+
+        return res.redirect("/admin/users/" + req.params.id);
+    }
+
+    const users = db("users");
+
+    const index = users.findIndex(function(user) {
+        return user.id === req.params.id;
+    });
+
+    if (index === -1) {
+        return res.redirect("/admin/users");
+    }
+
+    if (action === "add") {
+        users[index].coins =
+            Number(users[index].coins || 0) +
+            amount;
+    } else {
+        users[index].coins =
+            Math.max(
+                0,
+                Number(users[index].coins || 0) -
+                amount
+            );
+    }
+
+    writeJSON(FILES.users, users);
+
+    addLog(
+        "admin_coins",
+        req.user.email,
+        users[index].email +
+        " / " +
+        action +
+        " / " +
+        amount
+    );
+
+    res.redirect("/admin/users/" + req.params.id);
+});
+
+app.post("/admin/users/:id/role", requireAdmin, function(req, res) {
+    const newRole = clean(req.body.role, 30);
+
+    const allowed = [
+        "user",
+        "supporter",
+        "moderator",
+        "developer",
+        "manager",
+        "admin",
+        "owner"
+    ];
+
+    if (!allowed.includes(newRole)) {
+        return res.redirect("/admin/users/" + req.params.id);
+    }
+
+    const users = db("users");
+
+    const index = users.findIndex(function(user) {
+        return user.id === req.params.id;
+    });
+
+    if (index === -1) {
+        return res.redirect("/admin/users");
+    }
+
+    if (users[index].email === OWNER_EMAIL) {
+        users[index].role = "owner";
+    } else {
+        users[index].role = newRole;
+    }
+
+    writeJSON(FILES.users, users);
+
+    addLog(
+        "role_change",
+        req.user.email,
+        users[index].email +
+        " -> " +
+        users[index].role
+    );
+
+    res.redirect("/admin/users/" + req.params.id);
+});
+
+function durationMilliseconds(duration) {
+    const values = {
+        "1m": 60 * 1000,
+        "5m": 5 * 60 * 1000,
+        "1h": 60 * 60 * 1000,
+        "1d": 24 * 60 * 60 * 1000,
+        "7d": 7 * 24 * 60 * 60 * 1000
+    };
+
+    return values[duration] || 0;
+}
+
+app.post("/admin/users/:id/ban", requireAdmin, function(req, res) {
+    const users = db("users");
+
+    const index = users.findIndex(function(user) {
+        return user.id === req.params.id;
+    });
+
+    if (index === -1) {
+        return res.redirect("/admin/users");
+    }
+
+    if (users[index].email === OWNER_EMAIL) {
+        return res.redirect("/admin/users/" + req.params.id);
+    }
+
+    const duration = clean(req.body.duration, 20);
+    const reason = clean(req.body.reason, 500);
+
+    users[index].banned = true;
+    users[index].banReason = reason;
+
+    if (duration === "permanent") {
+        users[index].banUntil = null;
+    } else {
+        const ms = durationMilliseconds(duration);
+
+        if (!ms) {
+            return res.redirect("/admin/users/" + req.params.id);
+        }
+
+        users[index].banUntil =
+            new Date(Date.now() + ms).toISOString();
+    }
+
+    writeJSON(FILES.users, users);
+
+    addLog(
+        "ban",
+        req.user.email,
+        users[index].email +
+        " / " +
+        reason +
+        " / " +
+        (users[index].banUntil || "permanent")
+    );
+
+    res.redirect("/admin/users/" + req.params.id);
+});
+
+app.post("/admin/users/:id/unban", requireAdmin, function(req, res) {
+    const users = db("users");
+
+    const index = users.findIndex(function(user) {
+        return user.id === req.params.id;
+    });
+
+    if (index === -1) {
+        return res.redirect("/admin/users");
+    }
+
+    users[index].banned = false;
+    users[index].banUntil = null;
+    users[index].banReason = "";
+
+    writeJSON(FILES.users, users);
+
+    addLog(
+        "unban",
+        req.user.email,
+        users[index].email
+    );
+
+    res.redirect("/admin/users/" + req.params.id);
+});
+
+/* ======================================================
+   ADMIN CODES
+====================================================== */
+
+app.get("/admin/codes", requireAdmin, function(req, res) {
+    const codes = db("codes");
+
+    let rows = "";
+
+    codes.forEach(function(code) {
+        const used =
+            Array.isArray(code.usedBy)
+                ? code.usedBy.length
+                : 0;
+
+        rows += [
+            "<tr>",
+            "<td><strong>" +
+                escapeHTML(code.code) +
+                "</strong></td>",
+            "<td>" + Number(code.coins) + "</td>",
+            "<td>" + used + "</td>",
+            "<td>" +
+                (code.active === false
+                    ? "Deaktiviert"
+                    : "Aktiv") +
+                "</td>",
+            "<td>",
+            '<form method="POST" action="/admin/codes/' +
+                code.id +
+                '/delete">',
+            '<button class="button danger">Löschen</button>',
+            "</form>",
+            "</td>",
+            "</tr>"
+        ].join("");
+    });
+
+    const content = [
+        "<h1>Codes</h1>",
+        '<div class="box form">',
+        "<h2>Code erstellen</h2>",
+        '<form method="POST" action="/admin/codes/create">',
+        "<label>Coins</label>",
+        '<input type="number" name="coins" min="1" max="100000000" required>',
+        "<label>Maximale Nutzungen</label>",
+        '<input type="number" name="maxUses" min="1" value="1" required>',
+        '<button class="button green">Code erstellen</button>',
+        "</form>",
+        "</div>",
+        '<div class="box table-wrap">',
+        "<table>",
+        "<tr><th>Code</th><th>Coins</th><th>Benutzt</th><th>Status</th><th></th></tr>",
+        rows,
+        "</table>",
+        "</div>"
+    ].join("");
+
+    res.send(layout("Codes verwalten", content, req.user));
+});
+
+app.post("/admin/codes/create", requireAdmin, function(req, res) {
+    const coins = Number(req.body.coins || 0);
+    const maxUses = Number(req.body.maxUses || 1);
+
+    if (coins <= 0 ||
+        coins > 100000000 ||
+        maxUses <= 0 ||
+        maxUses > 100000) {
+
+        return res.redirect("/admin/codes");
+    }
+
+    const codes = db("codes");
+
+    const code = {
+        id: id("code"),
+        code: createRedeemCode(),
+        coins: coins,
+        maxUses: maxUses,
+        usedBy: [],
+        active: true,
+        createdBy: req.user.email,
+        createdAt: now()
+    };
+
+    codes.push(code);
+
+    writeJSON(FILES.codes, codes);
+
+    addLog(
+        "code_create",
+        req.user.email,
+        code.code + " / " + coins + " Coins"
+    );
+
+    res.redirect("/admin/codes");
+});
+
+app.post("/admin/codes/:id/delete", requireAdmin, function(req, res) {
+    const codes = db("codes");
+
+    const filtered = codes.filter(function(code) {
+        return code.id !== req.params.id;
+    });
+
+    writeJSON(FILES.codes, filtered);
+
+    addLog(
+        "code_delete",
+        req.user.email,
+        req.params.id
+    );
+
+    res.redirect("/admin/codes");
+});
+
+/* ======================================================
+   ADMIN PRODUCTS
+====================================================== */
+
+app.get("/admin/products", requireAdmin, function(req, res) {
+    const products = db("products");
+
+    let rows = "";
+
+    products.forEach(function(product) {
+        rows += [
+            "<tr>",
+            "<td>" + escapeHTML(product.name) + "</td>",
+            "<td>" + Number(product.price) + "</td>",
+            "<td>" +
+                (product.stock == null
+                    ? "∞"
+                    : Number(product.stock)) +
+                "</td>",
+            "<td>" +
+                (product.active === false
+                    ? "Aus"
+                    : "Aktiv") +
+                "</td>",
+            "<td>",
+            '<form method="POST" action="/admin/products/' +
+                product.id +
+                '/delete">',
+            '<button class="button danger">Löschen</button>',
+            "</form>",
+            "</td>",
+            "</tr>"
+        ].join("");
+    });
+
+    const content = [
+        "<h1>Shop verwalten</h1>",
+        '<div class="box form">',
+        "<h2>Produkt erstellen</h2>",
+        '<form method="POST" action="/admin/products/create">',
+        "<label>Name</label>",
+        '<input name="name" required maxlength="100">',
+        "<label>Beschreibung</label>",
+        '<textarea name="description" maxlength="1000"></textarea>',
+        "<label>Preis in Coins</label>",
+        '<input type="number" name="price" min="0" required>',
+        "<label>Bestand</label>",
+        '<input type="number" name="stock" min="-1" value="-1">',
+        "<small class=\"muted\">-1 = unbegrenzt</small>",
+        '<button class="button green">Produkt erstellen</button>',
+        "</form>",
+        "</div>",
+        '<div class="box table-wrap">',
+        "<table>",
+        "<tr><th>Name</th><th>Preis</th><th>Bestand</th><th>Status</th><th></th></tr>",
+        rows,
+        "</table>",
+        "</div>"
+    ].join("");
+
+    res.send(layout("Shop verwalten", content, req.user));
+});
+
+app.post("/admin/products/create", requireAdmin, function(req, res) {
+    const name = clean(req.body.name, 100);
+    const description = clean(req.body.description, 1000);
+    const price = Number(req.body.price || 0);
+    const stockInput = Number(req.body.stock);
+
+    if (!name ||
+        price < 0 ||
+        !Number.isFinite(price)) {
+
+        return res.redirect("/admin/products");
+    }
+
+    const products = db("products");
+
+    products.push({
+        id: id("product"),
+        name: name,
+        description: description,
+        price: price,
+        stock: stockInput < 0
+            ? null
+            : stockInput,
+        active: true,
+        createdBy: req.user.email,
+        createdAt: now()
+    });
+
+    writeJSON(FILES.products, products);
+
+    addLog(
+        "product_create",
+        req.user.email,
+        name
+    );
+
+    res.redirect("/admin/products");
+});
+
+app.post("/admin/products/:id/delete", requireAdmin, function(req, res) {
+    const products = db("products");
+
+    const filtered = products.filter(function(product) {
+        return product.id !== req.params.id;
+    });
+
+    writeJSON(FILES.products, filtered);
+
+    addLog(
+        "product_delete",
+        req.user.email,
+        req.params.id
+    );
+
+    res.redirect("/admin/products");
+});
+
+/* ======================================================
+   ADMIN GIVEAWAYS
+====================================================== */
+
+app.get("/admin/giveaways", requireAdmin, function(req, res) {
+    const giveaways = db("giveaways");
+
+    let rows = "";
+
+    giveaways.forEach(function(giveaway) {
+        rows += [
+            "<tr>",
+            "<td>" + escapeHTML(giveaway.title) + "</td>",
+            "<td>" + Number(giveaway.coins) + "</td>",
+            "<td>" +
+                escapeHTML(formatDate(giveaway.endsAt)) +
+                "</td>",
+            "<td>" +
+                (giveaway.winnerIds &&
+                 giveaway.winnerIds.length
+                    ? giveaway.winnerIds.length
+                    : 0) +
+                "</td>",
+            "<td>",
+            '<form method="POST" action="/admin/giveaways/' +
+                giveaway.id +
+                '/draw">',
+            '<button class="button green">Gewinner ziehen</button>',
+            "</form>",
+            "</td>",
+            "</tr>"
+        ].join("");
+    });
+
+    const content = [
+        "<h1>Gewinnspiele verwalten</h1>",
+        '<div class="box form">',
+        "<h2>Gewinnspiel erstellen</h2>",
+        '<form method="POST" action="/admin/giveaways/create">',
+        "<label>Titel</label>",
+        '<input name="title" required maxlength="100">',
+        "<label>Beschreibung</label>",
+        '<textarea name="description" maxlength="1000"></textarea>',
+        "<label>Coins pro Gewinner</label>",
+        '<input type="number" name="coins" min="1" required>',
+        "<label>Dauer in Minuten</label>",
+        '<input type="number" name="minutes" min="1" value="60" required>',
+        "<label>Anzahl Gewinner</label>",
+        '<input type="number" name="winnerCount" min="1" value="1" required>',
+        '<button class="button green">Gewinnspiel erstellen</button>',
+        "</form>",
+        "</div>",
+        '<div class="box table-wrap">',
+        "<table>",
+        "<tr><th>Titel</th><th>Gewinn</th><th>Ende</th><th>Gewinner</th><th></th></tr>",
+        rows,
+        "</table>",
+        "</div>"
+    ].join("");
+
+    res.send(layout("Gewinnspiele verwalten", content, req.user));
+});
+
+app.post("/admin/giveaways/create", requireAdmin, function(req, res) {
+    const title = clean(req.body.title, 100);
+    const description = clean(req.body.description, 1000);
+    const coins = Number(req.body.coins || 0);
+    const minutes = Number(req.body.minutes || 0);
+    const winnerCount = Number(req.body.winnerCount || 1);
+
+    if (!title ||
+        coins <= 0 ||
+        minutes <= 0 ||
+        winnerCount <= 0) {
+
+        return res.redirect("/admin/giveaways");
+    }
+
+    const giveaways = db("giveaways");
+
+    const giveaway = {
+        id: id("giveaway"),
+        number: createGiveawayNumber(),
+        title: title,
+        description: description,
+        coins: coins,
+        winnerCount: winnerCount,
+        participants: [],
+        winnerIds: [],
+        endsAt: new Date(
+            Date.now() + minutes * 60 * 1000
+        ).toISOString(),
+        createdBy: req.user.email,
+        createdAt: now()
+    };
+
+    giveaways.push(giveaway);
+
+    writeJSON(FILES.giveaways, giveaways);
+
+    addLog(
+        "giveaway_create",
+        req.user.email,
+        giveaway.number
+    );
+
+    res.redirect("/admin/giveaways");
+});
+
+app.post("/admin/giveaways/:id/draw", requireAdmin, function(req, res) {
+    const giveaways = db("giveaways");
+
+    const giveaway = giveaways.find(function(item) {
+        return item.id === req.params.id;
+    });
+
+    if (!giveaway) {
+        return res.redirect("/admin/giveaways");
+    }
+
+    if (giveaway.winnerIds &&
+        giveaway.winnerIds.length) {
+
+        return res.redirect("/admin/giveaways");
+    }
+
+    const participants =
+        Array.isArray(giveaway.participants)
+            ? giveaway.participants.slice()
+            : [];
+
+    if (!participants.length) {
+        giveaway.winnerIds = [];
+
+        writeJSON(FILES.giveaways, giveaways);
+
+        return res.redirect("/admin/giveaways");
+    }
+
+    const shuffled = participants.sort(function() {
+        return Math.random() - 0.5;
+    });
+
+    const winnerIds = shuffled.slice(
+        0,
+        Math.min(
+            Number(giveaway.winnerCount || 1),
+            shuffled.length
+        )
+    );
+
+    const users = db("users");
+
+    winnerIds.forEach(function(winnerId) {
+        const index = users.findIndex(function(user) {
+            return user.id === winnerId;
+        });
+
+        if (index !== -1) {
+            users[index].coins =
+                Number(users[index].coins || 0) +
+                Number(giveaway.coins || 0);
+        }
+    });
+
+    giveaway.winnerIds = winnerIds;
+
+    writeJSON(FILES.users, users);
+    writeJSON(FILES.giveaways, giveaways);
+
+    addLog(
+        "giveaway_draw",
+        req.user.email,
+        giveaway.number
+    );
+
+    res.redirect("/admin/giveaways");
+});
+
+/* ======================================================
+   ADMIN ORDERS
+====================================================== */
+
+app.get("/admin/orders", requireAdmin, function(req, res) {
+    const orders = db("orders");
+
+    let rows = "";
+
+    orders.slice().reverse().forEach(function(order) {
+        rows += [
+            "<tr>",
+            "<td>" +
+                escapeHTML(order.orderNumber) +
+                "</td>",
+            "<td>" +
+                escapeHTML(order.userEmail) +
+                "</td>",
+            "<td>" +
+                escapeHTML(order.productName) +
+                "</td>",
+            "<td>" +
+                Number(order.price) +
+                "</td>",
+            "<td>" +
+                escapeHTML(order.status) +
+                "</td>",
+            "<td>" +
+                escapeHTML(formatDate(order.createdAt)) +
+                "</td>",
+            "</tr>"
+        ].join("");
+    });
+
+    const content = [
+        "<h1>Bestellungen</h1>",
+        '<div class="box table-wrap">',
+        "<table>",
+        "<tr><th>Nummer</th><th>User</th><th>Produkt</th><th>Preis</th><th>Status</th><th>Datum</th></tr>",
+        rows,
+        "</table>",
+        "</div>"
+    ].join("");
+
+    res.send(layout("Bestellungen", content, req.user));
+});
+
+/* ======================================================
+   ADMIN TICKETS
+====================================================== */
+
+app.get("/admin/tickets", requireAdmin, function(req, res) {
+    const tickets = db("tickets");
+
+    let rows = "";
+
+    tickets.slice().reverse().forEach(function(ticket) {
+        rows += [
+            "<tr>",
+            "<td>" +
+                escapeHTML(ticket.number) +
+                "</td>",
+            "<td>" +
+                escapeHTML(ticket.userEmail) +
+                "</td>",
+            "<td>" +
+                escapeHTML(ticket.subject) +
+                "</td>",
+            "<td>" +
+                escapeHTML(ticket.status) +
+                "</td>",
+            "<td>",
+            '<a class="button secondary" href="/tickets/' +
+                ticket.id +
+                '">Öffnen</a>',
+            "</td>",
+            "</tr>"
+        ].join("");
+    });
+
+    const content = [
+        "<h1>Ticketverwaltung</h1>",
+        "<p class=\"muted\">Discord-Kategorie: " +
+            TICKET_CATEGORY_ID +
+            "</p>",
+        '<div class="box table-wrap">',
+        "<table>",
+        "<tr><th>Ticket</th><th>User</th><th>Betreff</th><th>Status</th><th></th></tr>",
+        rows,
+        "</table>",
+        "</div>"
+    ].join("");
+
+    res.send(layout("Tickets", content, req.user));
+});
+
+/* ======================================================
+   ADMIN LOGS
+====================================================== */
+
+app.get("/admin/logs", requireAdmin, function(req, res) {
+    const logs = db("logs");
+
+    let rows = "";
+
+    logs.slice(0, 500).forEach(function(log) {
+        rows += [
+            "<tr>",
+            "<td>" +
+                escapeHTML(formatDate(log.createdAt)) +
+                "</td>",
+            "<td><span class=\"tag\">" +
+                escapeHTML(log.type) +
+                "</span></td>",
+            "<td>" +
+                escapeHTML(log.actor) +
+                "</td>",
+            "<td>" +
+                escapeHTML(log.details) +
+                "</td>",
+            "</tr>"
+        ].join("");
+    });
+
+    const content = [
+        "<h1>📋 Logs</h1>",
+        '<div class="box table-wrap">',
+        "<table>",
+        "<tr><th>Zeit</th><th>Typ</th><th>Auslöser</th><th>Details</th></tr>",
+        rows,
+        "</table>",
+        "</div>"
+    ].join("");
+
+    res.send(layout("Logs", content, req.user));
+});
+
+/* ======================================================
+   ADMIN SETTINGS
+====================================================== */
+
+app.get("/admin/settings", requireAdmin, function(req, res) {
+    const settings = getSettings();
+
+    const content = [
+        '<div class="box form">',
+        "<h1>Webseiten-Status</h1>",
+        '<form method="POST" action="/admin/settings">',
+        "<label>Status</label>",
+        "<select name=\"status\">",
+        '<option value="normal"' +
+            (!settings.maintenance &&
+             !settings.incident
+                ? " selected"
+                : "") +
+            ">Normal</option>",
+        '<option value="maintenance"' +
+            (settings.maintenance
+                ? " selected"
+                : "") +
+            ">Wartung</option>",
+        '<option value="incident"' +
+            (settings.incident
+                ? " selected"
+                : "") +
+            ">Störung</option>",
+        "</select>",
+        "<label>Status-Text</label>",
+        '<textarea name="statusText" maxlength="500">' +
+            escapeHTML(settings.statusText) +
+            "</textarea>",
+        "<label>Ankündigung</label>",
+        '<textarea name="announcement" maxlength="3000">' +
+            escapeHTML(settings.announcement) +
+            "</textarea>",
+        '<button class="button green">Speichern</button>',
+        "</form>",
+        "</div>",
+        settings.announcement
+            ? '<div class="box" style="margin-top:20px"><h2>Aktuelle Ankündigung</h2><p>' +
+              escapeHTML(settings.announcement) +
+              "</p></div>"
+            : ""
+    ].join("");
+
+    res.send(layout("Webseiten-Status", content, req.user));
+});
+
+app.post("/admin/settings", requireAdmin, function(req, res) {
+    const status = clean(req.body.status, 30);
+    const statusText = clean(req.body.statusText, 500);
+    const announcement = clean(req.body.announcement, 3000);
+
+    const settings = getSettings();
+
+    settings.maintenance =
+        status === "maintenance";
+
+    settings.incident =
+        status === "incident";
+
+    settings.status =
+        status === "maintenance"
+            ? "maintenance"
+            : status === "incident"
+                ? "incident"
+                : "normal";
+
+    settings.statusText = statusText;
+    settings.announcement = announcement;
+
+    saveSettings(settings);
+
+    addLog(
+        "settings_update",
+        req.user.email,
+        status
+    );
+
+    res.redirect("/admin/settings");
+});
+
+/* ======================================================
+   ADMIN API / JSON
+====================================================== */
+
+app.get("/api/me", requireLogin, function(req, res) {
+    res.json({
+        id: req.user.id,
+        name: req.user.name,
+        email: req.user.email,
+        role: req.user.role,
+        coins: Number(req.user.coins || 0),
+        banned: isBanned(req.user)
+    });
+});
+
+app.get("/api/settings", function(req, res) {
+    const settings = getSettings();
+
+    res.json({
+        status: settings.status,
+        maintenance: settings.maintenance,
+        incident: settings.incident,
+        statusText: settings.statusText,
+        announcement: settings.announcement
+    });
+});
+
+app.get("/api/tickets", requireLogin, function(req, res) {
+    const tickets = db("tickets");
+
+    const visible = tickets.filter(function(ticket) {
+        return ticket.userId === req.user.id ||
+            canTeam(req.user);
+    });
+
+    res.json(visible);
+});
+
+app.get("/api/logs", requireAdmin, function(req, res) {
+    res.json(db("logs").slice(0, 500));
+});
+
+/* ======================================================
+   404
+====================================================== */
+
+app.use(function(req, res) {
+    const user = getUserFromRequest(req);
+
+    res.status(404).send(
+        layout(
+            "404",
+            [
+                '<div class="box center">',
+                "<h1>404</h1>",
+                "<p>Diese Seite wurde nicht gefunden.</p>",
+                '<a class="button" href="/">Zur Startseite</a>',
+                "</div>"
+            ].join(""),
+            user
+        )
+    );
+});
+
+/* ======================================================
+   ERROR HANDLER
+====================================================== */
+
+app.use(function(error, req, res, next) {
+    console.error("Webseitenfehler:", error);
+
+    const user = getUserFromRequest(req);
+
+    res.status(500).send(
+        layout(
+            "Fehler",
+            [
+                '<div class="box center">',
+                "<h1>Fehler</h1>",
+                "<p>Bei der Verarbeitung ist ein Fehler aufgetreten.</p>",
+                '<a class="button" href="/">Zur Startseite</a>',
+                "</div>"
+            ].join(""),
+            user
+        )
+    );
+});
+
+/* ======================================================
+   START
+====================================================== */
+
+ensureDatabase();
+
+app.listen(PORT, HOST, function() {
+    console.log("");
+    console.log("======================================");
+    console.log("       " + SITE_NAME + " Webseite");
+    console.log("======================================");
+    console.log("Server läuft auf Port: " + PORT);
+    console.log("Discord: " + DISCORD_INVITE);
+    console.log("Owner: " + OWNER_EMAIL);
+    console.log("Ticket-Kategorie: " + TICKET_CATEGORY_ID);
+    console.log("======================================");
 });
