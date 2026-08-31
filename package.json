@@ -1,7 +1,8 @@
+```json
 {
-  "name": "North-bot-v2",
+  "name": "north-bot-website",
   "version": "1.0.0",
-  "description": "Galaxy Bot V2 Webseite",
+  "description": "North Bot Webseite mit Anmeldung, Registrierung und Support",
   "main": "webseite.js",
   "scripts": {
     "start": "node webseite.js"
@@ -10,6 +11,8 @@
     "node": ">=20"
   },
   "dependencies": {
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "express-session": "^1.18.2"
   }
 }
+```
