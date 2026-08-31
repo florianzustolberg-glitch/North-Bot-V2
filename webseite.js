@@ -1,110 +1,62 @@
 ```js
-// ============================================================
-// NORTH BOT - WEBSEITE
-// Anmeldung + Registrierung + Support + Admin Panel
-// ============================================================
-
 const express = require("express");
 const session = require("express-session");
 const fs = require("fs");
-const path = require("path");
 const crypto = require("crypto");
+const path = require("path");
 
 const app = express();
 
-const PORT = 10000;
+const PORT = process.env.PORT || 10000;
 
 // ============================================================
-// KONFIGURATION
+// NORTH BOT KONFIGURATION
 // ============================================================
 
-// NEUEN DISCORD WEBHOOK HIER EINTRAGEN
+const DISCORD_INVITE = "https://discord.gg/NJEVq6Pk6x";
+
 const DISCORD_WEBHOOK_URL =
     "https://discord.com/api/webhooks/1543921362794717194/hhfOv1sAQJz2vuq1VCuZGvxdCOApGxSwyfG7__xKAIlRbvo11kfygoI28fOVUSWT-RXa";
 
-// Discord Server
-const DISCORD_INVITE =
-    "https://discord.gg/NJEVq6Pk6x";
-
-// Ticket-Kategorie
 const TICKET_CATEGORY_ID =
     "1493423287118729328";
 
-// Admin-E-Mail
 const OWNER_EMAIL =
     "florianzustolberg@gmail.com";
-
-// Webseite
-const WEBSITE_NAME =
-    "North Bot";
-
-const WEBSITE_DOMAIN =
-    "North-Bot-2.de";
-
-// ============================================================
-// DATEIEN
-// ============================================================
 
 const USERS_FILE =
     path.join(__dirname, "users.json");
 
 // ============================================================
-// USERS.JSON ERSTELLEN
+// DATEI ERSTELLEN
 // ============================================================
 
-function ensureUsersFile() {
-
-    if (!fs.existsSync(USERS_FILE)) {
-
-        fs.writeFileSync(
-            USERS_FILE,
-            JSON.stringify([], null, 2),
-            "utf8"
-        );
-
-    }
-
+if (!fs.existsSync(USERS_FILE)) {
+    fs.writeFileSync(
+        USERS_FILE,
+        "[]",
+        "utf8"
+    );
 }
 
-ensureUsersFile();
-
 // ============================================================
-// USERS LADEN
+// USERS
 // ============================================================
 
-function getUsers() {
-
+function loadUsers() {
     try {
-
-        ensureUsersFile();
-
-        const data =
+        return JSON.parse(
             fs.readFileSync(
                 USERS_FILE,
                 "utf8"
-            );
-
-        return JSON.parse(data);
-
-    } catch (error) {
-
-        console.error(
-            "❌ users.json Fehler:",
-            error
+            )
         );
-
+    } catch {
         return [];
-
     }
-
 }
 
-// ============================================================
-// USERS SPEICHERN
-// ============================================================
-
 function saveUsers(users) {
-
     fs.writeFileSync(
         USERS_FILE,
         JSON.stringify(
@@ -114,37 +66,18 @@ function saveUsers(users) {
         ),
         "utf8"
     );
-
 }
 
 // ============================================================
-// HTML ESCAPEN
-// ============================================================
-
-function escapeHtml(value = "") {
-
-    return String(value)
-
-        .replaceAll("&", "&amp;")
-
-        .replaceAll("<", "&lt;")
-
-        .replaceAll(">", "&gt;")
-
-        .replaceAll('"', "&quot;")
-
-        .replaceAll("'", "&#039;");
-
-}
-
-// ============================================================
-// PASSWORT HASH
+// PASSWORD
 // ============================================================
 
 function hashPassword(password) {
 
     const salt =
-        crypto.randomBytes(16).toString("hex");
+        crypto
+            .randomBytes(16)
+            .toString("hex");
 
     const hash =
         crypto
@@ -155,33 +88,20 @@ function hashPassword(password) {
             )
             .toString("hex");
 
-    return `${salt}:${hash}`;
-
+    return salt + ":" + hash;
 }
 
-// ============================================================
-// PASSWORT PRÜFEN
-// ============================================================
-
-function verifyPassword(
+function checkPassword(
     password,
-    storedPassword
+    stored
 ) {
 
     try {
 
-        const parts =
-            storedPassword.split(":");
-
-        if (parts.length !== 2) {
-
-            return false;
-
-        }
-
-        const salt = parts[0];
-
-        const storedHash = parts[1];
+        const [
+            salt,
+            oldHash
+        ] = stored.split(":");
 
         const hash =
             crypto
@@ -193,14 +113,8 @@ function verifyPassword(
                 .toString("hex");
 
         return crypto.timingSafeEqual(
-
             Buffer.from(hash, "hex"),
-
-            Buffer.from(
-                storedHash,
-                "hex"
-            )
-
+            Buffer.from(oldHash, "hex")
         );
 
     } catch {
@@ -208,20 +122,27 @@ function verifyPassword(
         return false;
 
     }
+}
 
+// ============================================================
+// HTML ESCAPE
+// ============================================================
+
+function esc(value) {
+
+    return String(
+        value || ""
+    )
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
 }
 
 // ============================================================
 // EXPRESS
 // ============================================================
-
-app.disable(
-    "x-powered-by"
-);
-
-app.use(
-    express.json()
-);
 
 app.use(
     express.urlencoded({
@@ -229,15 +150,15 @@ app.use(
     })
 );
 
-// ============================================================
-// SESSION
-// ============================================================
+app.use(
+    express.json()
+);
 
 app.use(
     session({
 
         secret:
-            "NORTH-BOT-SESSION-CHANGE-ME-2026",
+            "north-bot-session-secret-2026",
 
         resave: false,
 
@@ -252,11 +173,11 @@ app.use(
             secure: false,
 
             maxAge:
-                1000 *
-                60 *
-                60 *
+                7 *
                 24 *
-                7
+                60 *
+                60 *
+                1000
 
         }
 
@@ -264,8 +185,24 @@ app.use(
 );
 
 // ============================================================
-// LOGIN CHECK
+// USER
 // ============================================================
+
+function getCurrentUser(req) {
+
+    if (!req.session.userId) {
+        return null;
+    }
+
+    const users =
+        loadUsers();
+
+    return users.find(
+        user =>
+            user.id ===
+            req.session.userId
+    ) || null;
+}
 
 function requireLogin(
     req,
@@ -273,7 +210,10 @@ function requireLogin(
     next
 ) {
 
-    if (!req.session.userId) {
+    const user =
+        getCurrentUser(req);
+
+    if (!user) {
 
         return res.redirect(
             "/login"
@@ -285,33 +225,14 @@ function requireLogin(
 
 }
 
-// ============================================================
-// ADMIN CHECK
-// ============================================================
-
 function requireAdmin(
     req,
     res,
     next
 ) {
 
-    if (!req.session.userId) {
-
-        return res.redirect(
-            "/login"
-        );
-
-    }
-
-    const users =
-        getUsers();
-
     const user =
-        users.find(
-            u =>
-                u.id ===
-                req.session.userId
-        );
+        getCurrentUser(req);
 
     if (!user) {
 
@@ -327,32 +248,34 @@ function requireAdmin(
     ) {
 
         return res.status(403).send(
-            page(
-                "Zugriff verweigert",
+            layout(
+                "Kein Zugriff",
                 `
-                    <div class="center">
-                        <div class="big">
-                            403
-                        </div>
+                <div class="box center">
 
-                        <h2>
-                            Kein Zugriff
-                        </h2>
-
-                        <p>
-                            Du bist nicht als
-                            North-Bot-Administrator
-                            eingetragen.
-                        </p>
-
-                        <a
-                            class="button"
-                            href="/"
-                        >
-                            Zur Startseite
-                        </a>
+                    <div class="errorIcon">
+                        403
                     </div>
-                `
+
+                    <h1>
+                        Kein Zugriff
+                    </h1>
+
+                    <p>
+                        Du hast keine Berechtigung
+                        für das Admin Panel.
+                    </p>
+
+                    <a
+                        class="btn"
+                        href="/dashboard"
+                    >
+                        Zurück
+                    </a>
+
+                </div>
+                `,
+                user
             )
         );
 
@@ -363,17 +286,14 @@ function requireAdmin(
 }
 
 // ============================================================
-// SEITEN LAYOUT
+// DESIGN
 // ============================================================
 
-function page(
+function layout(
     title,
     content,
     user = null
 ) {
-
-    const loggedIn =
-        Boolean(user);
 
     return `
 <!DOCTYPE html>
@@ -389,26 +309,16 @@ function page(
     content="width=device-width, initial-scale=1.0"
 >
 
-<meta
-    name="theme-color"
-    content="#050505"
->
-
 <title>
-    ${escapeHtml(title)}
-    | North Bot
+    ${esc(title)} | North Bot
 </title>
 
 <style>
 
 * {
+    box-sizing: border-box;
     margin: 0;
     padding: 0;
-    box-sizing: border-box;
-}
-
-html {
-    scroll-behavior: smooth;
 }
 
 body {
@@ -417,18 +327,12 @@ body {
 
     background:
         radial-gradient(
-            circle at 50% 20%,
-            rgba(
-                255,
-                255,
-                255,
-                .08
-            ),
-            transparent 35%
-        ),
-        #050505;
+            circle at top,
+            #171717,
+            #050505 55%
+        );
 
-    color: #fff;
+    color: white;
 
     font-family:
         Arial,
@@ -437,76 +341,36 @@ body {
 
 }
 
-body::before {
-
-    content: "";
-
-    position: fixed;
-
-    width: 600px;
-
-    height: 600px;
-
-    left: 50%;
-
-    top: 35%;
-
-    transform:
-        translate(
-            -50%,
-            -50%
-        );
-
-    background:
-        radial-gradient(
-            circle,
-            rgba(
-                255,
-                255,
-                255,
-                .06
-            ),
-            transparent 70%
-        );
-
-    filter: blur(40px);
-
-    pointer-events: none;
-
-}
-
 nav {
 
     position: fixed;
 
     top: 0;
-
     left: 0;
 
     width: 100%;
 
-    height: 70px;
-
-    padding:
-        0 5%;
+    height: 72px;
 
     display: flex;
 
+    justify-content: space-between;
+
     align-items: center;
 
-    justify-content:
-        space-between;
+    padding:
+        0 5%;
 
     background:
         rgba(
             5,
             5,
             5,
-            .75
+            .85
         );
 
     backdrop-filter:
-        blur(15px);
+        blur(20px);
 
     border-bottom:
         1px solid
@@ -514,7 +378,7 @@ nav {
             255,
             255,
             255,
-            .07
+            .08
         );
 
     z-index: 100;
@@ -523,7 +387,7 @@ nav {
 
 .logo {
 
-    font-size: 16px;
+    font-size: 18px;
 
     font-weight: 900;
 
@@ -531,36 +395,143 @@ nav {
 
 }
 
-.nav-links {
+nav .links {
 
     display: flex;
 
-    align-items: center;
+    gap: 8px;
 
-    gap: 10px;
+    align-items: center;
 
 }
 
-.nav-link {
+nav a {
 
     color: #aaa;
 
     text-decoration: none;
 
     padding:
-        9px 13px;
+        10px 14px;
 
     border-radius: 9px;
 
-    transition: .2s;
-
     font-size: 13px;
+
+    transition: .2s;
 
 }
 
-.nav-link:hover {
+nav a:hover {
 
-    color: #fff;
+    color: white;
+
+    background:
+        rgba(
+            255,
+            255,
+            255,
+            .08
+        );
+
+}
+
+main {
+
+    padding-top: 72px;
+
+    min-height: calc(
+        100vh - 120px
+    );
+
+}
+
+.hero {
+
+    min-height:
+        calc(
+            100vh - 72px
+        );
+
+    display: flex;
+
+    flex-direction: column;
+
+    justify-content: center;
+
+    align-items: center;
+
+    text-align: center;
+
+    padding: 30px;
+
+}
+
+.hero .small {
+
+    color: #777;
+
+    letter-spacing: 8px;
+
+    font-size: 13px;
+
+    margin-bottom: 25px;
+
+}
+
+.hero h1 {
+
+    font-size:
+        clamp(
+            50px,
+            9vw,
+            110px
+        );
+
+    letter-spacing: 5px;
+
+    font-weight: 900;
+
+}
+
+.hero p {
+
+    max-width: 650px;
+
+    color: #777;
+
+    line-height: 1.8;
+
+    margin-top: 25px;
+
+}
+
+.buttons {
+
+    display: flex;
+
+    flex-wrap: wrap;
+
+    justify-content: center;
+
+    gap: 12px;
+
+    margin-top: 30px;
+
+}
+
+.btn {
+
+    display: inline-flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    padding:
+        13px 22px;
+
+    border-radius: 10px;
 
     background:
         rgba(
@@ -569,6 +540,50 @@ nav {
             255,
             .07
         );
+
+    border:
+        1px solid
+        rgba(
+            255,
+            255,
+            255,
+            .12
+        );
+
+    color: white;
+
+    text-decoration: none;
+
+    cursor: pointer;
+
+    font-weight: 700;
+
+    font-size: 14px;
+
+    transition: .2s;
+
+}
+
+.btn:hover {
+
+    transform:
+        translateY(-2px);
+
+    background:
+        rgba(
+            255,
+            255,
+            255,
+            .13
+        );
+
+}
+
+.btn.primary {
+
+    background: white;
+
+    color: black;
 
 }
 
@@ -582,17 +597,19 @@ nav {
         0 auto;
 
     padding:
-        120px 0 80px;
-
-    position: relative;
-
-    z-index: 2;
+        55px 0;
 
 }
 
-.card {
+.box {
 
-    padding: 35px;
+    background:
+        rgba(
+            255,
+            255,
+            255,
+            .04
+        );
 
     border:
         1px solid
@@ -605,148 +622,35 @@ nav {
 
     border-radius: 20px;
 
-    background:
-        rgba(
-            255,
-            255,
-            255,
-            .035
-        );
+    padding: 35px;
 
     backdrop-filter:
-        blur(15px);
-
-    box-shadow:
-        0 20px 60px
-        rgba(
-            0,
-            0,
-            0,
-            .3
-        );
+        blur(20px);
 
 }
 
 .center {
 
-    text-align: center;
-
-    max-width: 550px;
+    max-width: 600px;
 
     margin:
-        0 auto;
+        60px auto;
+
+    text-align: center;
 
 }
 
-.center h1 {
+.box h1 {
 
-    margin-bottom: 15px;
+    margin-bottom: 12px;
 
 }
 
-.center p {
+.box p {
 
-    color: #888;
+    color: #777;
 
     line-height: 1.7;
-
-    margin-bottom: 25px;
-
-}
-
-.big {
-
-    font-size: 90px;
-
-    font-weight: 900;
-
-}
-
-h1 {
-
-    font-size: 42px;
-
-}
-
-h2 {
-
-    font-size: 28px;
-
-}
-
-p {
-
-    color: #888;
-
-    line-height: 1.7;
-
-}
-
-.button {
-
-    display: inline-flex;
-
-    align-items: center;
-
-    justify-content: center;
-
-    gap: 8px;
-
-    padding:
-        13px 22px;
-
-    border-radius: 10px;
-
-    border: 1px solid
-        rgba(
-            255,
-            255,
-            255,
-            .15
-        );
-
-    background:
-        rgba(
-            255,
-            255,
-            255,
-            .06
-        );
-
-    color: white;
-
-    text-decoration: none;
-
-    cursor: pointer;
-
-    font-size: 14px;
-
-    font-weight: 700;
-
-    transition: .2s;
-
-}
-
-.button:hover {
-
-    transform:
-        translateY(-2px);
-
-    background:
-        rgba(
-            255,
-            255,
-            255,
-            .12
-        );
-
-}
-
-.primary {
-
-    background: white;
-
-    color: black;
 
 }
 
@@ -767,7 +671,13 @@ textarea {
 
     padding: 14px;
 
-    border-radius: 10px;
+    background:
+        rgba(
+            0,
+            0,
+            0,
+            .4
+        );
 
     border:
         1px solid
@@ -778,19 +688,21 @@ textarea {
             .10
         );
 
-    background:
-        rgba(
-            0,
-            0,
-            0,
-            .35
-        );
-
     color: white;
+
+    border-radius: 10px;
 
     outline: none;
 
     font-family: inherit;
+
+}
+
+textarea {
+
+    min-height: 150px;
+
+    resize: vertical;
 
 }
 
@@ -807,182 +719,6 @@ textarea:focus {
 
 }
 
-textarea {
-
-    min-height: 140px;
-
-    resize: vertical;
-
-}
-
-.error {
-
-    margin-top: 15px;
-
-    padding: 12px;
-
-    border-radius: 10px;
-
-    background:
-        rgba(
-            255,
-            60,
-            60,
-            .08
-        );
-
-    border:
-        1px solid
-        rgba(
-            255,
-            60,
-            60,
-            .15
-        );
-
-    color: #ff9999;
-
-}
-
-.success {
-
-    margin-top: 15px;
-
-    padding: 12px;
-
-    border-radius: 10px;
-
-    background:
-        rgba(
-            100,
-            255,
-            150,
-            .07
-        );
-
-    border:
-        1px solid
-        rgba(
-            100,
-            255,
-            150,
-            .15
-        );
-
-    color: #aaffbb;
-
-}
-
-.hero {
-
-    min-height: 100vh;
-
-    display: flex;
-
-    flex-direction: column;
-
-    align-items: center;
-
-    justify-content: center;
-
-    text-align: center;
-
-}
-
-.brand {
-
-    color: #aaa;
-
-    font-size: 15px;
-
-    font-weight: 700;
-
-    letter-spacing: 8px;
-
-    margin-bottom: 35px;
-
-}
-
-.hero h1 {
-
-    font-size:
-        clamp(
-            48px,
-            10vw,
-            120px
-        );
-
-    line-height: 1;
-
-    letter-spacing: 5px;
-
-    font-weight: 900;
-
-    background:
-        linear-gradient(
-            90deg,
-            #fff,
-            #777,
-            #fff,
-            #777,
-            #fff
-        );
-
-    background-size: 300%;
-
-    color: transparent;
-
-    -webkit-background-clip: text;
-
-    background-clip: text;
-
-    animation:
-        shine 5s linear infinite;
-
-}
-
-.line {
-
-    width: 80px;
-
-    height: 3px;
-
-    background: white;
-
-    border-radius: 50px;
-
-    margin: 35px auto;
-
-}
-
-.hero p {
-
-    max-width: 650px;
-
-    font-size: 16px;
-
-}
-
-.buttons {
-
-    display: flex;
-
-    flex-wrap: wrap;
-
-    justify-content: center;
-
-    gap: 12px;
-
-    margin-top: 35px;
-
-}
-
-.support {
-
-    margin-top: 80px;
-
-}
-
 .grid {
 
     display: grid;
@@ -991,20 +727,22 @@ textarea {
         repeat(
             auto-fit,
             minmax(
-                220px,
+                200px,
                 1fr
             )
         );
 
     gap: 15px;
 
-    margin-top: 25px;
+    margin-top: 30px;
 
 }
 
 .stat {
 
-    padding: 25px;
+    padding: 23px;
+
+    border-radius: 15px;
 
     border:
         1px solid
@@ -1015,33 +753,83 @@ textarea {
             .08
         );
 
-    border-radius: 15px;
-
     background:
         rgba(
             255,
             255,
             255,
-            .03
+            .025
         );
 
 }
 
-.stat-title {
+.stat span {
+
+    display: block;
 
     color: #666;
 
-    font-size: 12px;
+    font-size: 11px;
 
     margin-bottom: 10px;
 
+    letter-spacing: 1px;
+
 }
 
-.stat-value {
+.stat strong {
 
-    font-size: 22px;
+    font-size: 21px;
 
-    font-weight: 800;
+}
+
+.errorIcon {
+
+    font-size: 75px;
+
+    font-weight: 900;
+
+    margin-bottom: 20px;
+
+}
+
+.error {
+
+    padding: 13px;
+
+    margin-top: 20px;
+
+    border-radius: 10px;
+
+    background:
+        rgba(
+            255,
+            50,
+            50,
+            .08
+        );
+
+    color: #ff9999;
+
+}
+
+.success {
+
+    padding: 13px;
+
+    margin-top: 20px;
+
+    border-radius: 10px;
+
+    background:
+        rgba(
+            50,
+            255,
+            120,
+            .08
+        );
+
+    color: #9fffb5;
 
 }
 
@@ -1051,31 +839,33 @@ footer {
 
     color: #444;
 
-    padding:
-        35px;
+    padding: 30px;
 
     font-size: 12px;
 
 }
 
-@keyframes shine {
-
-    0% {
-        background-position: 300%;
-    }
-
-    100% {
-        background-position: -300%;
-    }
-
-}
-
-@media(max-width:600px) {
+@media(max-width:650px) {
 
     nav {
 
         padding:
-            0 18px;
+            0 15px;
+
+    }
+
+    nav .links {
+
+        gap: 2px;
+
+    }
+
+    nav a {
+
+        padding:
+            8px;
+
+        font-size: 11px;
 
     }
 
@@ -1083,46 +873,23 @@ footer {
 
         font-size: 13px;
 
-    }
-
-    .nav-link {
-
-        font-size: 11px;
-
-        padding:
-            8px 9px;
-
-    }
-
-    .container {
-
-        width: 90%;
-
-    }
-
-    h1 {
-
-        font-size: 34px;
+        letter-spacing: 2px;
 
     }
 
     .hero h1 {
 
-        font-size: 43px;
-
-        letter-spacing: 2px;
+        font-size: 45px;
 
     }
 
-    .brand {
+    .hero .small {
 
-        font-size: 11px;
-
-        letter-spacing: 5px;
+        font-size: 10px;
 
     }
 
-    .card {
+    .box {
 
         padding: 25px;
 
@@ -1142,51 +909,33 @@ footer {
         NORTH BOT
     </div>
 
-    <div class="nav-links">
+    <div class="links">
 
-        <a
-            class="nav-link"
-            href="/"
-        >
+        <a href="/">
             Startseite
         </a>
 
-        <a
-            class="nav-link"
-            href="/support"
-        >
-            Support
+        <a href="/support">
+            🎫 Support
         </a>
 
         ${
-            loggedIn
+            user
                 ? `
-                    <a
-                        class="nav-link"
-                        href="/dashboard"
-                    >
-                        Konto
+                    <a href="/dashboard">
+                        👤 Konto
                     </a>
 
-                    <a
-                        class="nav-link"
-                        href="/logout"
-                    >
+                    <a href="/logout">
                         Logout
                     </a>
                 `
                 : `
-                    <a
-                        class="nav-link"
-                        href="/login"
-                    >
+                    <a href="/login">
                         Anmelden
                     </a>
 
-                    <a
-                        class="nav-link"
-                        href="/register"
-                    >
+                    <a href="/register">
                         Registrieren
                     </a>
                 `
@@ -1196,12 +945,15 @@ footer {
 
 </nav>
 
+<main>
+
 ${content}
+
+</main>
 
 <footer>
 
-    © 2026 North Bot ·
-    North-Bot-2.de
+    © 2026 North Bot
 
 </footer>
 
@@ -1220,59 +972,41 @@ app.get(
     "/",
     (req, res) => {
 
-        let user = null;
-
-        if (req.session.userId) {
-
-            const users =
-                getUsers();
-
-            user =
-                users.find(
-                    u =>
-                        u.id ===
-                        req.session.userId
-                ) || null;
-
-        }
+        const user =
+            getCurrentUser(req);
 
         res.send(
-            page(
-                "Coming Soon",
+            layout(
+                "North Bot",
                 `
 
-<div class="hero">
+<section class="hero">
 
-    <div class="brand">
+    <div class="small">
         NORTH BOT
     </div>
 
     <h1>
-        COMING SOON!
+        NORTH BOT
     </h1>
 
-    <div class="line"></div>
-
     <p>
-        Unsere Webseite befindet sich aktuell
-        im Aufbau.
-        <br>
-        North Bot kommt bald.
+        Eine moderne Plattform für
+        Community, Support und Discord.
     </p>
 
     <div class="buttons">
 
         <a
-            class="button primary"
+            class="btn primary"
             href="${DISCORD_INVITE}"
             target="_blank"
-            rel="noopener noreferrer"
         >
             💬 Discord beitreten
         </a>
 
         <a
-            class="button"
+            class="btn"
             href="/support"
         >
             🎫 Support
@@ -1282,7 +1016,7 @@ app.get(
             user
                 ? `
                     <a
-                        class="button"
+                        class="btn"
                         href="/dashboard"
                     >
                         👤 Mein Konto
@@ -1290,17 +1024,17 @@ app.get(
                 `
                 : `
                     <a
-                        class="button"
-                        href="/login"
+                        class="btn"
+                        href="/register"
                     >
-                        🔐 Anmelden
+                        📝 Konto erstellen
                     </a>
                 `
         }
 
     </div>
 
-</div>
+</section>
 
                 `,
                 user
@@ -1311,7 +1045,7 @@ app.get(
 );
 
 // ============================================================
-// REGISTRIEREN
+// REGISTER
 // ============================================================
 
 app.get(
@@ -1319,16 +1053,16 @@ app.get(
     (req, res) => {
 
         res.send(
-            page(
-                "Registrieren",
+            layout(
+                "Registrierung",
                 `
 
 <div class="container">
 
-    <div class="card center">
+    <div class="box center">
 
         <h1>
-            📝 Registrieren
+            📝 Registrierung
         </h1>
 
         <p>
@@ -1342,7 +1076,6 @@ app.get(
         >
 
             <input
-                type="text"
                 name="username"
                 placeholder="Benutzername"
                 minlength="3"
@@ -1354,7 +1087,6 @@ app.get(
                 type="email"
                 name="email"
                 placeholder="E-Mail-Adresse"
-                maxlength="150"
                 required
             >
 
@@ -1363,7 +1095,6 @@ app.get(
                 name="password"
                 placeholder="Passwort"
                 minlength="8"
-                maxlength="100"
                 required
             >
 
@@ -1372,31 +1103,17 @@ app.get(
                 name="password2"
                 placeholder="Passwort wiederholen"
                 minlength="8"
-                maxlength="100"
                 required
             >
 
             <button
-                class="button primary"
+                class="btn primary"
                 type="submit"
             >
-                📝 Konto erstellen
+                📝 Registrieren
             </button>
 
         </form>
-
-        <br>
-
-        <p>
-            Du hast bereits ein Konto?
-        </p>
-
-        <a
-            class="button"
-            href="/login"
-        >
-            🔐 Anmelden
-        </a>
 
     </div>
 
@@ -1408,10 +1125,6 @@ app.get(
 
     }
 );
-
-// ============================================================
-// REGISTRIEREN POST
-// ============================================================
 
 app.post(
     "/register",
@@ -1425,7 +1138,8 @@ app.post(
         const email =
             String(
                 req.body.email || ""
-            ).trim()
+            )
+            .trim()
             .toLowerCase();
 
         const password =
@@ -1444,60 +1158,25 @@ app.post(
         ) {
 
             return res.status(400).send(
-                page(
+                layout(
                     "Fehler",
                     `
                     <div class="container">
-                        <div class="card center">
+                        <div class="box center">
 
-                            <h2>
-                                ❌ Ungültiger Benutzername
-                            </h2>
+                            <h1>
+                                ❌ Fehler
+                            </h1>
 
                             <p>
                                 Der Benutzername muss
-                                zwischen 3 und 30 Zeichen
-                                lang sein.
+                                3 bis 30 Zeichen lang sein.
                             </p>
 
-                            <a
-                                class="button"
-                                href="/register"
-                            >
-                                Zurück
-                            </a>
-
-                        </div>
-                    </div>
-                    `
-                )
-            );
-
-        }
-
-        if (
-            !email.includes("@") ||
-            email.length > 150
-        ) {
-
-            return res.status(400).send(
-                page(
-                    "Fehler",
-                    `
-                    <div class="container">
-                        <div class="card center">
-
-                            <h2>
-                                ❌ Ungültige E-Mail
-                            </h2>
-
-                            <p>
-                                Bitte gib eine gültige
-                                E-Mail-Adresse ein.
-                            </p>
+                            <br>
 
                             <a
-                                class="button"
+                                class="btn"
                                 href="/register"
                             >
                                 Zurück
@@ -1514,23 +1193,25 @@ app.post(
         if (password.length < 8) {
 
             return res.status(400).send(
-                page(
+                layout(
                     "Fehler",
                     `
                     <div class="container">
-                        <div class="card center">
+                        <div class="box center">
 
-                            <h2>
+                            <h1>
                                 ❌ Passwort zu kurz
-                            </h2>
+                            </h1>
 
                             <p>
                                 Das Passwort muss mindestens
                                 8 Zeichen haben.
                             </p>
 
+                            <br>
+
                             <a
-                                class="button"
+                                class="btn"
                                 href="/register"
                             >
                                 Zurück
@@ -1547,18 +1228,25 @@ app.post(
         if (password !== password2) {
 
             return res.status(400).send(
-                page(
+                layout(
                     "Fehler",
                     `
                     <div class="container">
-                        <div class="card center">
+                        <div class="box center">
 
-                            <h2>
-                                ❌ Passwörter stimmen nicht überein
-                            </h2>
+                            <h1>
+                                ❌ Passwörter unterschiedlich
+                            </h1>
+
+                            <p>
+                                Beide Passwörter müssen
+                                identisch sein.
+                            </p>
+
+                            <br>
 
                             <a
-                                class="button"
+                                class="btn"
                                 href="/register"
                             >
                                 Zurück
@@ -1573,34 +1261,35 @@ app.post(
         }
 
         const users =
-            getUsers();
+            loadUsers();
 
-        const existing =
-            users.find(
+        if (
+            users.some(
                 user =>
                     user.email === email
-            );
-
-        if (existing) {
+            )
+        ) {
 
             return res.status(409).send(
-                page(
-                    "Fehler",
+                layout(
+                    "Konto vorhanden",
                     `
                     <div class="container">
-                        <div class="card center">
+                        <div class="box center">
 
-                            <h2>
+                            <h1>
                                 ❌ Konto existiert bereits
-                            </h2>
+                            </h1>
 
                             <p>
-                                Für diese E-Mail-Adresse
-                                existiert bereits ein Konto.
+                                Diese E-Mail-Adresse
+                                ist bereits registriert.
                             </p>
 
+                            <br>
+
                             <a
-                                class="button"
+                                class="btn"
                                 href="/login"
                             >
                                 Anmelden
@@ -1614,7 +1303,7 @@ app.post(
 
         }
 
-        const newUser = {
+        const user = {
 
             id:
                 crypto.randomUUID(),
@@ -1624,7 +1313,9 @@ app.post(
             email,
 
             password:
-                hashPassword(password),
+                hashPassword(
+                    password
+                ),
 
             createdAt:
                 new Date().toISOString()
@@ -1632,7 +1323,7 @@ app.post(
         };
 
         users.push(
-            newUser
+            user
         );
 
         saveUsers(
@@ -1640,7 +1331,7 @@ app.post(
         );
 
         req.session.userId =
-            newUser.id;
+            user.id;
 
         res.redirect(
             "/dashboard"
@@ -1658,13 +1349,13 @@ app.get(
     (req, res) => {
 
         res.send(
-            page(
+            layout(
                 "Anmelden",
                 `
 
 <div class="container">
 
-    <div class="card center">
+    <div class="box center">
 
         <h1>
             🔐 Anmelden
@@ -1696,7 +1387,7 @@ app.get(
             >
 
             <button
-                class="button primary"
+                class="btn primary"
                 type="submit"
             >
                 🔐 Anmelden
@@ -1704,18 +1395,16 @@ app.get(
 
         </form>
 
-        <br>
+        <div class="buttons">
 
-        <p>
-            Noch kein Konto?
-        </p>
+            <a
+                class="btn"
+                href="/register"
+            >
+                📝 Registrieren
+            </a>
 
-        <a
-            class="button"
-            href="/register"
-        >
-            📝 Registrieren
-        </a>
+        </div>
 
     </div>
 
@@ -1727,10 +1416,6 @@ app.get(
 
     }
 );
-
-// ============================================================
-// LOGIN POST
-// ============================================================
 
 app.post(
     "/login",
@@ -1749,7 +1434,7 @@ app.post(
             );
 
         const users =
-            getUsers();
+            loadUsers();
 
         const user =
             users.find(
@@ -1759,31 +1444,33 @@ app.post(
 
         if (
             !user ||
-            !verifyPassword(
+            !checkPassword(
                 password,
                 user.password
             )
         ) {
 
             return res.status(401).send(
-                page(
-                    "Login fehlgeschlagen",
+                layout(
+                    "Login Fehler",
                     `
                     <div class="container">
 
-                        <div class="card center">
+                        <div class="box center">
 
-                            <h2>
+                            <h1>
                                 ❌ Login fehlgeschlagen
-                            </h2>
+                            </h1>
 
                             <p>
                                 E-Mail oder Passwort
                                 ist falsch.
                             </p>
 
+                            <br>
+
                             <a
-                                class="button"
+                                class="btn"
                                 href="/login"
                             >
                                 Erneut versuchen
@@ -1817,91 +1504,71 @@ app.get(
     requireLogin,
     (req, res) => {
 
-        const users =
-            getUsers();
-
         const user =
-            users.find(
-                u =>
-                    u.id ===
-                    req.session.userId
-            );
+            getCurrentUser(req);
 
-        if (!user) {
-
-            req.session.destroy(
-                () => {}
-            );
-
-            return res.redirect(
-                "/login"
-            );
-
-        }
-
-        const isAdmin =
+        const isOwner =
             user.email.toLowerCase() ===
             OWNER_EMAIL.toLowerCase();
 
         res.send(
-            page(
-                "Mein Konto",
+            layout(
+                "Dashboard",
                 `
 
 <div class="container">
 
-    <div class="card">
+    <div class="box">
 
         <h1>
-            👤 Mein Konto
+            👋 Willkommen,
+            ${esc(user.username)}
         </h1>
 
         <p>
-            Willkommen,
-            <strong>
-                ${escapeHtml(user.username)}
-            </strong>!
+            Dein persönlicher
+            North-Bot-Bereich.
         </p>
 
         <div class="grid">
 
             <div class="stat">
 
-                <div class="stat-title">
+                <span>
                     BENUTZERNAME
-                </div>
+                </span>
 
-                <div class="stat-value">
-                    ${escapeHtml(user.username)}
-                </div>
+                <strong>
+                    ${esc(user.username)}
+                </strong>
 
             </div>
 
             <div class="stat">
 
-                <div class="stat-title">
+                <span>
                     E-MAIL
-                </div>
+                </span>
 
-                <div class="stat-value">
-                    ${escapeHtml(user.email)}
-                </div>
+                <strong>
+                    ${esc(user.email)}
+                </strong>
 
             </div>
 
             <div class="stat">
 
-                <div class="stat-title">
-                    KONTO
-                </div>
+                <span>
+                    ROLLE
+                </span>
 
-                <div class="stat-value">
+                <strong>
                     ${
-                        isAdmin
+                        isOwner
                             ? "👑 OWNER"
                             : "👤 USER"
                     }
-                </div>
+                </strong>
 
             </div>
 
@@ -1910,17 +1577,17 @@ app.get(
         <div class="buttons">
 
             <a
-                class="button"
+                class="btn"
                 href="/support"
             >
                 🎫 Support
             </a>
 
             ${
-                isAdmin
+                isOwner
                     ? `
                         <a
-                            class="button primary"
+                            class="btn primary"
                             href="/admin"
                         >
                             👑 Admin Panel
@@ -1930,7 +1597,7 @@ app.get(
             }
 
             <a
-                class="button"
+                class="btn"
                 href="/logout"
             >
                 🚪 Abmelden
@@ -1980,24 +1647,17 @@ app.get(
     requireLogin,
     (req, res) => {
 
-        const users =
-            getUsers();
-
         const user =
-            users.find(
-                u =>
-                    u.id ===
-                    req.session.userId
-            );
+            getCurrentUser(req);
 
         res.send(
-            page(
+            layout(
                 "Support",
                 `
 
 <div class="container">
 
-    <div class="card">
+    <div class="box">
 
         <h1>
             🎫 Support
@@ -2005,18 +1665,17 @@ app.get(
 
         <p>
             Erstelle ein Support-Ticket.
-            Dein Anliegen wird anschließend
-            an den North-Bot-Support gesendet.
+            Die Nachricht wird an Discord
+            weitergeleitet.
         </p>
 
         <form
             class="form"
             method="POST"
-            action="/api/ticket"
+            action="/support"
         >
 
             <input
-                type="text"
                 name="subject"
                 placeholder="Betreff"
                 maxlength="100"
@@ -2025,16 +1684,16 @@ app.get(
 
             <textarea
                 name="message"
-                placeholder="Beschreibe dein Anliegen..."
+                placeholder="Beschreibe dein Problem..."
                 maxlength="2000"
                 required
             ></textarea>
 
             <button
-                class="button primary"
+                class="btn primary"
                 type="submit"
             >
-                🎫 Ticket erstellen
+                🎫 Ticket senden
             </button>
 
         </form>
@@ -2052,140 +1711,130 @@ app.get(
 );
 
 // ============================================================
-// TICKET
+// SUPPORT POST
 // ============================================================
 
 app.post(
-    "/api/ticket",
+    "/support",
     requireLogin,
     async (req, res) => {
 
+        const user =
+            getCurrentUser(req);
+
+        const subject =
+            String(
+                req.body.subject || ""
+            )
+            .trim()
+            .slice(
+                0,
+                100
+            );
+
+        const message =
+            String(
+                req.body.message || ""
+            )
+            .trim()
+            .slice(
+                0,
+                2000
+            );
+
+        if (
+            !subject ||
+            !message
+        ) {
+
+            return res.status(400).send(
+                layout(
+                    "Fehler",
+                    `
+                    <div class="container">
+
+                        <div class="box center">
+
+                            <h1>
+                                ❌ Ticket Fehler
+                            </h1>
+
+                            <p>
+                                Bitte fülle alle Felder aus.
+                            </p>
+
+                            <br>
+
+                            <a
+                                class="btn"
+                                href="/support"
+                            >
+                                Zurück
+                            </a>
+
+                        </div>
+
+                    </div>
+                    `,
+                    user
+                )
+            );
+
+        }
+
+        if (
+            DISCORD_WEBHOOK_URL.includes(
+                "DEIN_NEUER"
+            )
+        ) {
+
+            return res.status(500).send(
+                layout(
+                    "Webhook fehlt",
+                    `
+                    <div class="container">
+
+                        <div class="box center">
+
+                            <h1>
+                                ❌ Discord Webhook fehlt
+                            </h1>
+
+                            <p>
+                                Trage deinen neuen Discord
+                                Webhook oben in der
+                                webseite.js ein.
+                            </p>
+
+                            <br>
+
+                            <a
+                                class="btn"
+                                href="/support"
+                            >
+                                Zurück
+                            </a>
+
+                        </div>
+
+                    </div>
+                    `,
+                    user
+                )
+            );
+
+        }
+
+        const ticketId =
+            "NORTH-" +
+            crypto
+                .randomBytes(4)
+                .toString("hex")
+                .toUpperCase();
+
         try {
 
-            const users =
-                getUsers();
-
-            const user =
-                users.find(
-                    u =>
-                        u.id ===
-                        req.session.userId
-                );
-
-            if (!user) {
-
-                return res.redirect(
-                    "/login"
-                );
-
-            }
-
-            const subject =
-                String(
-                    req.body.subject ||
-                    ""
-                )
-                .trim()
-                .slice(
-                    0,
-                    100
-                );
-
-            const message =
-                String(
-                    req.body.message ||
-                    ""
-                )
-                .trim()
-                .slice(
-                    0,
-                    2000
-                );
-
-            if (
-                !subject ||
-                !message
-            ) {
-
-                return res.status(400).send(
-                    page(
-                        "Ticket Fehler",
-                        `
-                        <div class="container">
-
-                            <div class="card center">
-
-                                <h2>
-                                    ❌ Bitte alle Felder ausfüllen.
-                                </h2>
-
-                                <a
-                                    class="button"
-                                    href="/support"
-                                >
-                                    Zurück
-                                </a>
-
-                            </div>
-
-                        </div>
-                        `,
-                        user
-                    )
-                );
-
-            }
-
-            if (
-                !DISCORD_WEBHOOK_URL ||
-                DISCORD_WEBHOOK_URL.includes(
-                    "DEIN_NEUER"
-                )
-            ) {
-
-                return res.status(500).send(
-                    page(
-                        "Webhook fehlt",
-                        `
-                        <div class="container">
-
-                            <div class="card center">
-
-                                <h2>
-                                    ❌ Discord Webhook fehlt
-                                </h2>
-
-                                <p>
-                                    Trage deinen neuen
-                                    Discord-Webhook oben
-                                    in der webseite.js ein.
-                                </p>
-
-                                <a
-                                    class="button"
-                                    href="/support"
-                                >
-                                    Zurück
-                                </a>
-
-                            </div>
-
-                        </div>
-                        `,
-                        user
-                    )
-                );
-
-            }
-
-            const ticketId =
-                "NORTH-" +
-                crypto
-                    .randomBytes(4)
-                    .toString("hex")
-                    .toUpperCase();
-
-            const webhookResponse =
+            const response =
                 await fetch(
                     DISCORD_WEBHOOK_URL,
                     {
@@ -2211,7 +1860,7 @@ app.post(
                                             "🎫 Neues Ticket",
 
                                         description:
-                                            "Auf der North-Bot-Webseite wurde ein neues Support-Ticket erstellt.",
+                                            "Ein neues Support-Ticket wurde auf der North-Bot-Webseite erstellt.",
 
                                         fields: [
 
@@ -2231,7 +1880,7 @@ app.post(
                                                     "👤 Benutzer",
 
                                                 value:
-                                                    escapeHtml(
+                                                    esc(
                                                         user.username
                                                     ),
 
@@ -2244,7 +1893,7 @@ app.post(
                                                     "📧 E-Mail",
 
                                                 value:
-                                                    escapeHtml(
+                                                    esc(
                                                         user.email
                                                     ),
 
@@ -2257,7 +1906,7 @@ app.post(
                                                     "📌 Betreff",
 
                                                 value:
-                                                    escapeHtml(
+                                                    esc(
                                                         subject
                                                     ),
 
@@ -2270,7 +1919,7 @@ app.post(
                                                     "📝 Nachricht",
 
                                                 value:
-                                                    escapeHtml(
+                                                    esc(
                                                         message
                                                     ),
 
@@ -2280,7 +1929,7 @@ app.post(
 
                                             {
                                                 name:
-                                                    "📁 Kategorie-ID",
+                                                    "📁 Kategorie",
 
                                                 value:
                                                     TICKET_CATEGORY_ID,
@@ -2311,53 +1960,53 @@ app.post(
                     }
                 );
 
-            if (
-                !webhookResponse.ok
-            ) {
+            if (!response.ok) {
 
                 throw new Error(
-                    "Discord Webhook antwortete mit HTTP " +
-                    webhookResponse.status
+                    "Discord HTTP " +
+                    response.status
                 );
 
             }
 
             res.send(
-                page(
+                layout(
                     "Ticket erstellt",
                     `
                     <div class="container">
 
-                        <div class="card center">
+                        <div class="box center">
 
                             <h1>
                                 ✅ Ticket erstellt
                             </h1>
 
                             <p>
-                                Dein Support-Ticket
-                                wurde erfolgreich
-                                an Discord gesendet.
+                                Dein Ticket wurde erfolgreich
+                                an den North-Bot-Support
+                                gesendet.
                             </p>
+
+                            <br>
 
                             <p>
                                 Ticket-ID:
                                 <strong>
-                                    ${escapeHtml(ticketId)}
+                                    ${esc(ticketId)}
                                 </strong>
                             </p>
 
                             <div class="buttons">
 
                                 <a
-                                    class="button primary"
+                                    class="btn primary"
                                     href="/dashboard"
                                 >
-                                    👤 Konto
+                                    👤 Dashboard
                                 </a>
 
                                 <a
-                                    class="button"
+                                    class="btn"
                                     href="${DISCORD_INVITE}"
                                     target="_blank"
                                 >
@@ -2377,37 +2026,41 @@ app.post(
         } catch (error) {
 
             console.error(
-                "❌ Ticket Fehler:",
+                "Ticket Fehler:",
                 error
             );
 
             res.status(500).send(
-                page(
+                layout(
                     "Ticket Fehler",
                     `
                     <div class="container">
 
-                        <div class="card center">
+                        <div class="box center">
 
-                            <h2>
-                                ❌ Ticket konnte nicht erstellt werden
-                            </h2>
+                            <h1>
+                                ❌ Ticket konnte nicht gesendet werden
+                            </h1>
 
                             <p>
-                                Bitte versuche es später erneut.
+                                Discord konnte nicht
+                                erreicht werden.
                             </p>
 
+                            <br>
+
                             <a
-                                class="button"
+                                class="btn"
                                 href="/support"
                             >
-                                Zurück
+                                Erneut versuchen
                             </a>
 
                         </div>
 
                     </div>
-                    `
+                    `,
+                    user
                 )
             );
 
@@ -2425,106 +2078,105 @@ app.get(
     requireAdmin,
     (req, res) => {
 
-        const users =
-            getUsers();
+        const user =
+            getCurrentUser(req);
 
-        const admin =
-            users.find(
-                u =>
-                    u.id ===
-                    req.session.userId
-            );
+        const users =
+            loadUsers();
 
         res.send(
-            page(
+            layout(
                 "Admin Panel",
                 `
 
 <div class="container">
 
-    <div class="card">
+    <div class="box">
 
         <h1>
-            👑 North Bot Admin Panel
+            👑 Admin Panel
         </h1>
 
         <p>
-            Willkommen im Verwaltungsbereich.
+            North-Bot-Verwaltung
         </p>
 
         <div class="grid">
 
             <div class="stat">
 
-                <div class="stat-title">
-                    WEBSITE
-                </div>
+                <span>
+                    STATUS
+                </span>
 
-                <div class="stat-value">
+                <strong>
                     🟢 ONLINE
-                </div>
+                </strong>
 
             </div>
 
             <div class="stat">
 
-                <div class="stat-title">
+                <span>
                     BENUTZER
-                </div>
+                </span>
 
-                <div class="stat-value">
+                <strong>
                     ${users.length}
-                </div>
+                </strong>
 
             </div>
 
             <div class="stat">
 
-                <div class="stat-title">
+                <span>
                     SUPPORT
-                </div>
+                </span>
 
-                <div class="stat-value">
+                <strong>
                     🟢 AKTIV
-                </div>
+                </strong>
 
             </div>
 
             <div class="stat">
 
-                <div class="stat-title">
-                    TICKET-KATEGORIE
-                </div>
+                <span>
+                    OWNER
+                </span>
 
-                <div class="stat-value">
-                    ${TICKET_CATEGORY_ID}
-                </div>
+                <strong>
+                    Florian
+                </strong>
 
             </div>
 
         </div>
 
-        <div class="card" style="margin-top:25px;">
+        <div
+            class="box"
+            style="margin-top:20px;"
+        >
 
             <h2>
-                👤 Angemeldeter Owner
+                ⚙️ System
             </h2>
 
             <br>
 
             <p>
-                Benutzer:
-                ${escapeHtml(admin.username)}
+                Kategorie-ID:
+                ${TICKET_CATEGORY_ID}
             </p>
 
             <p>
-                E-Mail:
-                ${escapeHtml(admin.email)}
+                Owner:
+                ${OWNER_EMAIL}
             </p>
 
             <p>
-                Rolle:
-                👑 OWNER
+                Discord:
+                aktiv
             </p>
 
         </div>
@@ -2532,14 +2184,14 @@ app.get(
         <div class="buttons">
 
             <a
-                class="button"
+                class="btn"
                 href="/dashboard"
             >
-                👤 Konto
+                👤 Dashboard
             </a>
 
             <a
-                class="button"
+                class="btn"
                 href="/"
             >
                 🏠 Startseite
@@ -2552,7 +2204,7 @@ app.get(
 </div>
 
                 `,
-                admin
+                user
             )
         );
 
@@ -2560,7 +2212,7 @@ app.get(
 );
 
 // ============================================================
-// HEALTH CHECK
+// HEALTH
 // ============================================================
 
 app.get(
@@ -2572,17 +2224,17 @@ app.get(
             status:
                 "online",
 
-            website:
-                WEBSITE_NAME,
-
-            domain:
-                WEBSITE_DOMAIN,
+            name:
+                "North Bot",
 
             support:
                 "online",
 
-            ticketCategory:
-                TICKET_CATEGORY_ID
+            authentication:
+                "online",
+
+            admin:
+                "online"
 
         });
 
@@ -2597,31 +2249,33 @@ app.use(
     (req, res) => {
 
         res.status(404).send(
-            page(
+            layout(
                 "404",
                 `
                 <div class="container">
 
-                    <div class="card center">
+                    <div class="box center">
 
-                        <div class="big">
+                        <div class="errorIcon">
                             404
                         </div>
 
-                        <h2>
+                        <h1>
                             Seite nicht gefunden
-                        </h2>
+                        </h1>
 
                         <p>
-                            Diese North-Bot-Seite
-                            existiert nicht.
+                            Diese Seite existiert
+                            nicht.
                         </p>
 
+                        <br>
+
                         <a
-                            class="button"
+                            class="btn"
                             href="/"
                         >
-                            Zur Startseite
+                            🏠 Startseite
                         </a>
 
                     </div>
@@ -2635,7 +2289,7 @@ app.use(
 );
 
 // ============================================================
-// SERVER START
+// SERVER
 // ============================================================
 
 app.listen(
@@ -2644,27 +2298,39 @@ app.listen(
     () => {
 
         console.log(
-            "===================================="
+            "======================================"
         );
 
         console.log(
-            "             NORTH BOT"
+            "           NORTH BOT WEBSITE"
         );
 
         console.log(
-            "===================================="
+            "======================================"
         );
 
         console.log(
-            `🚀 Port: ${PORT}`
+            "🟢 Server gestartet"
         );
 
         console.log(
-            "🌐 Webseite: North-Bot-2.de"
+            "🌐 North Bot"
         );
 
         console.log(
-            "🎫 Support: AKTIV"
+            "🔐 Login aktiv"
+        );
+
+        console.log(
+            "📝 Registrierung aktiv"
+        );
+
+        console.log(
+            "🎫 Support aktiv"
+        );
+
+        console.log(
+            "👑 Admin Panel aktiv"
         );
 
         console.log(
@@ -2672,39 +2338,11 @@ app.listen(
         );
 
         console.log(
-            `💬 Discord: ${DISCORD_INVITE}`
+            `🚀 Port: ${PORT}`
         );
 
         console.log(
-            "===================================="
-        );
-
-    }
-);
-
-// ============================================================
-// FEHLERBEHANDLUNG
-// ============================================================
-
-process.on(
-    "uncaughtException",
-    error => {
-
-        console.error(
-            "❌ Uncaught Exception:",
-            error
-        );
-
-    }
-);
-
-process.on(
-    "unhandledRejection",
-    error => {
-
-        console.error(
-            "❌ Unhandled Rejection:",
-            error
+            "======================================"
         );
 
     }
