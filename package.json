@@ -1,7 +1,7 @@
 {
-  "name": "north-bot-website",
-  "version": "3.0.0",
-  "description": "North Bot Website mit Login, Registrierung, Tickets und Admin Panel",
+  "name": "north-bot-2-webseite",
+  "version": "1.0.0",
+  "description": "North-Bot-2 Website",
   "main": "webseite.js",
   "scripts": {
     "start": "node webseite.js"
@@ -10,7 +10,6 @@
     "node": ">=20"
   },
   "dependencies": {
-    "express": "^5.1.0",
-    "express-session": "^1.18.2"
+    "express": "^5.1.0"
   }
 }
