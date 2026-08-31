@@ -1,16 +1,8 @@
-// ============================================================
-// GALAXY BOT V2 - WEBSEITE
-// Datei: webseite.js
-// ============================================================
-
 const express = require("express");
 
 const app = express();
-
-// Render stellt den Port über process.env.PORT bereit
 const PORT = process.env.PORT || 10000;
 
-// Sicherheitsoption
 app.disable("x-powered-by");
 
 // ============================================================
@@ -23,7 +15,6 @@ app.get("/", (req, res) => {
 <html lang="de">
 
 <head>
-
     <meta charset="UTF-8">
 
     <meta
@@ -33,7 +24,7 @@ app.get("/", (req, res) => {
 
     <meta
         name="description"
-        content="Galaxy Bot V2 - Coming Soon"
+        content="North Bot - Coming Soon"
     >
 
     <meta
@@ -41,13 +32,9 @@ app.get("/", (req, res) => {
         content="#050505"
     >
 
-    <title>Galaxy Bot V2 | Coming Soon</title>
+    <title>North Bot | Coming Soon</title>
 
     <style>
-
-        /* ====================================================
-           RESET
-        ==================================================== */
 
         * {
             margin: 0;
@@ -60,10 +47,6 @@ app.get("/", (req, res) => {
             width: 100%;
             height: 100%;
         }
-
-        /* ====================================================
-           BODY
-        ==================================================== */
 
         body {
 
@@ -95,10 +78,6 @@ app.get("/", (req, res) => {
             position: relative;
         }
 
-        /* ====================================================
-           ANIMIERTER HINTERGRUND
-        ==================================================== */
-
         body::before {
 
             content: "";
@@ -106,7 +85,6 @@ app.get("/", (req, res) => {
             position: fixed;
 
             width: 650px;
-
             height: 650px;
 
             border-radius: 50%;
@@ -127,7 +105,7 @@ app.get("/", (req, res) => {
         }
 
         /* ====================================================
-           HINTERGRUND-PUNKTE
+           PUNKTE
         ==================================================== */
 
         .dots {
@@ -135,7 +113,6 @@ app.get("/", (req, res) => {
             position: fixed;
 
             top: 25px;
-
             right: 30px;
 
             display: flex;
@@ -148,7 +125,6 @@ app.get("/", (req, res) => {
         .dot {
 
             width: 6px;
-
             height: 6px;
 
             border-radius: 50%;
@@ -170,7 +146,7 @@ app.get("/", (req, res) => {
         }
 
         /* ====================================================
-           HAUPTCONTAINER
+           CONTAINER
         ==================================================== */
 
         .container {
@@ -192,7 +168,7 @@ app.get("/", (req, res) => {
         }
 
         /* ====================================================
-           BRAND
+           NORTH BOT
         ==================================================== */
 
         .brand {
@@ -257,7 +233,7 @@ app.get("/", (req, res) => {
         }
 
         /* ====================================================
-           TRENNLINIE
+           LINIE
         ==================================================== */
 
         .line {
@@ -273,7 +249,8 @@ app.get("/", (req, res) => {
             background: #ffffff;
 
             box-shadow:
-                0 0 10px rgba(
+                0 0 10px
+                rgba(
                     255,
                     255,
                     255,
@@ -285,7 +262,7 @@ app.get("/", (req, res) => {
         }
 
         /* ====================================================
-           BESCHREIBUNG
+           TEXT
         ==================================================== */
 
         .description {
@@ -358,7 +335,7 @@ app.get("/", (req, res) => {
 
             margin-top: 35px;
 
-            padding: 15px 28px;
+            padding: 15px 30px;
 
             border-radius: 12px;
 
@@ -436,23 +413,10 @@ app.get("/", (req, res) => {
                 scale(0.98);
         }
 
-        /* ====================================================
-           DISCORD ICON
-        ==================================================== */
-
         .discord-icon {
 
-            width: 22px;
+            font-size: 20px;
 
-            height: 22px;
-
-            display: inline-flex;
-
-            align-items: center;
-
-            justify-content: center;
-
-            font-size: 19px;
         }
 
         /* ====================================================
@@ -487,144 +451,106 @@ app.get("/", (req, res) => {
         @keyframes fadeIn {
 
             from {
-
                 opacity: 0;
-
-                transform:
-                    translateY(30px);
-
+                transform: translateY(30px);
             }
 
             to {
-
                 opacity: 1;
-
-                transform:
-                    translateY(0);
-
+                transform: translateY(0);
             }
+
         }
 
         @keyframes shine {
 
             0% {
-
-                background-position:
-                    300% center;
-
+                background-position: 300% center;
             }
 
             100% {
-
-                background-position:
-                    -300% center;
-
+                background-position: -300% center;
             }
+
         }
 
         @keyframes floating {
 
             0% {
-
-                transform:
-                    translateY(0);
-
+                transform: translateY(0);
             }
 
             50% {
-
-                transform:
-                    translateY(-8px);
-
+                transform: translateY(-8px);
             }
 
             100% {
-
-                transform:
-                    translateY(0);
-
+                transform: translateY(0);
             }
+
         }
 
         @keyframes lineAnimation {
 
             0% {
-
                 width: 70px;
-
                 opacity: 0.4;
-
             }
 
             50% {
-
                 width: 110px;
-
                 opacity: 1;
-
             }
 
             100% {
-
                 width: 70px;
-
                 opacity: 0.4;
-
             }
+
         }
 
         @keyframes backgroundMove {
 
             0% {
-
                 transform:
                     translate(
                         -100px,
                         -50px
                     );
-
             }
 
             50% {
-
                 transform:
                     translate(
                         100px,
                         50px
                     );
-
             }
 
             100% {
-
                 transform:
                     translate(
                         -100px,
                         -50px
                     );
-
             }
+
         }
 
         @keyframes dotAnimation {
 
             0% {
-
                 opacity: 0.15;
-
             }
 
             50% {
-
                 opacity: 0.9;
-
             }
 
             100% {
-
                 opacity: 0.15;
-
             }
+
         }
 
         /* ====================================================
@@ -634,9 +560,7 @@ app.get("/", (req, res) => {
         @media (max-width: 600px) {
 
             .container {
-
                 padding: 20px;
-
             }
 
             .brand {
@@ -646,7 +570,6 @@ app.get("/", (req, res) => {
                 letter-spacing: 5px;
 
                 margin-bottom: 35px;
-
             }
 
             h1 {
@@ -654,7 +577,6 @@ app.get("/", (req, res) => {
                 font-size: 45px;
 
                 letter-spacing: 3px;
-
             }
 
             .description {
@@ -662,35 +584,27 @@ app.get("/", (req, res) => {
                 font-size: 14px;
 
                 letter-spacing: 1px;
-
             }
 
             .domain {
 
                 font-size: 11px;
-
             }
 
             .discord-button {
 
                 padding:
-                    14px 22px;
+                    14px 23px;
 
                 font-size: 14px;
-
             }
 
             .footer {
 
                 font-size: 10px;
-
             }
 
         }
-
-        /* ====================================================
-           SEHR KLEINE HANDYS
-        ==================================================== */
 
         @media (max-width: 400px) {
 
@@ -721,9 +635,7 @@ app.get("/", (req, res) => {
     <div class="dots">
 
         <div class="dot"></div>
-
         <div class="dot"></div>
-
         <div class="dot"></div>
 
     </div>
@@ -736,7 +648,7 @@ app.get("/", (req, res) => {
     <main class="container">
 
         <div class="brand">
-            GALAXY BOT V2
+            NORTH BOT
         </div>
 
         <h1>
@@ -755,21 +667,15 @@ app.get("/", (req, res) => {
 
         </p>
 
-
-        <!-- ==================================================
-             DOMAIN
-        =================================================== -->
-
         <div class="domain">
-            galaxy-bot-v2.onrender.com
+            North-Bot-2.de
         </div>
 
+        <br>
 
         <!-- ==================================================
              DISCORD BUTTON
         =================================================== -->
-
-        <br>
 
         <a
             class="discord-button"
@@ -795,7 +701,7 @@ app.get("/", (req, res) => {
 
     <footer class="footer">
 
-        © 2026 Galaxy Bot V2 · Alle Rechte vorbehalten
+        © 2026 North Bot · Alle Rechte vorbehalten
 
     </footer>
 
@@ -811,7 +717,7 @@ app.get("/", (req, res) => {
         );
 
         console.log(
-            "        🌌 GALAXY BOT V2"
+            "             NORTH BOT"
         );
 
         console.log(
@@ -820,6 +726,10 @@ app.get("/", (req, res) => {
 
         console.log(
             "🚀 Status: COMING SOON"
+        );
+
+        console.log(
+            "🌐 Domain: North-Bot-2.de"
         );
 
         console.log(
@@ -846,14 +756,14 @@ app.get("/health", (req, res) => {
 
     res.status(200).json({
         status: "online",
-        website: "Galaxy Bot V2",
+        website: "North Bot",
         message: "Coming Soon"
     });
 
 });
 
 // ============================================================
-// 404 SEITE
+// 404
 // ============================================================
 
 app.use((req, res) => {
@@ -872,7 +782,7 @@ app.use((req, res) => {
         content="width=device-width, initial-scale=1.0"
     >
 
-    <title>404 | Galaxy Bot V2</title>
+    <title>404 | North Bot</title>
 
     <style>
 
@@ -902,7 +812,6 @@ app.use((req, res) => {
             justify-content: center;
 
             text-align: center;
-
         }
 
         .error {
@@ -992,10 +901,11 @@ app.listen(PORT, "0.0.0.0", () => {
 
     console.log("");
     console.log("====================================");
-    console.log("        🌌 GALAXY BOT V2");
+    console.log("             NORTH BOT");
     console.log("====================================");
     console.log(`🚀 Server läuft auf Port: ${PORT}`);
     console.log("📄 Status: COMING SOON");
+    console.log("🌐 Domain: North-Bot-2.de");
     console.log("💬 Discord: https://discord.gg/NJEVq6Pk6x");
     console.log("====================================");
     console.log("");
