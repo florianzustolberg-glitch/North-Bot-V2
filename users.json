@@ -1,1 +1,11 @@
-[]
+[
+  {
+    "email": "florianzustolberg@gmail.com",
+    "password": "278263",
+    "role": "Owner",
+    "banned": false,
+    "banReason": null,
+    "banUntil": null,
+    "coins": 0
+  }
+]
