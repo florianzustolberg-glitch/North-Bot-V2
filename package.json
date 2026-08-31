@@ -1,15 +1,18 @@
 {
-  "name": "north-bot-2-webseite",
+  "name": "north-bot-webseite",
   "version": "1.0.0",
-  "description": "North-Bot-2 Website",
+  "description": "North-Bot Webseite mit Login, Tickets, Coins, Chat und Admin Panel",
   "main": "webseite.js",
   "scripts": {
     "start": "node webseite.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=18"
   },
   "dependencies": {
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "express-session": "^1.18.2",
+    "bcryptjs": "^3.0.2",
+    "body-parser": "^2.2.0"
   }
 }
