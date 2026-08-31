@@ -1,7 +1,7 @@
 {
   "name": "north-bot-website",
-  "version": "2.0.0",
-  "description": "North Bot Website",
+  "version": "3.0.0",
+  "description": "North Bot Website mit Login, Registrierung, Tickets und Admin Panel",
   "main": "webseite.js",
   "scripts": {
     "start": "node webseite.js"
