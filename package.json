@@ -1,0 +1,15 @@
+{
+  "name": "galaxy-bot-v2",
+  "version": "1.0.0",
+  "description": "Galaxy Bot V2 Webseite",
+  "main": "webseite.js",
+  "scripts": {
+    "start": "node webseite.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}
