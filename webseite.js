@@ -1,56 +1,24 @@
 /*
 ========================================================
- NORTH BOT V2 - WEBSEITE
-========================================================
- Benötigt:
-   npm install express
-
- Start:
-   node webseite.js
-
+ NORTH-BOT 2 - WEBSEITE
+ Komplett neue Version
+ Node.js + Express
  Keine .env
  Keine express-session
- Daten werden automatisch als JSON gespeichert.
-
- Enthalten:
- - Registrierung / Login
- - Dauerhafter Login (30 Tage)
- - Profil bearbeiten
- - Rollen: owner / admin / manager / developer / moderator / user
- - Admin Panel
- - Benutzerverwaltung
- - Temporäre Bans
- - Kick
- - Wartung
- - Störung
- - Ankündigungen
- - Tickets
- - Bewerbungen
- - Coins
- - Daily Coins
- - Coin-Codes
- - Coin-Shop
- - Gewinnspiele
- - Team-Chat
- - User-Chat
- - Logs
- - Bestellungen
- - Beta-Nummern
- - Produktverwaltung
+ JSON-Datenbank
 ========================================================
 */
 
 const express = require("express");
-const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
 const app = express();
 
-const PORT = Number(process.env.PORT) || 10000;
+const PORT = process.env.PORT || 10000;
 
 const DISCORD_INVITE = "https://discord.gg/NJEVq6Pk6x";
-const OWNER_EMAIL = "florianzustolberg@gmail.com";
 
 /*
 ========================================================
@@ -58,21 +26,26 @@ const OWNER_EMAIL = "florianzustolberg@gmail.com";
 ========================================================
 */
 
-const DATA_DIR = __dirname;
+const DATA_DIR = path.join(__dirname, "data");
+
+if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+}
 
 const FILES = {
     users: path.join(DATA_DIR, "users.json"),
     tickets: path.join(DATA_DIR, "tickets.json"),
-    sessions: path.join(DATA_DIR, "sessions.json"),
-    applications: path.join(DATA_DIR, "applications.json"),
     codes: path.join(DATA_DIR, "codes.json"),
     shop: path.join(DATA_DIR, "shop.json"),
-    giveaways: path.join(DATA_DIR, "giveaways.json"),
-    chats: path.join(DATA_DIR, "chats.json"),
     logs: path.join(DATA_DIR, "logs.json"),
+    sessions: path.join(DATA_DIR, "sessions.json"),
+    messages: path.join(DATA_DIR, "messages.json"),
+    teamMessages: path.join(DATA_DIR, "teamMessages.json"),
+    giveaways: path.join(DATA_DIR, "giveaways.json"),
+    announcements: path.join(DATA_DIR, "announcements.json"),
+    applications: path.join(DATA_DIR, "applications.json"),
     orders: path.join(DATA_DIR, "orders.json"),
-    settings: path.join(DATA_DIR, "settings.json"),
-    announcements: path.join(DATA_DIR, "announcements.json")
+    settings: path.join(DATA_DIR, "settings.json")
 };
 
 function ensureFile(file, defaultValue) {
@@ -83,23 +56,28 @@ function ensureFile(file, defaultValue) {
 
 ensureFile(FILES.users, []);
 ensureFile(FILES.tickets, []);
-ensureFile(FILES.sessions, []);
-ensureFile(FILES.applications, []);
 ensureFile(FILES.codes, []);
 ensureFile(FILES.shop, []);
-ensureFile(FILES.giveaways, []);
-ensureFile(FILES.chats, []);
 ensureFile(FILES.logs, []);
+ensureFile(FILES.sessions, []);
+ensureFile(FILES.messages, []);
+ensureFile(FILES.teamMessages, []);
+ensureFile(FILES.giveaways, []);
+ensureFile(FILES.announcements, []);
+ensureFile(FILES.applications, []);
 ensureFile(FILES.orders, []);
 ensureFile(FILES.settings, {
-    maintenance: false,
-    maintenanceText: "Die Webseite befindet sich momentan in Wartung.",
-    outage: false,
-    outageText: "Aktuell liegt eine Störung vor.",
-    announcement: "",
-    announcementEnabled: false
+    maintenance: {
+        enabled: false,
+        title: "Wartung",
+        text: "Die Webseite wird momentan gewartet."
+    },
+    outage: {
+        enabled: false,
+        title: "Störung",
+        text: "Momentan gibt es eine technische Störung."
+    }
 });
-ensureFile(FILES.announcements, []);
 
 /*
 ========================================================
@@ -116,13 +94,11 @@ function readJSON(file, fallback) {
 
         const raw = fs.readFileSync(file, "utf8").trim();
 
-        if (!raw) {
-            return fallback;
-        }
+        if (!raw) return fallback;
 
         return JSON.parse(raw);
-    } catch (err) {
-        console.error("JSON-Fehler:", file, err.message);
+    } catch (error) {
+        console.error("JSON Fehler:", file, error.message);
         return fallback;
     }
 }
@@ -131,107 +107,26 @@ function writeJSON(file, data) {
     fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
 }
 
-function getUsers() {
-    return readJSON(FILES.users, []);
-}
+/*
+========================================================
+ ADMIN
+========================================================
 
-function saveUsers(data) {
-    writeJSON(FILES.users, data);
-}
+ Diese E-Mail ist automatisch Owner.
+ Weitere Admins können im Admin-Panel hinzugefügt werden.
+========================================================
+*/
 
-function getTickets() {
-    return readJSON(FILES.tickets, []);
-}
+const OWNER_EMAIL = "florianzustolberg@gmail.com";
 
-function saveTickets(data) {
-    writeJSON(FILES.tickets, data);
-}
+let adminEmails = [
+    OWNER_EMAIL
+];
 
-function getSessions() {
-    return readJSON(FILES.sessions, []);
-}
+function isAdminEmail(email) {
+    if (!email) return false;
 
-function saveSessions(data) {
-    writeJSON(FILES.sessions, data);
-}
-
-function getApplications() {
-    return readJSON(FILES.applications, []);
-}
-
-function saveApplications(data) {
-    writeJSON(FILES.applications, data);
-}
-
-function getCodes() {
-    return readJSON(FILES.codes, []);
-}
-
-function saveCodes(data) {
-    writeJSON(FILES.codes, data);
-}
-
-function getShop() {
-    return readJSON(FILES.shop, []);
-}
-
-function saveShop(data) {
-    writeJSON(FILES.shop, data);
-}
-
-function getGiveaways() {
-    return readJSON(FILES.giveaways, []);
-}
-
-function saveGiveaways(data) {
-    writeJSON(FILES.giveaways, data);
-}
-
-function getChats() {
-    return readJSON(FILES.chats, []);
-}
-
-function saveChats(data) {
-    writeJSON(FILES.chats, data);
-}
-
-function getLogs() {
-    return readJSON(FILES.logs, []);
-}
-
-function saveLogs(data) {
-    writeJSON(FILES.logs, data);
-}
-
-function getOrders() {
-    return readJSON(FILES.orders, []);
-}
-
-function saveOrders(data) {
-    writeJSON(FILES.orders, data);
-}
-
-function getSettings() {
-    return readJSON(FILES.settings, {
-        maintenance: false,
-        maintenanceText: "Die Webseite befindet sich momentan in Wartung.",
-        outage: false,
-        outageText: "Aktuell liegt eine Störung vor.",
-        announcement: "",
-        announcementEnabled: false
-    });
-}
-
-function saveSettings(data) {
-    writeJSON(FILES.settings, data);
-}
-
-function getAnnouncements() {
-    return readJSON(FILES.announcements, []);
-}
-
-function saveAnnouncements(data) {
-    writeJSON(FILES.announcements, data);
+    return adminEmails.includes(String(email).toLowerCase());
 }
 
 /*
@@ -251,147 +146,31 @@ app.use(express.json({
 
 /*
 ========================================================
- HILFSFUNKTIONEN
+ COOKIE SESSION SYSTEM
 ========================================================
 */
 
-function escapeHTML(value) {
-    return String(value ?? "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
+function createToken() {
+    return crypto.randomBytes(48).toString("hex");
 }
 
-function randomHex(bytes = 24) {
-    return crypto.randomBytes(bytes).toString("hex");
-}
+function setCookie(res, name, value, maxAgeSeconds) {
+    const safeValue = encodeURIComponent(value);
 
-function randomNumber(min, max) {
-    return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function id(prefix) {
-    return prefix + "-" + Date.now().toString(36) + "-" + randomHex(3);
-}
-
-function betaNumber() {
-    return (
-        "BETA-" +
-        randomNumber(1000, 9999) +
-        "-" +
-        randomNumber(1000, 9999)
+    res.setHeader(
+        "Set-Cookie",
+        `${name}=${safeValue}; Max-Age=${maxAgeSeconds}; Path=/; HttpOnly; SameSite=Lax`
     );
 }
 
-function orderNumber() {
-    return (
-        "ORD-" +
-        randomNumber(1000, 9999) +
-        "-" +
-        randomNumber(1000, 9999)
+function clearCookie(res, name) {
+    res.setHeader(
+        "Set-Cookie",
+        `${name}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`
     );
 }
 
-function applicationNumber() {
-    return (
-        "APP-" +
-        randomNumber(1000, 9999) +
-        "-" +
-        randomNumber(1000, 9999)
-    );
-}
-
-function ticketNumber() {
-    return (
-        "TICKET-" +
-        randomNumber(1000, 9999) +
-        "-" +
-        randomNumber(1000, 9999)
-    );
-}
-
-function codeNumber() {
-    return (
-        "NORTH-" +
-        randomNumber(1000, 9999) +
-        "-" +
-        randomNumber(1000, 9999)
-    );
-}
-
-function slugify(text) {
-    return String(text || "")
-        .toLowerCase()
-        .trim()
-        .replace(/[^a-z0-9äöüß]+/gi, "-")
-        .replace(/^-+|-+$/g, "");
-}
-
-/*
-========================================================
- PASSWORT HASH
-========================================================
-*/
-
-function hashPassword(password) {
-    const salt = crypto.randomBytes(16).toString("hex");
-
-    const hash = crypto
-        .pbkdf2Sync(
-            String(password),
-            salt,
-            120000,
-            64,
-            "sha512"
-        )
-        .toString("hex");
-
-    return salt + ":" + hash;
-}
-
-function verifyPassword(password, stored) {
-    try {
-        if (!stored || !stored.includes(":")) {
-            return false;
-        }
-
-        const parts = stored.split(":");
-
-        if (parts.length !== 2) {
-            return false;
-        }
-
-        const salt = parts[0];
-        const originalHash = parts[1];
-
-        const newHash = crypto
-            .pbkdf2Sync(
-                String(password),
-                salt,
-                120000,
-                64,
-                "sha512"
-            )
-            .toString("hex");
-
-        return crypto.timingSafeEqual(
-            Buffer.from(originalHash, "hex"),
-            Buffer.from(newHash, "hex")
-        );
-    } catch {
-        return false;
-    }
-}
-
-/*
-========================================================
- COOKIE
-========================================================
-*/
-
-function parseCookies(req) {
+function getCookies(req) {
     const header = req.headers.cookie || "";
     const cookies = {};
 
@@ -409,4948 +188,94 @@ function parseCookies(req) {
     return cookies;
 }
 
-function setLoginCookie(res, token) {
-    const secure = process.env.NODE_ENV === "production"
-        ? " Secure;"
-        : "";
-
-    res.setHeader(
-        "Set-Cookie",
-        "north_auth=" +
-        encodeURIComponent(token) +
-        "; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax;" +
-        secure
-    );
-}
-
-function clearLoginCookie(res) {
-    res.setHeader(
-        "Set-Cookie",
-        "north_auth=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax"
-    );
-}
-
-/*
-========================================================
- LOGIN
-========================================================
-*/
-
 function getCurrentUser(req) {
-    const cookies = parseCookies(req);
-    const token = cookies.north_auth;
+    const cookies = getCookies(req);
 
-    if (!token) {
+    if (!cookies.north_session) {
         return null;
     }
 
-    const sessions = getSessions();
+    const sessions = readJSON(FILES.sessions, []);
 
     const session = sessions.find(
-        s =>
-            s.token === token &&
-            s.expiresAt > Date.now()
+        s => s.token === cookies.north_session
     );
 
-    if (!session) {
+    if (!session) return null;
+
+    if (session.expiresAt && Date.now() > session.expiresAt) {
+        const remaining = sessions.filter(
+            s => s.token !== cookies.north_session
+        );
+
+        writeJSON(FILES.sessions, remaining);
         return null;
     }
 
-    const users = getUsers();
+    const users = readJSON(FILES.users, []);
 
     const user = users.find(
         u => u.id === session.userId
     );
 
-    if (!user) {
-        return null;
-    }
+    if (!user) return null;
 
-    if (user.bannedUntil && user.bannedUntil > Date.now()) {
-        return {
-            ...user,
-            _banned: true
-        };
+    if (user.banned && user.banUntil) {
+        if (Date.now() < user.banUntil) {
+            return user;
+        }
+
+        user.banned = false;
+        user.banReason = "";
+        user.banUntil = null;
+
+        writeJSON(FILES.users, users);
     }
 
     return user;
 }
 
-function createSession(userId) {
-    const sessions = getSessions();
+function loginUser(res, user) {
+    const sessions = readJSON(FILES.sessions, []);
 
-    const token = randomHex(48);
+    const token = createToken();
 
     sessions.push({
-        id: id("session"),
         token,
-        userId,
-        createdAt: Date.now(),
-        expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000
-    });
-
-    writeJSON(
-        FILES.sessions,
-        sessions.filter(
-            s => s.expiresAt > Date.now()
-        )
-    );
-
-    return token;
-}
-
-function destroySession(req) {
-    const cookies = parseCookies(req);
-
-    if (!cookies.north_auth) {
-        return;
-    }
-
-    const sessions = getSessions().filter(
-        s => s.token !== cookies.north_auth
-    );
-
-    saveSessions(sessions);
-}
-
-/*
-========================================================
- ROLLEN
-========================================================
-*/
-
-const ADMIN_ROLES = [
-    "owner",
-    "admin",
-    "manager"
-];
-
-const TEAM_ROLES = [
-    "owner",
-    "admin",
-    "manager",
-    "developer",
-    "moderator"
-];
-
-function hasRole(user, roles) {
-    if (!user) return false;
-
-    return roles.includes(
-        String(user.role || "").toLowerCase()
-    );
-}
-
-function isAdmin(user) {
-    return hasRole(user, ADMIN_ROLES);
-}
-
-function isTeam(user) {
-    return hasRole(user, TEAM_ROLES);
-}
-
-function requireLogin(req, res, next) {
-    const user = getCurrentUser(req);
-
-    if (!user) {
-        return res.redirect("/login");
-    }
-
-    if (user._banned) {
-        return res.redirect("/banned");
-    }
-
-    req.user = user;
-    next();
-}
-
-function requireAdmin(req, res, next) {
-    const user = getCurrentUser(req);
-
-    if (!user) {
-        return res.redirect("/login");
-    }
-
-    if (!isAdmin(user)) {
-        return res.status(403).send(
-            page(
-                "Kein Zugriff",
-                req,
-                `
-                <div class="card">
-                    <h1>Kein Zugriff</h1>
-                    <p>Du benötigst Administrator-Rechte.</p>
-                    <a class="button" href="/">Zur Startseite</a>
-                </div>
-                `
-            )
-        );
-    }
-
-    req.user = user;
-    next();
-}
-
-function requireTeam(req, res, next) {
-    const user = getCurrentUser(req);
-
-    if (!user) {
-        return res.redirect("/login");
-    }
-
-    if (!isTeam(user)) {
-        return res.status(403).send(
-            page(
-                "Kein Zugriff",
-                req,
-                `
-                <div class="card">
-                    <h1>Kein Zugriff</h1>
-                    <p>Dieser Bereich ist nur für das Team.</p>
-                    <a class="button" href="/">Zurück</a>
-                </div>
-                `
-            )
-        );
-    }
-
-    req.user = user;
-    next();
-}
-
-/*
-========================================================
- LOG
-========================================================
-*/
-
-function addLog(action, user, details = {}) {
-    const logs = getLogs();
-
-    logs.unshift({
-        id: id("log"),
-        action,
-        userId: user ? user.id : null,
-        userName: user ? user.username : "System",
-        details,
-        createdAt: new Date().toISOString()
-    });
-
-    if (logs.length > 5000) {
-        logs.length = 5000;
-    }
-
-    saveLogs(logs);
-}
-
-/*
-========================================================
- USER ERSTELLEN
-========================================================
-*/
-
-function createUser(username, email, password, role = "user") {
-    const users = getUsers();
-
-    const normalizedEmail = String(email)
-        .trim()
-        .toLowerCase();
-
-    if (
-        users.some(
-            u =>
-                String(u.email).toLowerCase() ===
-                normalizedEmail
-        )
-    ) {
-        return null;
-    }
-
-    const newUser = {
-        id: id("user"),
-        username: String(username).trim(),
-        email: normalizedEmail,
-        password: hashPassword(password),
-        role,
-        coins: 0,
-        createdAt: new Date().toISOString(),
-        lastDaily: null,
-        bannedUntil: null,
-        banReason: null,
-        kicked: false,
-        betaNumber: betaNumber()
-    };
-
-    users.push(newUser);
-
-    saveUsers(users);
-
-    return newUser;
-}
-
-/*
-========================================================
- OWNER AUTOMATISCH ANLEGEN
-========================================================
-*/
-
-function ensureOwner() {
-    const users = getUsers();
-
-    let owner = users.find(
-        u =>
-            String(u.email).toLowerCase() ===
-            OWNER_EMAIL.toLowerCase()
-    );
-
-    if (!owner) {
-        owner = {
-            id: id("user"),
-            username: "Florian",
-            email: OWNER_EMAIL,
-            password: hashPassword("278263"),
-            role: "owner",
-            coins: 0,
-            createdAt: new Date().toISOString(),
-            lastDaily: null,
-            bannedUntil: null,
-            banReason: null,
-            kicked: false,
-            betaNumber: betaNumber()
-        };
-
-        users.push(owner);
-        saveUsers(users);
-
-        console.log(
-            "Owner-Konto erstellt:",
-            OWNER_EMAIL
-        );
-    } else {
-        owner.role = "owner";
-        saveUsers(users);
-    }
-}
-
-ensureOwner();
-
-/*
-========================================================
- DESIGN
-========================================================
-*/
-
-function page(title, req, content) {
-    const user = req ? getCurrentUser(req) : null;
-    const settings = getSettings();
-
-    const maintenanceVisible =
-        settings.maintenance &&
-        (!user || !isAdmin(user));
-
-    const outageVisible =
-        settings.outage &&
-        (!user || !isAdmin(user));
-
-    let notices = "";
-
-    if (maintenanceVisible) {
-        notices += `
-        <div class="notice warning">
-            <strong>Wartung</strong>
-            <span>${escapeHTML(settings.maintenanceText)}</span>
-        </div>
-        `;
-    }
-
-    if (outageVisible) {
-        notices += `
-        <div class="notice danger">
-            <strong>Störung</strong>
-            <span>${escapeHTML(settings.outageText)}</span>
-        </div>
-        `;
-    }
-
-    if (settings.announcementEnabled && settings.announcement) {
-        notices += `
-        <div class="notice info">
-            <strong>Ankündigung</strong>
-            <span>${escapeHTML(settings.announcement)}</span>
-        </div>
-        `;
-    }
-
-    return `
-<!DOCTYPE html>
-<html lang="de">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${escapeHTML(title)} | North Bot</title>
-
-<style>
-* {
-    box-sizing: border-box;
-}
-
-html, body {
-    margin: 0;
-    padding: 0;
-    font-family: Arial, Helvetica, sans-serif;
-    background: #0d0f13;
-    color: #e9edf2;
-}
-
-body {
-    min-height: 100vh;
-}
-
-a {
-    color: inherit;
-    text-decoration: none;
-}
-
-.nav {
-    height: 64px;
-    border-bottom: 1px solid #252932;
-    background: #111318;
-    display: flex;
-    align-items: center;
-    padding: 0 28px;
-    gap: 24px;
-    position: sticky;
-    top: 0;
-    z-index: 20;
-}
-
-.logo {
-    font-size: 19px;
-    font-weight: 700;
-    letter-spacing: .3px;
-}
-
-.nav-links {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
-.nav-links a {
-    padding: 8px 11px;
-    border-radius: 7px;
-    color: #aeb6c2;
-    font-size: 14px;
-}
-
-.nav-links a:hover {
-    background: #1b1f27;
-    color: #fff;
-}
-
-.nav-right {
-    margin-left: auto;
-    display: flex;
-    gap: 8px;
-    align-items: center;
-}
-
-.container {
-    width: min(1150px, calc(100% - 32px));
-    margin: 35px auto;
-}
-
-.grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: 16px;
-}
-
-.card {
-    background: #15181e;
-    border: 1px solid #272c35;
-    border-radius: 10px;
-    padding: 20px;
-}
-
-.card h1,
-.card h2,
-.card h3 {
-    margin-top: 0;
-}
-
-.muted {
-    color: #8e98a6;
-}
-
-.button {
-    display: inline-block;
-    border: 0;
-    background: #5865f2;
-    color: white;
-    border-radius: 7px;
-    padding: 10px 15px;
-    cursor: pointer;
-    font-size: 14px;
-}
-
-.button:hover {
-    filter: brightness(1.1);
-}
-
-.button.secondary {
-    background: #252a33;
-}
-
-.button.danger {
-    background: #c43c4b;
-}
-
-.button.success {
-    background: #318a59;
-}
-
-input,
-textarea,
-select {
-    width: 100%;
-    background: #0e1014;
-    border: 1px solid #303641;
-    color: #fff;
-    padding: 11px;
-    border-radius: 7px;
-    margin-top: 6px;
-    margin-bottom: 13px;
-    outline: none;
-}
-
-input:focus,
-textarea:focus,
-select:focus {
-    border-color: #5865f2;
-}
-
-label {
-    font-size: 13px;
-    color: #aeb6c2;
-}
-
-textarea {
-    min-height: 120px;
-    resize: vertical;
-}
-
-.form {
-    max-width: 500px;
-}
-
-.center {
-    text-align: center;
-}
-
-.notice {
-    padding: 13px 16px;
-    border-radius: 8px;
-    margin-bottom: 15px;
-    display: flex;
-    gap: 12px;
-    align-items: center;
-    border: 1px solid #303641;
-}
-
-.notice.warning {
-    background: #27200e;
-    border-color: #695318;
-}
-
-.notice.danger {
-    background: #291316;
-    border-color: #6b2931;
-}
-
-.notice.info {
-    background: #121c2e;
-    border-color: #263f6a;
-}
-
-.stat {
-    font-size: 30px;
-    font-weight: 700;
-    margin: 7px 0;
-}
-
-.small {
-    font-size: 13px;
-}
-
-.table-wrap {
-    overflow-x: auto;
-}
-
-table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-th,
-td {
-    text-align: left;
-    padding: 11px;
-    border-bottom: 1px solid #292e36;
-    vertical-align: top;
-}
-
-th {
-    color: #8e98a6;
-    font-size: 13px;
-}
-
-.badge {
-    display: inline-block;
-    background: #242932;
-    border-radius: 999px;
-    padding: 4px 9px;
-    font-size: 12px;
-}
-
-.badge.owner {
-    background: #5b3510;
-}
-
-.badge.admin {
-    background: #39215e;
-}
-
-.badge.manager {
-    background: #173d54;
-}
-
-.badge.developer {
-    background: #174d3b;
-}
-
-.badge.moderator {
-    background: #49321a;
-}
-
-.chat {
-    max-height: 450px;
-    overflow-y: auto;
-    border: 1px solid #292e36;
-    padding: 12px;
-    border-radius: 8px;
-    background: #0e1014;
-}
-
-.message {
-    padding: 10px;
-    border-bottom: 1px solid #242831;
-}
-
-.message:last-child {
-    border-bottom: 0;
-}
-
-.footer {
-    border-top: 1px solid #252932;
-    margin-top: 50px;
-    padding: 30px;
-    color: #737d8b;
-    text-align: center;
-}
-
-.hero {
-    padding: 50px 0;
-}
-
-.hero h1 {
-    font-size: clamp(32px, 6vw, 56px);
-    margin-bottom: 10px;
-}
-
-.hero p {
-    color: #9da7b5;
-    max-width: 650px;
-    line-height: 1.6;
-}
-
-.actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-top: 15px;
-}
-
-hr {
-    border: 0;
-    border-top: 1px solid #292e36;
-    margin: 22px 0;
-}
-
-.danger-text {
-    color: #f07878;
-}
-
-.success-text {
-    color: #66c994;
-}
-
-@media (max-width: 750px) {
-    .nav {
-        height: auto;
-        padding: 14px;
-        align-items: flex-start;
-        flex-wrap: wrap;
-    }
-
-    .nav-right {
-        margin-left: 0;
-    }
-
-    .container {
-        width: min(100% - 20px, 1150px);
-        margin-top: 20px;
-    }
-}
-</style>
-</head>
-
-<body>
-
-<nav class="nav">
-
-    <a class="logo" href="/">North Bot</a>
-
-    <div class="nav-links">
-        <a href="/">Start</a>
-
-        ${
-            user
-            ? `
-            <a href="/tickets">Tickets</a>
-            <a href="/applications">Bewerbungen</a>
-            <a href="/coins">Coins</a>
-            <a href="/shop">Shop</a>
-            <a href="/giveaways">Gewinnspiele</a>
-            <a href="/chat">Chat</a>
-            <a href="/profile">Profil</a>
-            `
-            : ""
-        }
-
-        ${
-            user && isTeam(user)
-            ? `<a href="/team-chat">Team-Chat</a>`
-            : ""
-        }
-
-        ${
-            user && isAdmin(user)
-            ? `<a href="/admin">Admin</a>`
-            : ""
-        }
-    </div>
-
-    <div class="nav-right">
-        ${
-            user
-            ? `
-                <span class="small muted">
-                    ${escapeHTML(user.username)}
-                </span>
-                <a class="button secondary" href="/logout">
-                    Abmelden
-                </a>
-            `
-            : `
-                <a class="button secondary" href="/login">Login</a>
-                <a class="button" href="/register">Registrieren</a>
-            `
-        }
-    </div>
-
-</nav>
-
-<div class="container">
-
-${notices}
-
-${content}
-
-</div>
-
-<footer class="footer">
-    North Bot V2 ·
-    <a href="${DISCORD_INVITE}" target="_blank">
-        Discord
-    </a>
-</footer>
-
-</body>
-</html>
-`;
-}
-
-/*
-========================================================
- HOME
-========================================================
-*/
-
-app.get("/", (req, res) => {
-    const user = getCurrentUser(req);
-
-    if (user && user._banned) {
-        return res.redirect("/banned");
-    }
-
-    res.send(
-        page(
-            "Start",
-            req,
-            `
-            <section class="hero">
-
-                <h1>North Bot</h1>
-
-                <p>
-                    Webseite für Community, Support,
-                    Bewerbungen, Coins und Teamverwaltung.
-                </p>
-
-                <div class="actions">
-                    ${
-                        user
-                        ? `
-                            <a class="button" href="/tickets">
-                                Support öffnen
-                            </a>
-
-                            <a class="button secondary" href="/profile">
-                                Profil
-                            </a>
-                        `
-                        : `
-                            <a class="button" href="/register">
-                                Konto erstellen
-                            </a>
-
-                            <a class="button secondary" href="/login">
-                                Anmelden
-                            </a>
-                        `
-                    }
-
-                    <a
-                        class="button secondary"
-                        href="${DISCORD_INVITE}"
-                        target="_blank"
-                    >
-                        Discord
-                    </a>
-                </div>
-
-            </section>
-
-            <div class="grid">
-
-                <div class="card">
-                    <h3>Support</h3>
-                    <p class="muted">
-                        Erstelle ein Ticket und verwalte
-                        deine Support-Anfragen.
-                    </p>
-                </div>
-
-                <div class="card">
-                    <h3>Coins</h3>
-                    <p class="muted">
-                        Sammle Coins, löse Codes ein
-                        und kaufe Produkte.
-                    </p>
-                </div>
-
-                <div class="card">
-                    <h3>Bewerbungen</h3>
-                    <p class="muted">
-                        Bewirb dich als Moderator
-                        oder Developer.
-                    </p>
-                </div>
-
-                <div class="card">
-                    <h3>Community</h3>
-                    <p class="muted">
-                        Chat, Gewinnspiele und
-                        weitere Community-Systeme.
-                    </p>
-                </div>
-
-            </div>
-            `
-        )
-    );
-});
-
-/*
-========================================================
- REGISTER
-========================================================
-*/
-
-app.get("/register", (req, res) => {
-    const user = getCurrentUser(req);
-
-    if (user) {
-        return res.redirect("/");
-    }
-
-    res.send(
-        page(
-            "Registrieren",
-            req,
-            `
-            <div class="card form">
-
-                <h1>Registrieren</h1>
-
-                <p class="muted">
-                    Erstelle dein North-Bot-Konto.
-                </p>
-
-                <form method="POST" action="/register">
-
-                    <label>Benutzername</label>
-                    <input
-                        name="username"
-                        required
-                        minlength="2"
-                        maxlength="32"
-                        autocomplete="username"
-                    >
-
-                    <label>E-Mail</label>
-                    <input
-                        type="email"
-                        name="email"
-                        required
-                        autocomplete="email"
-                    >
-
-                    <label>Passwort</label>
-                    <input
-                        type="password"
-                        name="password"
-                        required
-                        minlength="6"
-                        autocomplete="new-password"
-                    >
-
-                    <button class="button" type="submit">
-                        Konto erstellen
-                    </button>
-
-                </form>
-
-                <hr>
-
-                <p class="small muted">
-                    Bereits registriert?
-                    <a href="/login">Jetzt anmelden</a>
-                </p>
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/register", (req, res) => {
-    const username = String(req.body.username || "").trim();
-    const email = String(req.body.email || "").trim().toLowerCase();
-    const password = String(req.body.password || "");
-
-    if (
-        username.length < 2 ||
-        username.length > 32 ||
-        password.length < 6 ||
-        !email.includes("@")
-    ) {
-        return res.status(400).send(
-            page(
-                "Fehler",
-                req,
-                `
-                <div class="card">
-                    <h1>Registrierung fehlgeschlagen</h1>
-                    <p>
-                        Bitte überprüfe deine Angaben.
-                    </p>
-                    <a class="button" href="/register">
-                        Zurück
-                    </a>
-                </div>
-                `
-            )
-        );
-    }
-
-    const users = getUsers();
-
-    if (
-        users.some(
-            u =>
-                String(u.email).toLowerCase() === email
-        )
-    ) {
-        return res.status(409).send(
-            page(
-                "Fehler",
-                req,
-                `
-                <div class="card">
-                    <h1>E-Mail bereits vorhanden</h1>
-                    <a class="button" href="/login">
-                        Zum Login
-                    </a>
-                </div>
-                `
-            )
-        );
-    }
-
-    const newUser = createUser(
-        username,
-        email,
-        password,
-        "user"
-    );
-
-    if (!newUser) {
-        return res.status(500).send("Registrierung fehlgeschlagen.");
-    }
-
-    addLog(
-        "user_register",
-        newUser,
-        {
-            email: newUser.email
-        }
-    );
-
-    const token = createSession(newUser.id);
-
-    setLoginCookie(res, token);
-
-    res.redirect("/");
-});
-
-/*
-========================================================
- LOGIN
-========================================================
-*/
-
-app.get("/login", (req, res) => {
-    const user = getCurrentUser(req);
-
-    if (user && !user._banned) {
-        return res.redirect("/");
-    }
-
-    res.send(
-        page(
-            "Login",
-            req,
-            `
-            <div class="card form">
-
-                <h1>Anmelden</h1>
-
-                <p class="muted">
-                    Du bleibst nach dem Login
-                    30 Tage angemeldet.
-                </p>
-
-                <form method="POST" action="/login">
-
-                    <label>E-Mail</label>
-                    <input
-                        type="email"
-                        name="email"
-                        required
-                        autocomplete="email"
-                    >
-
-                    <label>Passwort</label>
-                    <input
-                        type="password"
-                        name="password"
-                        required
-                        autocomplete="current-password"
-                    >
-
-                    <button class="button" type="submit">
-                        Anmelden
-                    </button>
-
-                </form>
-
-                <hr>
-
-                <p class="small muted">
-                    Noch kein Konto?
-                    <a href="/register">Registrieren</a>
-                </p>
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/login", (req, res) => {
-    const email = String(req.body.email || "")
-        .trim()
-        .toLowerCase();
-
-    const password = String(req.body.password || "");
-
-    const users = getUsers();
-
-    const user = users.find(
-        u =>
-            String(u.email).toLowerCase() === email
-    );
-
-    if (!user || !verifyPassword(password, user.password)) {
-        return res.status(401).send(
-            page(
-                "Login",
-                req,
-                `
-                <div class="card form">
-                    <h1>Login fehlgeschlagen</h1>
-
-                    <p class="danger-text">
-                        E-Mail oder Passwort ist falsch.
-                    </p>
-
-                    <a class="button" href="/login">
-                        Erneut versuchen
-                    </a>
-                </div>
-                `
-            )
-        );
-    }
-
-    if (
-        user.bannedUntil &&
-        user.bannedUntil > Date.now()
-    ) {
-        return res.redirect("/banned");
-    }
-
-    if (
-        user.bannedUntil &&
-        user.bannedUntil <= Date.now()
-    ) {
-        user.bannedUntil = null;
-        user.banReason = null;
-        saveUsers(users);
-    }
-
-    user.kicked = false;
-    saveUsers(users);
-
-    const token = createSession(user.id);
-
-    setLoginCookie(res, token);
-
-    addLog(
-        "login",
-        user
-    );
-
-    res.redirect("/");
-});
-
-/*
-========================================================
- LOGOUT
-========================================================
-*/
-
-app.get("/logout", (req, res) => {
-    const user = getCurrentUser(req);
-
-    if (user) {
-        addLog(
-            "logout",
-            user
-        );
-    }
-
-    destroySession(req);
-    clearLoginCookie(res);
-
-    res.redirect("/login");
-});
-
-/*
-========================================================
- BANNED
-========================================================
-*/
-
-app.get("/banned", (req, res) => {
-    const user = getCurrentUser(req);
-
-    if (!user || !user._banned) {
-        return res.redirect("/");
-    }
-
-    const users = getUsers();
-
-    const realUser = users.find(
-        u => u.id === user.id
-    );
-
-    const until = realUser.bannedUntil
-        ? new Date(realUser.bannedUntil).toLocaleString("de-DE")
-        : "Unbekannt";
-
-    res.send(
-        page(
-            "Gebannt",
-            req,
-            `
-            <div class="card center">
-
-                <h1>Account gesperrt</h1>
-
-                <p>
-                    Dein Zugang zur Webseite wurde
-                    vorübergehend gesperrt.
-                </p>
-
-                <p class="muted">
-                    Grund:
-                    ${escapeHTML(realUser.banReason || "Kein Grund angegeben")}
-                </p>
-
-                <p class="muted">
-                    Ende:
-                    ${escapeHTML(until)}
-                </p>
-
-                <div class="actions" style="justify-content:center">
-
-                    <a
-                        class="button"
-                        href="${DISCORD_INVITE}"
-                        target="_blank"
-                    >
-                        Auf Discord gehen
-                    </a>
-
-                </div>
-
-            </div>
-            `
-        )
-    );
-});
-
-/*
-========================================================
- PROFIL
-========================================================
-*/
-
-app.get("/profile", requireLogin, (req, res) => {
-    const user = req.user;
-
-    res.send(
-        page(
-            "Profil",
-            req,
-            `
-            <div class="grid">
-
-                <div class="card">
-
-                    <h1>Profil</h1>
-
-                    <p>
-                        <strong>Name:</strong>
-                        ${escapeHTML(user.username)}
-                    </p>
-
-                    <p>
-                        <strong>E-Mail:</strong>
-                        ${escapeHTML(user.email)}
-                    </p>
-
-                    <p>
-                        <strong>Rolle:</strong>
-                        <span class="badge ${escapeHTML(user.role)}">
-                            ${escapeHTML(user.role)}
-                        </span>
-                    </p>
-
-                    <p>
-                        <strong>Coins:</strong>
-                        ${Number(user.coins || 0)}
-                    </p>
-
-                    <p>
-                        <strong>Beta-Nummer:</strong>
-                        ${escapeHTML(user.betaNumber || "-")}
-                    </p>
-
-                </div>
-
-                <div class="card form">
-
-                    <h2>Profil bearbeiten</h2>
-
-                    <form method="POST" action="/profile">
-
-                        <label>Benutzername</label>
-
-                        <input
-                            name="username"
-                            value="${escapeHTML(user.username)}"
-                            required
-                            minlength="2"
-                            maxlength="32"
-                        >
-
-                        <label>Neue E-Mail</label>
-
-                        <input
-                            type="email"
-                            name="email"
-                            value="${escapeHTML(user.email)}"
-                            required
-                        >
-
-                        <label>
-                            Neues Passwort
-                            <span class="muted">
-                                (leer lassen = unverändert)
-                            </span>
-                        </label>
-
-                        <input
-                            type="password"
-                            name="password"
-                            minlength="6"
-                        >
-
-                        <button class="button" type="submit">
-                            Speichern
-                        </button>
-
-                    </form>
-
-                </div>
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/profile", requireLogin, (req, res) => {
-    const users = getUsers();
-
-    const user = users.find(
-        u => u.id === req.user.id
-    );
-
-    if (!user) {
-        return res.redirect("/logout");
-    }
-
-    const username = String(
-        req.body.username || user.username
-    ).trim();
-
-    const email = String(
-        req.body.email || user.email
-    ).trim().toLowerCase();
-
-    const password = String(
-        req.body.password || ""
-    );
-
-    if (username.length < 2) {
-        return res.status(400).send("Name zu kurz.");
-    }
-
-    const emailTaken = users.some(
-        u =>
-            u.id !== user.id &&
-            String(u.email).toLowerCase() === email
-    );
-
-    if (emailTaken) {
-        return res.status(409).send(
-            "Diese E-Mail wird bereits verwendet."
-        );
-    }
-
-    user.username = username;
-    user.email = email;
-
-    if (password) {
-        user.password = hashPassword(password);
-    }
-
-    saveUsers(users);
-
-    addLog(
-        "profile_update",
-        user
-    );
-
-    res.redirect("/profile");
-});
-
-/*
-========================================================
- TICKETS
-========================================================
-*/
-
-app.get("/tickets", requireLogin, (req, res) => {
-    const tickets = getTickets();
-
-    const ownTickets = tickets
-        .filter(
-            t =>
-                t.userId === req.user.id ||
-                isAdmin(req.user) ||
-                isTeam(req.user)
-        )
-        .sort(
-            (a, b) =>
-                new Date(b.createdAt) -
-                new Date(a.createdAt)
-        );
-
-    res.send(
-        page(
-            "Tickets",
-            req,
-            `
-            <div class="card">
-
-                <h1>Support</h1>
-
-                <p class="muted">
-                    Erstelle ein Support-Ticket.
-                </p>
-
-                <form method="POST" action="/tickets/create">
-
-                    <label>Betreff</label>
-
-                    <input
-                        name="subject"
-                        maxlength="100"
-                        required
-                    >
-
-                    <label>Nachricht</label>
-
-                    <textarea
-                        name="message"
-                        maxlength="5000"
-                        required
-                    ></textarea>
-
-                    <button class="button" type="submit">
-                        Ticket erstellen
-                    </button>
-
-                </form>
-
-            </div>
-
-            <br>
-
-            <div class="card">
-
-                <h2>Meine Tickets</h2>
-
-                ${
-                    ownTickets.length === 0
-                    ? `
-                        <p class="muted">
-                            Noch keine Tickets.
-                        </p>
-                    `
-                    : `
-                        <div class="table-wrap">
-
-                        <table>
-
-                            <tr>
-                                <th>Nummer</th>
-                                <th>Betreff</th>
-                                <th>Status</th>
-                                <th>Erstellt</th>
-                                <th></th>
-                            </tr>
-
-                            ${ownTickets.map(t => `
-                                <tr>
-
-                                    <td>
-                                        ${escapeHTML(t.number)}
-                                    </td>
-
-                                    <td>
-                                        ${escapeHTML(t.subject)}
-                                    </td>
-
-                                    <td>
-                                        <span class="badge">
-                                            ${escapeHTML(t.status)}
-                                        </span>
-                                    </td>
-
-                                    <td>
-                                        ${new Date(t.createdAt).toLocaleString("de-DE")}
-                                    </td>
-
-                                    <td>
-                                        <a
-                                            class="button secondary"
-                                            href="/tickets/${encodeURIComponent(t.id)}"
-                                        >
-                                            Öffnen
-                                        </a>
-                                    </td>
-
-                                </tr>
-                            `).join("")}
-
-                        </table>
-
-                        </div>
-                    `
-                }
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/tickets/create", requireLogin, (req, res) => {
-    const subject = String(
-        req.body.subject || ""
-    ).trim();
-
-    const message = String(
-        req.body.message || ""
-    ).trim();
-
-    if (!subject || !message) {
-        return res.status(400).send(
-            "Betreff und Nachricht fehlen."
-        );
-    }
-
-    const ticket = {
-        id: id("ticket"),
-        number: ticketNumber(),
-        userId: req.user.id,
-        username: req.user.username,
-        subject,
-        message,
-        status: "offen",
-        claimedBy: null,
-        claimedByName: null,
-        createdAt: new Date().toISOString(),
-        closedAt: null,
-        messages: [
-            {
-                id: id("message"),
-                userId: req.user.id,
-                username: req.user.username,
-                message,
-                createdAt: new Date().toISOString()
-            }
-        ]
-    };
-
-    const tickets = getTickets();
-
-    tickets.push(ticket);
-
-    saveTickets(tickets);
-
-    addLog(
-        "ticket_create",
-        req.user,
-        {
-            ticket: ticket.number
-        }
-    );
-
-    /*
-      Der Bot kann tickets.json überwachen und daraus
-      den Discord-Ticketkanal erstellen.
-    */
-
-    res.redirect(
-        "/tickets/" +
-        encodeURIComponent(ticket.id)
-    );
-});
-
-app.get("/tickets/:id", requireLogin, (req, res) => {
-    const tickets = getTickets();
-
-    const ticket = tickets.find(
-        t => t.id === req.params.id
-    );
-
-    if (!ticket) {
-        return res.status(404).send("Ticket nicht gefunden.");
-    }
-
-    const allowed =
-        ticket.userId === req.user.id ||
-        isTeam(req.user);
-
-    if (!allowed) {
-        return res.status(403).send("Kein Zugriff.");
-    }
-
-    res.send(
-        page(
-            ticket.number,
-            req,
-            `
-            <div class="card">
-
-                <h1>
-                    ${escapeHTML(ticket.subject)}
-                </h1>
-
-                <p class="muted">
-                    ${escapeHTML(ticket.number)}
-                </p>
-
-                <p>
-                    Status:
-                    <span class="badge">
-                        ${escapeHTML(ticket.status)}
-                    </span>
-                </p>
-
-                ${
-                    ticket.claimedByName
-                    ? `
-                        <p class="small">
-                            Übernommen von:
-                            <strong>
-                                ${escapeHTML(ticket.claimedByName)}
-                            </strong>
-                        </p>
-                    `
-                    : ""
-                }
-
-                <div class="chat">
-
-                    ${ticket.messages.map(m => `
-                        <div class="message">
-
-                            <strong>
-                                ${escapeHTML(m.username)}
-                            </strong>
-
-                            <span class="muted small">
-                                ${new Date(m.createdAt).toLocaleString("de-DE")}
-                            </span>
-
-                            <div>
-                                ${escapeHTML(m.message)}
-                            </div>
-
-                        </div>
-                    `).join("")}
-
-                </div>
-
-                ${
-                    ticket.status !== "geschlossen"
-                    ? `
-                    <form method="POST" action="/tickets/${encodeURIComponent(ticket.id)}/message">
-
-                        <label>Antwort</label>
-
-                        <textarea
-                            name="message"
-                            required
-                            maxlength="5000"
-                        ></textarea>
-
-                        <button class="button" type="submit">
-                            Senden
-                        </button>
-
-                    </form>
-                    `
-                    : `
-                    <p class="muted">
-                        Dieses Ticket ist geschlossen.
-                    </p>
-                    `
-                }
-
-                ${
-                    isTeam(req.user) &&
-                    ticket.status !== "geschlossen"
-                    ? `
-                    <hr>
-
-                    <div class="actions">
-
-                        ${
-                            ticket.claimedBy
-                            ? `
-                                <form
-                                    method="POST"
-                                    action="/tickets/${encodeURIComponent(ticket.id)}/unclaim"
-                                >
-                                    <button class="button secondary">
-                                        Nicht übernehmen
-                                    </button>
-                                </form>
-                            `
-                            : `
-                                <form
-                                    method="POST"
-                                    action="/tickets/${encodeURIComponent(ticket.id)}/claim"
-                                >
-                                    <button class="button">
-                                        Übernehmen
-                                    </button>
-                                </form>
-                            `
-                        }
-
-                        <form
-                            method="POST"
-                            action="/tickets/${encodeURIComponent(ticket.id)}/close"
-                        >
-                            <button class="button danger">
-                                Schließen
-                            </button>
-                        </form>
-
-                    </div>
-                    `
-                    : ""
-                }
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/tickets/:id/message", requireLogin, (req, res) => {
-    const tickets = getTickets();
-
-    const ticket = tickets.find(
-        t => t.id === req.params.id
-    );
-
-    if (!ticket) {
-        return res.status(404).send("Nicht gefunden.");
-    }
-
-    if (
-        ticket.userId !== req.user.id &&
-        !isTeam(req.user)
-    ) {
-        return res.status(403).send("Kein Zugriff.");
-    }
-
-    if (ticket.status === "geschlossen") {
-        return res.status(400).send("Ticket geschlossen.");
-    }
-
-    const message = String(
-        req.body.message || ""
-    ).trim();
-
-    if (!message) {
-        return res.redirect(
-            "/tickets/" +
-            encodeURIComponent(ticket.id)
-        );
-    }
-
-    ticket.messages.push({
-        id: id("message"),
-        userId: req.user.id,
-        username: req.user.username,
-        message,
-        createdAt: new Date().toISOString()
-    });
-
-    saveTickets(tickets);
-
-    addLog(
-        "ticket_message",
-        req.user,
-        {
-            ticket: ticket.number
-        }
-    );
-
-    res.redirect(
-        "/tickets/" +
-        encodeURIComponent(ticket.id)
-    );
-});
-
-app.post("/tickets/:id/claim", requireTeam, (req, res) => {
-    const tickets = getTickets();
-
-    const ticket = tickets.find(
-        t => t.id === req.params.id
-    );
-
-    if (!ticket) {
-        return res.status(404).send("Nicht gefunden.");
-    }
-
-    ticket.claimedBy = req.user.id;
-    ticket.claimedByName = req.user.username;
-
-    saveTickets(tickets);
-
-    addLog(
-        "ticket_claim",
-        req.user,
-        {
-            ticket: ticket.number
-        }
-    );
-
-    res.redirect(
-        "/tickets/" +
-        encodeURIComponent(ticket.id)
-    );
-});
-
-app.post("/tickets/:id/unclaim", requireTeam, (req, res) => {
-    const tickets = getTickets();
-
-    const ticket = tickets.find(
-        t => t.id === req.params.id
-    );
-
-    if (!ticket) {
-        return res.status(404).send("Nicht gefunden.");
-    }
-
-    ticket.claimedBy = null;
-    ticket.claimedByName = null;
-
-    saveTickets(tickets);
-
-    addLog(
-        "ticket_unclaim",
-        req.user,
-        {
-            ticket: ticket.number
-        }
-    );
-
-    res.redirect(
-        "/tickets/" +
-        encodeURIComponent(ticket.id)
-    );
-});
-
-app.post("/tickets/:id/close", requireTeam, (req, res) => {
-    const tickets = getTickets();
-
-    const ticket = tickets.find(
-        t => t.id === req.params.id
-    );
-
-    if (!ticket) {
-        return res.status(404).send("Nicht gefunden.");
-    }
-
-    ticket.status = "geschlossen";
-    ticket.closedAt = new Date().toISOString();
-
-    saveTickets(tickets);
-
-    addLog(
-        "ticket_close",
-        req.user,
-        {
-            ticket: ticket.number
-        }
-    );
-
-    res.redirect(
-        "/tickets/" +
-        encodeURIComponent(ticket.id)
-    );
-});
-
-/*
-========================================================
- BEWERBUNGEN
-========================================================
-*/
-
-app.get("/applications", requireLogin, (req, res) => {
-    const applications = getApplications();
-
-    const own = applications.filter(
-        a => a.userId === req.user.id
-    );
-
-    res.send(
-        page(
-            "Bewerbungen",
-            req,
-            `
-            <div class="grid">
-
-                <div class="card form">
-
-                    <h1>Bewerbung</h1>
-
-                    <form method="POST" action="/applications">
-
-                        <label>Bereich</label>
-
-                        <select name="type" required>
-
-                            <option value="moderator">
-                                Moderator
-                            </option>
-
-                            <option value="developer">
-                                Developer
-                            </option>
-
-                        </select>
-
-                        <label>Discord-Name / ID</label>
-
-                        <input
-                            name="discord"
-                            required
-                            maxlength="100"
-                        >
-
-                        <label>Alter</label>
-
-                        <input
-                            name="age"
-                            type="number"
-                            min="1"
-                            max="100"
-                            required
-                        >
-
-                        <label>Erfahrung</label>
-
-                        <textarea
-                            name="experience"
-                            required
-                        ></textarea>
-
-                        <label>Warum möchtest du ins Team?</label>
-
-                        <textarea
-                            name="motivation"
-                            required
-                        ></textarea>
-
-                        <label>Warum sollten wir dich nehmen?</label>
-
-                        <textarea
-                            name="reason"
-                            required
-                        ></textarea>
-
-                        <button class="button" type="submit">
-                            Bewerbung absenden
-                        </button>
-
-                    </form>
-
-                </div>
-
-                <div class="card">
-
-                    <h2>Meine Bewerbungen</h2>
-
-                    ${
-                        own.length === 0
-                        ? `
-                            <p class="muted">
-                                Noch keine Bewerbung.
-                            </p>
-                        `
-                        : own.map(a => `
-                            <div class="card">
-
-                                <strong>
-                                    ${escapeHTML(a.number)}
-                                </strong>
-
-                                <p>
-                                    ${escapeHTML(a.type)}
-                                </p>
-
-                                <span class="badge">
-                                    ${escapeHTML(a.status)}
-                                </span>
-
-                            </div>
-                        `).join("")
-                    }
-
-                </div>
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/applications", requireLogin, (req, res) => {
-    const type = String(
-        req.body.type || ""
-    ).trim().toLowerCase();
-
-    if (
-        type !== "moderator" &&
-        type !== "developer"
-    ) {
-        return res.status(400).send("Ungültiger Bereich.");
-    }
-
-    const application = {
-        id: id("application"),
-        number: applicationNumber(),
-        userId: req.user.id,
-        username: req.user.username,
-        type,
-        discord: String(req.body.discord || "").trim(),
-        age: String(req.body.age || "").trim(),
-        experience: String(req.body.experience || "").trim(),
-        motivation: String(req.body.motivation || "").trim(),
-        reason: String(req.body.reason || "").trim(),
-        status: "offen",
-        createdAt: new Date().toISOString(),
-        reviewedBy: null,
-        reviewedAt: null,
-        reviewReason: null
-    };
-
-    const applications = getApplications();
-
-    applications.push(application);
-
-    saveApplications(applications);
-
-    addLog(
-        "application_create",
-        req.user,
-        {
-            application: application.number,
-            type
-        }
-    );
-
-    res.redirect("/applications");
-});
-
-/*
-========================================================
- COINS
-========================================================
-*/
-
-app.get("/coins", requireLogin, (req, res) => {
-    const user = req.user;
-
-    const canDaily =
-        !user.lastDaily ||
-        Date.now() - new Date(user.lastDaily).getTime()
-        >= 14 * 60 * 60 * 1000;
-
-    res.send(
-        page(
-            "Coins",
-            req,
-            `
-            <div class="grid">
-
-                <div class="card">
-
-                    <h1>Coins</h1>
-
-                    <div class="stat">
-                        ${Number(user.coins || 0)}
-                    </div>
-
-                    <p class="muted">
-                        Dein aktueller Kontostand.
-                    </p>
-
-                </div>
-
-                <div class="card">
-
-                    <h2>Daily</h2>
-
-                    <p>
-                        Alle 14 Stunden bekommst du
-                        <strong>100 Coins</strong>.
-                    </p>
-
-                    ${
-                        canDaily
-                        ? `
-                            <form method="POST" action="/coins/daily">
-
-                                <button class="button" type="submit">
-                                    100 Coins abholen
-                                </button>
-
-                            </form>
-                        `
-                        : `
-                            <p class="muted">
-                                Daily bereits abgeholt.
-                            </p>
-                        `
-                    }
-
-                </div>
-
-                <div class="card">
-
-                    <h2>Code einlösen</h2>
-
-                    <form method="POST" action="/coins/redeem">
-
-                        <input
-                            name="code"
-                            placeholder="NORTH-1234-5678"
-                            required
-                        >
-
-                        <button class="button" type="submit">
-                            Einlösen
-                        </button>
-
-                    </form>
-
-                </div>
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/coins/daily", requireLogin, (req, res) => {
-    const users = getUsers();
-
-    const user = users.find(
-        u => u.id === req.user.id
-    );
-
-    if (!user) {
-        return res.redirect("/login");
-    }
-
-    if (
-        user.lastDaily &&
-        Date.now() -
-        new Date(user.lastDaily).getTime()
-        < 14 * 60 * 60 * 1000
-    ) {
-        return res.redirect("/coins");
-    }
-
-    user.coins = Number(user.coins || 0) + 100;
-    user.lastDaily = new Date().toISOString();
-
-    saveUsers(users);
-
-    addLog(
-        "daily_coins",
-        user,
-        {
-            amount: 100
-        }
-    );
-
-    res.redirect("/coins");
-});
-
-app.post("/coins/redeem", requireLogin, (req, res) => {
-    const entered = String(
-        req.body.code || ""
-    ).trim().toUpperCase();
-
-    const codes = getCodes();
-
-    const code = codes.find(
-        c =>
-            String(c.code).toUpperCase() === entered &&
-            c.active !== false
-    );
-
-    if (!code) {
-        return res.status(400).send(
-            page(
-                "Code",
-                req,
-                `
-                <div class="card">
-                    <h1>Code ungültig</h1>
-                    <p>
-                        Dieser Code existiert nicht
-                        oder ist deaktiviert.
-                    </p>
-                    <a class="button" href="/coins">
-                        Zurück
-                    </a>
-                </div>
-                `
-            )
-        );
-    }
-
-    if (
-        code.expiresAt &&
-        new Date(code.expiresAt).getTime() < Date.now()
-    ) {
-        return res.status(400).send(
-            "Dieser Code ist abgelaufen."
-        );
-    }
-
-    if (!Array.isArray(code.usedBy)) {
-        code.usedBy = [];
-    }
-
-    if (code.usedBy.includes(req.user.id)) {
-        return res.status(400).send(
-            "Du hast diesen Code bereits verwendet."
-        );
-    }
-
-    if (
-        code.maxUses &&
-        code.usedBy.length >= Number(code.maxUses)
-    ) {
-        return res.status(400).send(
-            "Dieser Code wurde bereits zu oft verwendet."
-        );
-    }
-
-    const users = getUsers();
-
-    const user = users.find(
-        u => u.id === req.user.id
-    );
-
-    if (!user) {
-        return res.redirect("/login");
-    }
-
-    const amount = Number(code.coins || 0);
-
-    user.coins = Number(user.coins || 0) + amount;
-
-    code.usedBy.push(user.id);
-
-    saveUsers(users);
-    saveCodes(codes);
-
-    addLog(
-        "code_redeem",
-        user,
-        {
-            code: code.code,
-            coins: amount
-        }
-    );
-
-    res.redirect("/coins");
-});
-
-/*
-========================================================
- SHOP
-========================================================
-*/
-
-app.get("/shop", requireLogin, (req, res) => {
-    const products = getShop()
-        .filter(p => p.active !== false);
-
-    res.send(
-        page(
-            "Shop",
-            req,
-            `
-            <div class="card">
-
-                <h1>Coins-Shop</h1>
-
-                <p class="muted">
-                    Coins: ${Number(req.user.coins || 0)}
-                </p>
-
-            </div>
-
-            <br>
-
-            <div class="grid">
-
-                ${
-                    products.length === 0
-                    ? `
-                        <div class="card">
-                            <p class="muted">
-                                Noch keine Produkte.
-                            </p>
-                        </div>
-                    `
-                    : products.map(p => `
-                        <div class="card">
-
-                            <h2>
-                                ${escapeHTML(p.name)}
-                            </h2>
-
-                            <p class="muted">
-                                ${escapeHTML(p.description || "")}
-                            </p>
-
-                            <strong>
-                                ${Number(p.price)} Coins
-                            </strong>
-
-                            <div class="actions">
-
-                                <form
-                                    method="POST"
-                                    action="/shop/buy"
-                                >
-
-                                    <input
-                                        type="hidden"
-                                        name="productId"
-                                        value="${escapeHTML(p.id)}"
-                                    >
-
-                                    <button
-                                        class="button"
-                                        type="submit"
-                                    >
-                                        Kaufen
-                                    </button>
-
-                                </form>
-
-                            </div>
-
-                        </div>
-                    `).join("")
-                }
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/shop/buy", requireLogin, (req, res) => {
-    const products = getShop();
-
-    const product = products.find(
-        p =>
-            p.id === req.body.productId &&
-            p.active !== false
-    );
-
-    if (!product) {
-        return res.status(404).send(
-            "Produkt nicht gefunden."
-        );
-    }
-
-    const users = getUsers();
-
-    const user = users.find(
-        u => u.id === req.user.id
-    );
-
-    if (!user) {
-        return res.redirect("/login");
-    }
-
-    const price = Number(product.price || 0);
-
-    if (Number(user.coins || 0) < price) {
-        return res.status(400).send(
-            page(
-                "Shop",
-                req,
-                `
-                <div class="card">
-                    <h1>Nicht genug Coins</h1>
-                    <p>
-                        Du benötigst ${price} Coins.
-                    </p>
-                    <a class="button" href="/shop">
-                        Zurück zum Shop
-                    </a>
-                </div>
-                `
-            )
-        );
-    }
-
-    user.coins -= price;
-
-    const order = {
-        id: id("order"),
-        number: orderNumber(),
         userId: user.id,
-        username: user.username,
-        productId: product.id,
-        productName: product.name,
-        price,
-        status: "offen",
-        createdAt: new Date().toISOString()
-    };
-
-    const orders = getOrders();
-
-    orders.push(order);
-
-    saveUsers(users);
-    saveOrders(orders);
-
-    addLog(
-        "shop_purchase",
-        user,
-        {
-            order: order.number,
-            product: product.name,
-            price
-        }
-    );
-
-    res.send(
-        page(
-            "Bestellung",
-            req,
-            `
-            <div class="card center">
-
-                <h1>Bestellung erstellt</h1>
-
-                <p>
-                    Deine Bestellung wurde gespeichert.
-                </p>
-
-                <p>
-                    Bestellnummer:
-                </p>
-
-                <h2>
-                    ${escapeHTML(order.number)}
-                </h2>
-
-                <p class="muted">
-                    Diese Nummer kannst du dem Team
-                    auf Discord geben.
-                </p>
-
-                <a
-                    class="button"
-                    href="${DISCORD_INVITE}"
-                    target="_blank"
-                >
-                    Discord öffnen
-                </a>
-
-            </div>
-            `
-        )
-    );
-});
-
-/*
-========================================================
- GEWINNSPIELE
-========================================================
-*/
-
-app.get("/giveaways", requireLogin, (req, res) => {
-    const giveaways = getGiveaways()
-        .filter(g => g.active !== false);
-
-    res.send(
-        page(
-            "Gewinnspiele",
-            req,
-            `
-            <div class="card">
-
-                <h1>Gewinnspiele</h1>
-
-                <p class="muted">
-                    Nimm an laufenden Gewinnspielen teil.
-                </p>
-
-            </div>
-
-            <br>
-
-            <div class="grid">
-
-                ${
-                    giveaways.length === 0
-                    ? `
-                        <div class="card">
-                            <p class="muted">
-                                Momentan läuft kein Gewinnspiel.
-                            </p>
-                        </div>
-                    `
-                    : giveaways.map(g => {
-
-                        const joined =
-                            Array.isArray(g.participants) &&
-                            g.participants.includes(req.user.id);
-
-                        return `
-                        <div class="card">
-
-                            <h2>
-                                ${escapeHTML(g.title)}
-                            </h2>
-
-                            <p>
-                                ${escapeHTML(g.description || "")}
-                            </p>
-
-                            <p>
-                                Preis:
-                                <strong>
-                                    ${escapeHTML(g.prize || "-")}
-                                </strong>
-                            </p>
-
-                            ${
-                                joined
-                                ? `
-                                    <span class="badge">
-                                        Teilnahme gespeichert
-                                    </span>
-                                `
-                                : `
-                                    <form
-                                        method="POST"
-                                        action="/giveaways/join"
-                                    >
-
-                                        <input
-                                            type="hidden"
-                                            name="id"
-                                            value="${escapeHTML(g.id)}"
-                                        >
-
-                                        <button
-                                            class="button"
-                                            type="submit"
-                                        >
-                                            Teilnehmen
-                                        </button>
-
-                                    </form>
-                                `
-                            }
-
-                        </div>
-                        `;
-                    }).join("")
-                }
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/giveaways/join", requireLogin, (req, res) => {
-    const giveaways = getGiveaways();
-
-    const giveaway = giveaways.find(
-        g =>
-            g.id === req.body.id &&
-            g.active !== false
-    );
-
-    if (!giveaway) {
-        return res.status(404).send(
-            "Gewinnspiel nicht gefunden."
-        );
-    }
-
-    if (!Array.isArray(giveaway.participants)) {
-        giveaway.participants = [];
-    }
-
-    if (!giveaway.participants.includes(req.user.id)) {
-        giveaway.participants.push(req.user.id);
-        saveGiveaways(giveaways);
-
-        addLog(
-            "giveaway_join",
-            req.user,
-            {
-                giveaway: giveaway.title
-            }
-        );
-    }
-
-    res.redirect("/giveaways");
-});
-
-/*
-========================================================
- USER CHAT
-========================================================
-*/
-
-app.get("/chat", requireLogin, (req, res) => {
-    const chats = getChats()
-        .filter(c => c.type === "public")
-        .slice(-100);
-
-    res.send(
-        page(
-            "Chat",
-            req,
-            `
-            <div class="card">
-
-                <h1>Community Chat</h1>
-
-                <div class="chat">
-
-                    ${
-                        chats.length === 0
-                        ? `
-                            <p class="muted">
-                                Noch keine Nachrichten.
-                            </p>
-                        `
-                        : chats.map(m => `
-                            <div class="message">
-
-                                <strong>
-                                    ${escapeHTML(m.username)}
-                                </strong>
-
-                                <span class="muted small">
-                                    ${new Date(m.createdAt).toLocaleString("de-DE")}
-                                </span>
-
-                                <div>
-                                    ${escapeHTML(m.message)}
-                                </div>
-
-                            </div>
-                        `).join("")
-                    }
-
-                </div>
-
-                <br>
-
-                <form method="POST" action="/chat">
-
-                    <textarea
-                        name="message"
-                        required
-                        maxlength="1000"
-                        placeholder="Nachricht schreiben..."
-                    ></textarea>
-
-                    <button class="button">
-                        Senden
-                    </button>
-
-                </form>
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/chat", requireLogin, (req, res) => {
-    const message = String(
-        req.body.message || ""
-    ).trim();
-
-    if (!message) {
-        return res.redirect("/chat");
-    }
-
-    const chats = getChats();
-
-    chats.push({
-        id: id("chat"),
-        type: "public",
-        userId: req.user.id,
-        username: req.user.username,
-        message,
-        createdAt: new Date().toISOString()
+        createdAt: Date.now(),
+        expiresAt: Date.now() + (1000 * 60 * 60 * 24 * 30)
     });
 
-    if (chats.length > 5000) {
-        chats.splice(0, chats.length - 5000);
-    }
+    writeJSON(FILES.sessions, sessions);
 
-    saveChats(chats);
-
-    addLog(
-        "public_chat",
-        req.user
+    setCookie(
+        res,
+        "north_session",
+        token,
+        60 * 60 * 24 * 30
     );
+}
 
-    res.redirect("/chat");
-});
+function logoutUser(req, res) {
+    const cookies = getCookies(req);
 
-/*
-========================================================
- TEAM CHAT
-========================================================
-*/
+    if (cookies.north_session) {
+        const sessions = readJSON(FILES.sessions, []);
 
-app.get("/team-chat", requireTeam, (req, res) => {
-    const chats = getChats()
-        .filter(c => c.type === "team")
-        .slice(-100);
-
-    res.send(
-        page(
-            "Team Chat",
-            req,
-            `
-            <div class="card">
-
-                <h1>Team-Chat</h1>
-
-                <p class="muted">
-                    Nur Owner, Admin, Manager,
-                    Developer und Moderator.
-                </p>
-
-                <div class="chat">
-
-                    ${
-                        chats.length === 0
-                        ? `
-                            <p class="muted">
-                                Noch keine Nachrichten.
-                            </p>
-                        `
-                        : chats.map(m => `
-                            <div class="message">
-
-                                <strong>
-                                    ${escapeHTML(m.username)}
-                                </strong>
-
-                                <span class="badge">
-                                    ${escapeHTML(m.role || "")}
-                                </span>
-
-                                <span class="muted small">
-                                    ${new Date(m.createdAt).toLocaleString("de-DE")}
-                                </span>
-
-                                <div>
-                                    ${escapeHTML(m.message)}
-                                </div>
-
-                            </div>
-                        `).join("")
-                    }
-
-                </div>
-
-                <br>
-
-                <form method="POST" action="/team-chat">
-
-                    <textarea
-                        name="message"
-                        required
-                        maxlength="2000"
-                    ></textarea>
-
-                    <button class="button">
-                        Senden
-                    </button>
-
-                </form>
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/team-chat", requireTeam, (req, res) => {
-    const message = String(
-        req.body.message || ""
-    ).trim();
-
-    if (!message) {
-        return res.redirect("/team-chat");
-    }
-
-    const chats = getChats();
-
-    chats.push({
-        id: id("teamchat"),
-        type: "team",
-        userId: req.user.id,
-        username: req.user.username,
-        role: req.user.role,
-        message,
-        createdAt: new Date().toISOString()
-    });
-
-    if (chats.length > 5000) {
-        chats.splice(0, chats.length - 5000);
-    }
-
-    saveChats(chats);
-
-    addLog(
-        "team_chat",
-        req.user
-    );
-
-    res.redirect("/team-chat");
-});
-
-/*
-========================================================
- ADMIN DASHBOARD
-========================================================
-*/
-
-app.get("/admin", requireAdmin, (req, res) => {
-    const users = getUsers();
-    const tickets = getTickets();
-    const applications = getApplications();
-    const codes = getCodes();
-    const products = getShop();
-    const giveaways = getGiveaways();
-    const logs = getLogs();
-    const orders = getOrders();
-
-    res.send(
-        page(
-            "Admin Panel",
-            req,
-            `
-            <div class="card">
-
-                <h1>Admin Panel</h1>
-
-                <p class="muted">
-                    Willkommen,
-                    ${escapeHTML(req.user.username)}.
-                </p>
-
-            </div>
-
-            <br>
-
-            <div class="grid">
-
-                <div class="card">
-                    <h3>Benutzer</h3>
-                    <div class="stat">${users.length}</div>
-                </div>
-
-                <div class="card">
-                    <h3>Tickets</h3>
-                    <div class="stat">${tickets.length}</div>
-                </div>
-
-                <div class="card">
-                    <h3>Bewerbungen</h3>
-                    <div class="stat">${applications.length}</div>
-                </div>
-
-                <div class="card">
-                    <h3>Codes</h3>
-                    <div class="stat">${codes.length}</div>
-                </div>
-
-                <div class="card">
-                    <h3>Produkte</h3>
-                    <div class="stat">${products.length}</div>
-                </div>
-
-                <div class="card">
-                    <h3>Gewinnspiele</h3>
-                    <div class="stat">${giveaways.length}</div>
-                </div>
-
-                <div class="card">
-                    <h3>Bestellungen</h3>
-                    <div class="stat">${orders.length}</div>
-                </div>
-
-                <div class="card">
-                    <h3>Logs</h3>
-                    <div class="stat">${logs.length}</div>
-                </div>
-
-            </div>
-
-            <br>
-
-            <div class="grid">
-
-                <div class="card">
-                    <h2>Verwaltung</h2>
-
-                    <div class="actions">
-                        <a class="button" href="/admin/users">
-                            Benutzer
-                        </a>
-
-                        <a class="button" href="/admin/applications">
-                            Bewerbungen
-                        </a>
-
-                        <a class="button" href="/admin/tickets">
-                            Tickets
-                        </a>
-
-                        <a class="button" href="/admin/codes">
-                            Codes
-                        </a>
-
-                        <a class="button" href="/admin/shop">
-                            Shop
-                        </a>
-
-                        <a class="button" href="/admin/giveaways">
-                            Gewinnspiele
-                        </a>
-
-                        <a class="button" href="/admin/orders">
-                            Bestellungen
-                        </a>
-
-                        <a class="button" href="/admin/logs">
-                            Logs
-                        </a>
-
-                        <a class="button" href="/admin/settings">
-                            Webseite
-                        </a>
-                    </div>
-
-                </div>
-
-                <div class="card">
-
-                    <h2>Systemstatus</h2>
-
-                    <p>
-                        Wartung:
-                        ${
-                            getSettings().maintenance
-                            ? `<span class="badge">AN</span>`
-                            : `<span class="badge">AUS</span>`
-                        }
-                    </p>
-
-                    <p>
-                        Störung:
-                        ${
-                            getSettings().outage
-                            ? `<span class="badge">AN</span>`
-                            : `<span class="badge">AUS</span>`
-                        }
-                    </p>
-
-                </div>
-
-            </div>
-            `
-        )
-    );
-});
-
-/*
-========================================================
- ADMIN USERS
-========================================================
-*/
-
-app.get("/admin/users", requireAdmin, (req, res) => {
-    const users = getUsers();
-
-    res.send(
-        page(
-            "Benutzer",
-            req,
-            `
-            <div class="card">
-
-                <h1>Benutzerverwaltung</h1>
-
-                <div class="table-wrap">
-
-                <table>
-
-                    <tr>
-                        <th>Name</th>
-                        <th>E-Mail</th>
-                        <th>Rolle</th>
-                        <th>Coins</th>
-                        <th>Ban</th>
-                        <th>Aktionen</th>
-                    </tr>
-
-                    ${users.map(u => `
-                        <tr>
-
-                            <td>
-                                ${escapeHTML(u.username)}
-                            </td>
-
-                            <td>
-                                ${escapeHTML(u.email)}
-                            </td>
-
-                            <td>
-                                <span class="badge ${escapeHTML(u.role)}">
-                                    ${escapeHTML(u.role)}
-                                </span>
-                            </td>
-
-                            <td>
-                                ${Number(u.coins || 0)}
-                            </td>
-
-                            <td>
-                                ${
-                                    u.bannedUntil &&
-                                    u.bannedUntil > Date.now()
-                                    ? `
-                                        bis
-                                        ${new Date(u.bannedUntil).toLocaleString("de-DE")}
-                                    `
-                                    : "Nein"
-                                }
-                            </td>
-
-                            <td>
-
-                                <form
-                                    method="POST"
-                                    action="/admin/user/role"
-                                    style="margin-bottom:7px"
-                                >
-
-                                    <input
-                                        type="hidden"
-                                        name="id"
-                                        value="${escapeHTML(u.id)}"
-                                    >
-
-                                    <select name="role">
-
-                                        <option value="user" ${u.role === "user" ? "selected" : ""}>
-                                            user
-                                        </option>
-
-                                        <option value="moderator" ${u.role === "moderator" ? "selected" : ""}>
-                                            moderator
-                                        </option>
-
-                                        <option value="developer" ${u.role === "developer" ? "selected" : ""}>
-                                            developer
-                                        </option>
-
-                                        <option value="manager" ${u.role === "manager" ? "selected" : ""}>
-                                            manager
-                                        </option>
-
-                                        <option value="admin" ${u.role === "admin" ? "selected" : ""}>
-                                            admin
-                                        </option>
-
-                                        <option value="owner" ${u.role === "owner" ? "selected" : ""}>
-                                            owner
-                                        </option>
-
-                                    </select>
-
-                                    <button class="button secondary">
-                                        Rolle
-                                    </button>
-
-                                </form>
-
-                                <form
-                                    method="POST"
-                                    action="/admin/user/coins"
-                                    style="margin-bottom:7px"
-                                >
-
-                                    <input
-                                        type="hidden"
-                                        name="id"
-                                        value="${escapeHTML(u.id)}"
-                                    >
-
-                                    <input
-                                        name="coins"
-                                        type="number"
-                                        placeholder="Coins"
-                                    >
-
-                                    <button class="button secondary">
-                                        Coins setzen
-                                    </button>
-
-                                </form>
-
-                                ${
-                                    u.email.toLowerCase() !==
-                                    OWNER_EMAIL.toLowerCase()
-                                    ? `
-                                    <form
-                                        method="POST"
-                                        action="/admin/user/ban"
-                                    >
-
-                                        <input
-                                            type="hidden"
-                                            name="id"
-                                            value="${escapeHTML(u.id)}"
-                                        >
-
-                                        <input
-                                            name="minutes"
-                                            type="number"
-                                            min="1"
-                                            placeholder="Minuten"
-                                            required
-                                        >
-
-                                        <input
-                                            name="reason"
-                                            placeholder="Grund"
-                                            required
-                                        >
-
-                                        <button
-                                            class="button danger"
-                                            type="submit"
-                                        >
-                                            Ban
-                                        </button>
-
-                                    </form>
-
-                                    <form
-                                        method="POST"
-                                        action="/admin/user/unban"
-                                        style="margin-top:7px"
-                                    >
-
-                                        <input
-                                            type="hidden"
-                                            name="id"
-                                            value="${escapeHTML(u.id)}"
-                                        >
-
-                                        <button
-                                            class="button success"
-                                            type="submit"
-                                        >
-                                            Unban
-                                        </button>
-
-                                    </form>
-                                    `
-                                    : `
-                                        <span class="muted small">
-                                            Owner geschützt
-                                        </span>
-                                    `
-                                }
-
-                            </td>
-
-                        </tr>
-                    `).join("")}
-
-                </table>
-
-                </div>
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/admin/user/role", requireAdmin, (req, res) => {
-    const users = getUsers();
-
-    const target = users.find(
-        u => u.id === req.body.id
-    );
-
-    if (!target) {
-        return res.status(404).send("User nicht gefunden.");
-    }
-
-    if (
-        target.email.toLowerCase() ===
-        OWNER_EMAIL.toLowerCase()
-    ) {
-        target.role = "owner";
-    } else {
-        const allowed = [
-            "user",
-            "moderator",
-            "developer",
-            "manager",
-            "admin",
-            "owner"
-        ];
-
-        if (!allowed.includes(req.body.role)) {
-            return res.status(400).send("Ungültige Rolle.");
-        }
-
-        target.role = req.body.role;
-    }
-
-    saveUsers(users);
-
-    addLog(
-        "user_role",
-        req.user,
-        {
-            target: target.email,
-            role: target.role
-        }
-    );
-
-    res.redirect("/admin/users");
-});
-
-app.post("/admin/user/coins", requireAdmin, (req, res) => {
-    const users = getUsers();
-
-    const target = users.find(
-        u => u.id === req.body.id
-    );
-
-    if (!target) {
-        return res.status(404).send("Nicht gefunden.");
-    }
-
-    const coins = Number(req.body.coins);
-
-    if (!Number.isFinite(coins) || coins < 0) {
-        return res.status(400).send("Ungültige Coins.");
-    }
-
-    target.coins = Math.floor(coins);
-
-    saveUsers(users);
-
-    addLog(
-        "admin_coins_set",
-        req.user,
-        {
-            target: target.email,
-            coins: target.coins
-        }
-    );
-
-    res.redirect("/admin/users");
-});
-
-app.post("/admin/user/ban", requireAdmin, (req, res) => {
-    const users = getUsers();
-
-    const target = users.find(
-        u => u.id === req.body.id
-    );
-
-    if (!target) {
-        return res.status(404).send("Nicht gefunden.");
-    }
-
-    if (
-        target.email.toLowerCase() ===
-        OWNER_EMAIL.toLowerCase()
-    ) {
-        return res.status(403).send(
-            "Der Owner kann nicht gebannt werden."
-        );
-    }
-
-    const minutes = Number(req.body.minutes);
-
-    if (
-        !Number.isFinite(minutes) ||
-        minutes <= 0
-    ) {
-        return res.status(400).send(
-            "Ungültige Dauer."
-        );
-    }
-
-    target.bannedUntil =
-        Date.now() +
-        minutes * 60 * 1000;
-
-    target.banReason =
-        String(req.body.reason || "Kein Grund");
-
-    saveUsers(users);
-
-    /*
-      Alle aktiven Sessions des gebannten Users löschen.
-    */
-
-    const sessions = getSessions().filter(
-        s => s.userId !== target.id
-    );
-
-    saveSessions(sessions);
-
-    addLog(
-        "user_ban",
-        req.user,
-        {
-            target: target.email,
-            minutes,
-            reason: target.banReason
-        }
-    );
-
-    res.redirect("/admin/users");
-});
-
-app.post("/admin/user/unban", requireAdmin, (req, res) => {
-    const users = getUsers();
-
-    const target = users.find(
-        u => u.id === req.body.id
-    );
-
-    if (!target) {
-        return res.status(404).send("Nicht gefunden.");
-    }
-
-    target.bannedUntil = null;
-    target.banReason = null;
-
-    saveUsers(users);
-
-    addLog(
-        "user_unban",
-        req.user,
-        {
-            target: target.email
-        }
-    );
-
-    res.redirect("/admin/users");
-});
-
-/*
-========================================================
- ADMIN BEWERBUNGEN
-========================================================
-*/
-
-app.get("/admin/applications", requireAdmin, (req, res) => {
-    const applications = getApplications();
-
-    res.send(
-        page(
-            "Bewerbungen",
-            req,
-            `
-            <div class="card">
-
-                <h1>Bewerbungen</h1>
-
-                ${
-                    applications.length === 0
-                    ? `<p class="muted">Keine Bewerbungen.</p>`
-                    : `
-                    <div class="table-wrap">
-
-                    <table>
-
-                        <tr>
-                            <th>Nummer</th>
-                            <th>User</th>
-                            <th>Bereich</th>
-                            <th>Details</th>
-                            <th>Status</th>
-                            <th>Aktion</th>
-                        </tr>
-
-                        ${applications.map(a => `
-                            <tr>
-
-                                <td>
-                                    ${escapeHTML(a.number)}
-                                </td>
-
-                                <td>
-                                    ${escapeHTML(a.username)}
-                                </td>
-
-                                <td>
-                                    ${escapeHTML(a.type)}
-                                </td>
-
-                                <td>
-                                    <strong>Discord:</strong>
-                                    ${escapeHTML(a.discord)}
-                                    <br><br>
-
-                                    <strong>Alter:</strong>
-                                    ${escapeHTML(a.age)}
-                                    <br><br>
-
-                                    <strong>Erfahrung:</strong>
-                                    ${escapeHTML(a.experience)}
-                                    <br><br>
-
-                                    <strong>Motivation:</strong>
-                                    ${escapeHTML(a.motivation)}
-                                    <br><br>
-
-                                    <strong>Warum:</strong>
-                                    ${escapeHTML(a.reason)}
-                                </td>
-
-                                <td>
-                                    ${escapeHTML(a.status)}
-                                </td>
-
-                                <td>
-
-                                    ${
-                                        a.status === "offen"
-                                        ? `
-                                        <form
-                                            method="POST"
-                                            action="/admin/application/status"
-                                        >
-
-                                            <input
-                                                type="hidden"
-                                                name="id"
-                                                value="${escapeHTML(a.id)}"
-                                            >
-
-                                            <select name="status">
-
-                                                <option value="angenommen">
-                                                    Annehmen
-                                                </option>
-
-                                                <option value="abgelehnt">
-                                                    Ablehnen
-                                                </option>
-
-                                            </select>
-
-                                            <input
-                                                name="reason"
-                                                placeholder="Grund"
-                                            >
-
-                                            <button class="button">
-                                                Speichern
-                                            </button>
-
-                                        </form>
-                                        `
-                                        : `
-                                            <span class="muted">
-                                                Bearbeitet
-                                            </span>
-                                        `
-                                    }
-
-                                </td>
-
-                            </tr>
-                        `).join("")}
-
-                    </table>
-
-                    </div>
-                    `
-                }
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/admin/application/status", requireAdmin, (req, res) => {
-    const applications = getApplications();
-
-    const application = applications.find(
-        a => a.id === req.body.id
-    );
-
-    if (!application) {
-        return res.status(404).send(
-            "Bewerbung nicht gefunden."
-        );
-    }
-
-    const status = String(
-        req.body.status || ""
-    );
-
-    if (
-        status !== "angenommen" &&
-        status !== "abgelehnt"
-    ) {
-        return res.status(400).send(
-            "Ungültiger Status."
-        );
-    }
-
-    application.status = status;
-    application.reviewedBy = req.user.username;
-    application.reviewedAt = new Date().toISOString();
-    application.reviewReason =
-        String(req.body.reason || "").trim();
-
-    saveApplications(applications);
-
-    addLog(
-        "application_status",
-        req.user,
-        {
-            application: application.number,
-            status,
-            reason: application.reviewReason
-        }
-    );
-
-    res.redirect("/admin/applications");
-});
-
-/*
-========================================================
- ADMIN CODES
-========================================================
-*/
-
-app.get("/admin/codes", requireAdmin, (req, res) => {
-    const codes = getCodes();
-
-    res.send(
-        page(
-            "Codes",
-            req,
-            `
-            <div class="grid">
-
-                <div class="card form">
-
-                    <h1>Coin-Code erstellen</h1>
-
-                    <form method="POST" action="/admin/codes/create">
-
-                        <label>Coins</label>
-
-                        <input
-                            type="number"
-                            name="coins"
-                            min="1"
-                            value="100"
-                            required
-                        >
-
-                        <label>Max. Benutzer</label>
-
-                        <input
-                            type="number"
-                            name="maxUses"
-                            min="1"
-                            value="1"
-                            required
-                        >
-
-                        <button class="button">
-                            Code erstellen
-                        </button>
-
-                    </form>
-
-                </div>
-
-                <div class="card">
-
-                    <h2>Vorhandene Codes</h2>
-
-                    ${
-                        codes.length === 0
-                        ? `<p class="muted">Keine Codes.</p>`
-                        : `
-                        <div class="table-wrap">
-
-                        <table>
-
-                            <tr>
-                                <th>Code</th>
-                                <th>Coins</th>
-                                <th>Nutzung</th>
-                                <th>Status</th>
-                            </tr>
-
-                            ${codes.map(c => `
-                                <tr>
-
-                                    <td>
-                                        <strong>
-                                            ${escapeHTML(c.code)}
-                                        </strong>
-                                    </td>
-
-                                    <td>
-                                        ${Number(c.coins)}
-                                    </td>
-
-                                    <td>
-                                        ${
-                                            Array.isArray(c.usedBy)
-                                            ? c.usedBy.length
-                                            : 0
-                                        }
-                                        /
-                                        ${Number(c.maxUses)}
-                                    </td>
-
-                                    <td>
-                                        ${
-                                            c.active !== false
-                                            ? "Aktiv"
-                                            : "Deaktiviert"
-                                        }
-                                    </td>
-
-                                </tr>
-                            `).join("")}
-
-                        </table>
-
-                        </div>
-                        `
-                    }
-
-                </div>
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/admin/codes/create", requireAdmin, (req, res) => {
-    const coins = Number(req.body.coins);
-    const maxUses = Number(req.body.maxUses);
-
-    if (
-        !Number.isFinite(coins) ||
-        coins < 1 ||
-        !Number.isFinite(maxUses) ||
-        maxUses < 1
-    ) {
-        return res.status(400).send(
-            "Ungültige Werte."
-        );
-    }
-
-    const codes = getCodes();
-
-    const code = {
-        id: id("code"),
-        code: codeNumber(),
-        coins: Math.floor(coins),
-        maxUses: Math.floor(maxUses),
-        usedBy: [],
-        active: true,
-        createdBy: req.user.id,
-        createdAt: new Date().toISOString()
-    };
-
-    codes.push(code);
-
-    saveCodes(codes);
-
-    addLog(
-        "code_create",
-        req.user,
-        {
-            code: code.code,
-            coins: code.coins,
-            maxUses: code.maxUses
-        }
-    );
-
-    res.redirect("/admin/codes");
-});
-
-/*
-========================================================
- ADMIN SHOP
-========================================================
-*/
-
-app.get("/admin/shop", requireAdmin, (req, res) => {
-    const products = getShop();
-
-    res.send(
-        page(
-            "Shop Verwaltung",
-            req,
-            `
-            <div class="grid">
-
-                <div class="card form">
-
-                    <h1>Produkt hinzufügen</h1>
-
-                    <form method="POST" action="/admin/shop/create">
-
-                        <label>Name</label>
-
-                        <input
-                            name="name"
-                            required
-                            maxlength="100"
-                        >
-
-                        <label>Beschreibung</label>
-
-                        <textarea
-                            name="description"
-                        ></textarea>
-
-                        <label>Preis in Coins</label>
-
-                        <input
-                            type="number"
-                            name="price"
-                            min="1"
-                            required
-                        >
-
-                        <button class="button">
-                            Produkt erstellen
-                        </button>
-
-                    </form>
-
-                </div>
-
-                <div class="card">
-
-                    <h2>Produkte</h2>
-
-                    ${
-                        products.length === 0
-                        ? `<p class="muted">Keine Produkte.</p>`
-                        : products.map(p => `
-                            <div class="card">
-
-                                <h3>
-                                    ${escapeHTML(p.name)}
-                                </h3>
-
-                                <p>
-                                    ${escapeHTML(p.description || "")}
-                                </p>
-
-                                <strong>
-                                    ${Number(p.price)} Coins
-                                </strong>
-
-                            </div>
-                        `).join("")
-                    }
-
-                </div>
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/admin/shop/create", requireAdmin, (req, res) => {
-    const name = String(
-        req.body.name || ""
-    ).trim();
-
-    const description = String(
-        req.body.description || ""
-    ).trim();
-
-    const price = Number(req.body.price);
-
-    if (
-        !name ||
-        !Number.isFinite(price) ||
-        price < 1
-    ) {
-        return res.status(400).send(
-            "Ungültige Produktdaten."
-        );
-    }
-
-    const products = getShop();
-
-    products.push({
-        id: id("product"),
-        name,
-        slug: slugify(name),
-        description,
-        price: Math.floor(price),
-        active: true,
-        createdBy: req.user.id,
-        createdAt: new Date().toISOString()
-    });
-
-    saveShop(products);
-
-    addLog(
-        "shop_product_create",
-        req.user,
-        {
-            product: name
-        }
-    );
-
-    res.redirect("/admin/shop");
-});
-
-/*
-========================================================
- ADMIN GEWINNSPIELE
-========================================================
-*/
-
-app.get("/admin/giveaways", requireAdmin, (req, res) => {
-    const giveaways = getGiveaways();
-
-    res.send(
-        page(
-            "Gewinnspiele",
-            req,
-            `
-            <div class="grid">
-
-                <div class="card form">
-
-                    <h1>Gewinnspiel erstellen</h1>
-
-                    <form
-                        method="POST"
-                        action="/admin/giveaways/create"
-                    >
-
-                        <label>Titel</label>
-
-                        <input
-                            name="title"
-                            required
-                        >
-
-                        <label>Beschreibung</label>
-
-                        <textarea
-                            name="description"
-                        ></textarea>
-
-                        <label>Gewinn</label>
-
-                        <input
-                            name="prize"
-                            required
-                        >
-
-                        <button class="button">
-                            Erstellen
-                        </button>
-
-                    </form>
-
-                </div>
-
-                <div class="card">
-
-                    <h2>Gewinnspiele</h2>
-
-                    ${
-                        giveaways.length === 0
-                        ? `<p class="muted">Keine Gewinnspiele.</p>`
-                        : giveaways.map(g => `
-                            <div class="card">
-
-                                <h3>
-                                    ${escapeHTML(g.title)}
-                                </h3>
-
-                                <p>
-                                    ${escapeHTML(g.description || "")}
-                                </p>
-
-                                <p>
-                                    Gewinn:
-                                    ${escapeHTML(g.prize || "")}
-                                </p>
-
-                                <p>
-                                    Teilnehmer:
-                                    ${
-                                        Array.isArray(g.participants)
-                                        ? g.participants.length
-                                        : 0
-                                    }
-                                </p>
-
-                            </div>
-                        `).join("")
-                    }
-
-                </div>
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/admin/giveaways/create", requireAdmin, (req, res) => {
-    const title = String(
-        req.body.title || ""
-    ).trim();
-
-    const description = String(
-        req.body.description || ""
-    ).trim();
-
-    const prize = String(
-        req.body.prize || ""
-    ).trim();
-
-    if (!title || !prize) {
-        return res.status(400).send(
-            "Titel und Gewinn sind erforderlich."
-        );
-    }
-
-    const giveaways = getGiveaways();
-
-    giveaways.push({
-        id: id("giveaway"),
-        title,
-        description,
-        prize,
-        participants: [],
-        active: true,
-        createdBy: req.user.id,
-        createdAt: new Date().toISOString()
-    });
-
-    saveGiveaways(giveaways);
-
-    addLog(
-        "giveaway_create",
-        req.user,
-        {
-            title
-        }
-    );
-
-    res.redirect("/admin/giveaways");
-});
-
-/*
-========================================================
- ADMIN TICKETS
-========================================================
-*/
-
-app.get("/admin/tickets", requireAdmin, (req, res) => {
-    const tickets = getTickets();
-
-    res.send(
-        page(
-            "Ticketverwaltung",
-            req,
-            `
-            <div class="card">
-
-                <h1>Tickets</h1>
-
-                <div class="table-wrap">
-
-                <table>
-
-                    <tr>
-                        <th>Nummer</th>
-                        <th>User</th>
-                        <th>Betreff</th>
-                        <th>Status</th>
-                        <th>Übernommen</th>
-                        <th></th>
-                    </tr>
-
-                    ${tickets.map(t => `
-                        <tr>
-
-                            <td>
-                                ${escapeHTML(t.number)}
-                            </td>
-
-                            <td>
-                                ${escapeHTML(t.username)}
-                            </td>
-
-                            <td>
-                                ${escapeHTML(t.subject)}
-                            </td>
-
-                            <td>
-                                ${escapeHTML(t.status)}
-                            </td>
-
-                            <td>
-                                ${escapeHTML(t.claimedByName || "-")}
-                            </td>
-
-                            <td>
-                                <a
-                                    class="button secondary"
-                                    href="/tickets/${encodeURIComponent(t.id)}"
-                                >
-                                    Öffnen
-                                </a>
-                            </td>
-
-                        </tr>
-                    `).join("")}
-
-                </table>
-
-                </div>
-
-            </div>
-            `
-        )
-    );
-});
-
-/*
-========================================================
- ADMIN BESTELLUNGEN
-========================================================
-*/
-
-app.get("/admin/orders", requireAdmin, (req, res) => {
-    const orders = getOrders();
-
-    res.send(
-        page(
-            "Bestellungen",
-            req,
-            `
-            <div class="card">
-
-                <h1>Bestellungen</h1>
-
-                <div class="table-wrap">
-
-                <table>
-
-                    <tr>
-                        <th>Bestellnummer</th>
-                        <th>User</th>
-                        <th>Produkt</th>
-                        <th>Preis</th>
-                        <th>Status</th>
-                        <th>Datum</th>
-                    </tr>
-
-                    ${orders.map(o => `
-                        <tr>
-
-                            <td>
-                                ${escapeHTML(o.number)}
-                            </td>
-
-                            <td>
-                                ${escapeHTML(o.username)}
-                            </td>
-
-                            <td>
-                                ${escapeHTML(o.productName)}
-                            </td>
-
-                            <td>
-                                ${Number(o.price)}
-                            </td>
-
-                            <td>
-                                ${escapeHTML(o.status)}
-                            </td>
-
-                            <td>
-                                ${new Date(o.createdAt).toLocaleString("de-DE")}
-                            </td>
-
-                        </tr>
-                    `).join("")}
-
-                </table>
-
-                </div>
-
-            </div>
-            `
-        )
-    );
-});
-
-/*
-========================================================
- ADMIN LOGS
-========================================================
-*/
-
-app.get("/admin/logs", requireAdmin, (req, res) => {
-    const logs = getLogs();
-
-    res.send(
-        page(
-            "Logs",
-            req,
-            `
-            <div class="card">
-
-                <h1>Logs</h1>
-
-                <p class="muted">
-                    Die letzten ${logs.length} Einträge.
-                </p>
-
-                <div class="table-wrap">
-
-                <table>
-
-                    <tr>
-                        <th>Zeit</th>
-                        <th>Aktion</th>
-                        <th>User</th>
-                        <th>Details</th>
-                    </tr>
-
-                    ${logs.map(log => `
-                        <tr>
-
-                            <td>
-                                ${new Date(log.createdAt).toLocaleString("de-DE")}
-                            </td>
-
-                            <td>
-                                <span class="badge">
-                                    ${escapeHTML(log.action)}
-                                </span>
-                            </td>
-
-                            <td>
-                                ${escapeHTML(log.userName)}
-                            </td>
-
-                            <td>
-                                ${escapeHTML(
-                                    JSON.stringify(log.details || {})
-                                )}
-                            </td>
-
-                        </tr>
-                    `).join("")}
-
-                </table>
-
-                </div>
-
-            </div>
-            `
-        )
-    );
-});
-
-/*
-========================================================
- ADMIN WEBSEITE / WARTUNG / STÖRUNG / ANKÜNDIGUNG
-========================================================
-*/
-
-app.get("/admin/settings", requireAdmin, (req, res) => {
-    const settings = getSettings();
-
-    res.send(
-        page(
-            "Webseite",
-            req,
-            `
-            <div class="grid">
-
-                <div class="card form">
-
-                    <h1>Wartung</h1>
-
-                    <form
-                        method="POST"
-                        action="/admin/settings/maintenance"
-                    >
-
-                        <label>
-                            Text
-                        </label>
-
-                        <textarea name="text">${escapeHTML(settings.maintenanceText)}</textarea>
-
-                        <button
-                            class="button"
-                            name="enabled"
-                            value="true"
-                        >
-                            Wartung aktivieren
-                        </button>
-
-                        <button
-                            class="button secondary"
-                            name="enabled"
-                            value="false"
-                        >
-                            Wartung deaktivieren
-                        </button>
-
-                    </form>
-
-                </div>
-
-                <div class="card form">
-
-                    <h1>Störung</h1>
-
-                    <form
-                        method="POST"
-                        action="/admin/settings/outage"
-                    >
-
-                        <label>
-                            Text
-                        </label>
-
-                        <textarea name="text">${escapeHTML(settings.outageText)}</textarea>
-
-                        <button
-                            class="button danger"
-                            name="enabled"
-                            value="true"
-                        >
-                            Störung aktivieren
-                        </button>
-
-                        <button
-                            class="button secondary"
-                            name="enabled"
-                            value="false"
-                        >
-                            Störung deaktivieren
-                        </button>
-
-                    </form>
-
-                </div>
-
-                <div class="card form">
-
-                    <h1>Ankündigung</h1>
-
-                    <form
-                        method="POST"
-                        action="/admin/settings/announcement"
-                    >
-
-                        <label>
-                            Text
-                        </label>
-
-                        <textarea name="text">${escapeHTML(settings.announcement)}</textarea>
-
-                        <button
-                            class="button"
-                            name="enabled"
-                            value="true"
-                        >
-                            Anzeigen
-                        </button>
-
-                        <button
-                            class="button secondary"
-                            name="enabled"
-                            value="false"
-                        >
-                            Ausblenden
-                        </button>
-
-                    </form>
-
-                </div>
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post(
-    "/admin/settings/maintenance",
-    requireAdmin,
-    (req, res) => {
-
-        const settings = getSettings();
-
-        settings.maintenance =
-            req.body.enabled === "true";
-
-        settings.maintenanceText =
-            String(
-                req.body.text ||
-                "Die Webseite befindet sich momentan in Wartung."
-            ).trim();
-
-        saveSettings(settings);
-
-        addLog(
-            "maintenance_change",
-            req.user,
-            {
-                enabled: settings.maintenance
-            }
+        const filtered = sessions.filter(
+            s => s.token !== cookies.north_session
         );
 
-        res.redirect("/admin/settings");
-    }
-);
-
-app.post(
-    "/admin/settings/outage",
-    requireAdmin,
-    (req, res) => {
-
-        const settings = getSettings();
-
-        settings.outage =
-            req.body.enabled === "true";
-
-        settings.outageText =
-            String(
-                req.body.text ||
-                "Aktuell liegt eine Störung vor."
-            ).trim();
-
-        saveSettings(settings);
-
-        addLog(
-            "outage_change",
-            req.user,
-            {
-                enabled: settings.outage
-            }
-        );
-
-        res.redirect("/admin/settings");
-    }
-);
-
-app.post(
-    "/admin/settings/announcement",
-    requireAdmin,
-    (req, res) => {
-
-        const settings = getSettings();
-
-        settings.announcementEnabled =
-            req.body.enabled === "true";
-
-        settings.announcement =
-            String(
-                req.body.text || ""
-            ).trim();
-
-        saveSettings(settings);
-
-        const announcements =
-            getAnnouncements();
-
-        announcements.unshift({
-            id: id("announcement"),
-            text: settings.announcement,
-            enabled: settings.announcementEnabled,
-            createdBy: req.user.username,
-            createdAt: new Date().toISOString()
-        });
-
-        saveAnnouncements(
-            announcements.slice(0, 100)
-        );
-
-        addLog(
-            "announcement_change",
-            req.user,
-            {
-                enabled:
-                    settings.announcementEnabled
-            }
-        );
-
-        res.redirect("/admin/settings");
-    }
-);
-
-/*
-========================================================
- ADMIN KICK
-========================================================
-*/
-
-app.post("/admin/user/kick", requireAdmin, (req, res) => {
-    const users = getUsers();
-
-    const target = users.find(
-        u => u.id === req.body.id
-    );
-
-    if (!target) {
-        return res.status(404).send(
-            "User nicht gefunden."
-        );
+        writeJSON(FILES.sessions, filtered);
     }
 
-    if (
-        target.email.toLowerCase() ===
-        OWNER_EMAIL.toLowerCase()
-    ) {
-        return res.status(403).send(
-            "Owner kann nicht gekickt werden."
-        );
-    }
-
-    target.kicked = true;
-
-    saveUsers(users);
-
-    const sessions = getSessions().filter(
-        s => s.userId !== target.id
-    );
-
-    saveSessions(sessions);
-
-    addLog(
-        "user_kick",
-        req.user,
-        {
-            target: target.email
-        }
-    );
-
-    res.redirect("/admin/users");
-});
-
-/*
-========================================================
- 404
-========================================================
-*/
-
-app.use((req, res) => {
-    res.status(404).send(
-        page(
-            "Nicht gefunden",
-            req,
-            `
-            <div class="card center">
-
-                <h1>404</h1>
-
-                <p>
-                    Diese Seite wurde nicht gefunden.
-                </p>
-
-                <a class="button" href="/">
-                    Zur Startseite
-                </a>
-
-            </div>
-            `
-        )
-    );
-});
-
-/*
-========================================================
- ERROR HANDLER
-========================================================
-*/
-
-app.use((err, req, res, next) => {
-    console.error("Webseiten-Fehler:", err);
-
-    if (res.headersSent) {
-        return next(err);
-    }
-
-    res.status(500).send(
-        page(
-            "Fehler",
-            req,
-            `
-            <div class="card">
-
-                <h1>Fehler</h1>
-
-                <p>
-                    Bei der Verarbeitung ist ein Fehler aufgetreten.
-                </p>
-
-                <a class="button" href="/">
-                    Zur Startseite
-                </a>
-
-            </div>
-            `
-        )
-    );
-});
-
-/*
-========================================================
- START
-========================================================
-*/
-
-app.listen(PORT, "0.0.0.0", () => {
-    console.log("");
-    console.log("======================================");
-    console.log(" North Bot V2 Webseite");
-    console.log("======================================");
-    console.log("Server läuft auf Port:", PORT);
-    console.log("Discord:", DISCORD_INVITE);
-    console.log("Owner:", OWNER_EMAIL);
-    console.log("======================================");
-});/*
-========================================================
- NORTH BOT V2 - WEBSEITE
-========================================================
- Benötigt:
-   npm install express
-
- Start:
-   node webseite.js
-
- Keine .env
- Keine express-session
- Daten werden automatisch als JSON gespeichert.
-
- Enthalten:
- - Registrierung / Login
- - Dauerhafter Login (30 Tage)
- - Profil bearbeiten
- - Rollen: owner / admin / manager / developer / moderator / user
- - Admin Panel
- - Benutzerverwaltung
- - Temporäre Bans
- - Kick
- - Wartung
- - Störung
- - Ankündigungen
- - Tickets
- - Bewerbungen
- - Coins
- - Daily Coins
- - Coin-Codes
- - Coin-Shop
- - Gewinnspiele
- - Team-Chat
- - User-Chat
- - Logs
- - Bestellungen
- - Beta-Nummern
- - Produktverwaltung
-========================================================
-*/
-
-const express = require("express");
-const crypto = require("crypto");
-const fs = require("fs");
-const path = require("path");
-
-const app = express();
-
-const PORT = Number(process.env.PORT) || 10000;
-
-const DISCORD_INVITE = "https://discord.gg/NJEVq6Pk6x";
-const OWNER_EMAIL = "florianzustolberg@gmail.com";
-
-/*
-========================================================
- DATEIEN
-========================================================
-*/
-
-const DATA_DIR = __dirname;
-
-const FILES = {
-    users: path.join(DATA_DIR, "users.json"),
-    tickets: path.join(DATA_DIR, "tickets.json"),
-    sessions: path.join(DATA_DIR, "sessions.json"),
-    applications: path.join(DATA_DIR, "applications.json"),
-    codes: path.join(DATA_DIR, "codes.json"),
-    shop: path.join(DATA_DIR, "shop.json"),
-    giveaways: path.join(DATA_DIR, "giveaways.json"),
-    chats: path.join(DATA_DIR, "chats.json"),
-    logs: path.join(DATA_DIR, "logs.json"),
-    orders: path.join(DATA_DIR, "orders.json"),
-    settings: path.join(DATA_DIR, "settings.json"),
-    announcements: path.join(DATA_DIR, "announcements.json")
-};
-
-function ensureFile(file, defaultValue) {
-    if (!fs.existsSync(file)) {
-        fs.writeFileSync(file, JSON.stringify(defaultValue, null, 2), "utf8");
-    }
-}
-
-ensureFile(FILES.users, []);
-ensureFile(FILES.tickets, []);
-ensureFile(FILES.sessions, []);
-ensureFile(FILES.applications, []);
-ensureFile(FILES.codes, []);
-ensureFile(FILES.shop, []);
-ensureFile(FILES.giveaways, []);
-ensureFile(FILES.chats, []);
-ensureFile(FILES.logs, []);
-ensureFile(FILES.orders, []);
-ensureFile(FILES.settings, {
-    maintenance: false,
-    maintenanceText: "Die Webseite befindet sich momentan in Wartung.",
-    outage: false,
-    outageText: "Aktuell liegt eine Störung vor.",
-    announcement: "",
-    announcementEnabled: false
-});
-ensureFile(FILES.announcements, []);
-
-/*
-========================================================
- JSON FUNKTIONEN
-========================================================
-*/
-
-function readJSON(file, fallback) {
-    try {
-        if (!fs.existsSync(file)) {
-            fs.writeFileSync(file, JSON.stringify(fallback, null, 2), "utf8");
-            return fallback;
-        }
-
-        const raw = fs.readFileSync(file, "utf8").trim();
-
-        if (!raw) {
-            return fallback;
-        }
-
-        return JSON.parse(raw);
-    } catch (err) {
-        console.error("JSON-Fehler:", file, err.message);
-        return fallback;
-    }
-}
-
-function writeJSON(file, data) {
-    fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
-}
-
-function getUsers() {
-    return readJSON(FILES.users, []);
-}
-
-function saveUsers(data) {
-    writeJSON(FILES.users, data);
-}
-
-function getTickets() {
-    return readJSON(FILES.tickets, []);
-}
-
-function saveTickets(data) {
-    writeJSON(FILES.tickets, data);
-}
-
-function getSessions() {
-    return readJSON(FILES.sessions, []);
-}
-
-function saveSessions(data) {
-    writeJSON(FILES.sessions, data);
-}
-
-function getApplications() {
-    return readJSON(FILES.applications, []);
-}
-
-function saveApplications(data) {
-    writeJSON(FILES.applications, data);
-}
-
-function getCodes() {
-    return readJSON(FILES.codes, []);
-}
-
-function saveCodes(data) {
-    writeJSON(FILES.codes, data);
-}
-
-function getShop() {
-    return readJSON(FILES.shop, []);
-}
-
-function saveShop(data) {
-    writeJSON(FILES.shop, data);
-}
-
-function getGiveaways() {
-    return readJSON(FILES.giveaways, []);
-}
-
-function saveGiveaways(data) {
-    writeJSON(FILES.giveaways, data);
-}
-
-function getChats() {
-    return readJSON(FILES.chats, []);
-}
-
-function saveChats(data) {
-    writeJSON(FILES.chats, data);
-}
-
-function getLogs() {
-    return readJSON(FILES.logs, []);
-}
-
-function saveLogs(data) {
-    writeJSON(FILES.logs, data);
-}
-
-function getOrders() {
-    return readJSON(FILES.orders, []);
-}
-
-function saveOrders(data) {
-    writeJSON(FILES.orders, data);
-}
-
-function getSettings() {
-    return readJSON(FILES.settings, {
-        maintenance: false,
-        maintenanceText: "Die Webseite befindet sich momentan in Wartung.",
-        outage: false,
-        outageText: "Aktuell liegt eine Störung vor.",
-        announcement: "",
-        announcementEnabled: false
-    });
-}
-
-function saveSettings(data) {
-    writeJSON(FILES.settings, data);
-}
-
-function getAnnouncements() {
-    return readJSON(FILES.announcements, []);
-}
-
-function saveAnnouncements(data) {
-    writeJSON(FILES.announcements, data);
+    clearCookie(res, "north_session");
 }
 
 /*
 ========================================================
- EXPRESS
-========================================================
-*/
-
-app.use(express.urlencoded({
-    extended: true,
-    limit: "2mb"
-}));
-
-app.use(express.json({
-    limit: "2mb"
-}));
-
-/*
-========================================================
- HILFSFUNKTIONEN
-========================================================
-*/
-
-function escapeHTML(value) {
-    return String(value ?? "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-}
-
-function randomHex(bytes = 24) {
-    return crypto.randomBytes(bytes).toString("hex");
-}
-
-function randomNumber(min, max) {
-    return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function id(prefix) {
-    return prefix + "-" + Date.now().toString(36) + "-" + randomHex(3);
-}
-
-function betaNumber() {
-    return (
-        "BETA-" +
-        randomNumber(1000, 9999) +
-        "-" +
-        randomNumber(1000, 9999)
-    );
-}
-
-function orderNumber() {
-    return (
-        "ORD-" +
-        randomNumber(1000, 9999) +
-        "-" +
-        randomNumber(1000, 9999)
-    );
-}
-
-function applicationNumber() {
-    return (
-        "APP-" +
-        randomNumber(1000, 9999) +
-        "-" +
-        randomNumber(1000, 9999)
-    );
-}
-
-function ticketNumber() {
-    return (
-        "TICKET-" +
-        randomNumber(1000, 9999) +
-        "-" +
-        randomNumber(1000, 9999)
-    );
-}
-
-function codeNumber() {
-    return (
-        "NORTH-" +
-        randomNumber(1000, 9999) +
-        "-" +
-        randomNumber(1000, 9999)
-    );
-}
-
-function slugify(text) {
-    return String(text || "")
-        .toLowerCase()
-        .trim()
-        .replace(/[^a-z0-9äöüß]+/gi, "-")
-        .replace(/^-+|-+$/g, "");
-}
-
-/*
-========================================================
- PASSWORT HASH
+ PASSWORT HASHING
 ========================================================
 */
 
@@ -5358,46 +283,27 @@ function hashPassword(password) {
     const salt = crypto.randomBytes(16).toString("hex");
 
     const hash = crypto
-        .pbkdf2Sync(
-            String(password),
-            salt,
-            120000,
-            64,
-            "sha512"
-        )
+        .scryptSync(password, salt, 64)
         .toString("hex");
 
-    return salt + ":" + hash;
+    return `${salt}:${hash}`;
 }
 
 function verifyPassword(password, stored) {
     try {
-        if (!stored || !stored.includes(":")) {
+        const [salt, originalHash] = stored.split(":");
+
+        if (!salt || !originalHash) {
             return false;
         }
 
-        const parts = stored.split(":");
-
-        if (parts.length !== 2) {
-            return false;
-        }
-
-        const salt = parts[0];
-        const originalHash = parts[1];
-
-        const newHash = crypto
-            .pbkdf2Sync(
-                String(password),
-                salt,
-                120000,
-                64,
-                "sha512"
-            )
+        const hash = crypto
+            .scryptSync(password, salt, 64)
             .toString("hex");
 
         return crypto.timingSafeEqual(
-            Buffer.from(originalHash, "hex"),
-            Buffer.from(newHash, "hex")
+            Buffer.from(hash, "hex"),
+            Buffer.from(originalHash, "hex")
         );
     } catch {
         return false;
@@ -5406,166 +312,56 @@ function verifyPassword(password, stored) {
 
 /*
 ========================================================
- COOKIE
+ HILFSFUNKTIONEN
 ========================================================
 */
 
-function parseCookies(req) {
-    const header = req.headers.cookie || "";
-    const cookies = {};
-
-    header.split(";").forEach(part => {
-        const index = part.indexOf("=");
-
-        if (index === -1) return;
-
-        const key = part.slice(0, index).trim();
-        const value = part.slice(index + 1).trim();
-
-        cookies[key] = decodeURIComponent(value);
-    });
-
-    return cookies;
+function id(prefix = "id") {
+    return `${prefix}_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
 }
 
-function setLoginCookie(res, token) {
-    const secure = process.env.NODE_ENV === "production"
-        ? " Secure;"
-        : "";
+function clean(value, max = 5000) {
+    return String(value || "")
+        .trim()
+        .slice(0, max);
+}
 
-    res.setHeader(
-        "Set-Cookie",
-        "north_auth=" +
-        encodeURIComponent(token) +
-        "; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax;" +
-        secure
+function escapeHTML(value) {
+    return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function formatDate(timestamp) {
+    if (!timestamp) return "-";
+
+    return new Date(timestamp).toLocaleString(
+        "de-DE",
+        {
+            dateStyle: "short",
+            timeStyle: "short"
+        }
     );
 }
 
-function clearLoginCookie(res) {
-    res.setHeader(
-        "Set-Cookie",
-        "north_auth=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax"
-    );
+function generateCode() {
+    const part = () =>
+        crypto
+            .randomBytes(3)
+            .toString("hex")
+            .toUpperCase();
+
+    return `NORTH-${part()}-${part()}`;
 }
 
-/*
-========================================================
- LOGIN
-========================================================
-*/
-
-function getCurrentUser(req) {
-    const cookies = parseCookies(req);
-    const token = cookies.north_auth;
-
-    if (!token) {
-        return null;
-    }
-
-    const sessions = getSessions();
-
-    const session = sessions.find(
-        s =>
-            s.token === token &&
-            s.expiresAt > Date.now()
-    );
-
-    if (!session) {
-        return null;
-    }
-
-    const users = getUsers();
-
-    const user = users.find(
-        u => u.id === session.userId
-    );
-
-    if (!user) {
-        return null;
-    }
-
-    if (user.bannedUntil && user.bannedUntil > Date.now()) {
-        return {
-            ...user,
-            _banned: true
-        };
-    }
-
-    return user;
-}
-
-function createSession(userId) {
-    const sessions = getSessions();
-
-    const token = randomHex(48);
-
-    sessions.push({
-        id: id("session"),
-        token,
-        userId,
-        createdAt: Date.now(),
-        expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000
-    });
-
-    writeJSON(
-        FILES.sessions,
-        sessions.filter(
-            s => s.expiresAt > Date.now()
-        )
-    );
-
-    return token;
-}
-
-function destroySession(req) {
-    const cookies = parseCookies(req);
-
-    if (!cookies.north_auth) {
-        return;
-    }
-
-    const sessions = getSessions().filter(
-        s => s.token !== cookies.north_auth
-    );
-
-    saveSessions(sessions);
-}
-
-/*
-========================================================
- ROLLEN
-========================================================
-*/
-
-const ADMIN_ROLES = [
-    "owner",
-    "admin",
-    "manager"
-];
-
-const TEAM_ROLES = [
-    "owner",
-    "admin",
-    "manager",
-    "developer",
-    "moderator"
-];
-
-function hasRole(user, roles) {
-    if (!user) return false;
-
-    return roles.includes(
-        String(user.role || "").toLowerCase()
-    );
-}
-
-function isAdmin(user) {
-    return hasRole(user, ADMIN_ROLES);
-}
-
-function isTeam(user) {
-    return hasRole(user, TEAM_ROLES);
+function generateOrderNumber() {
+    return `NB-${Date.now().toString().slice(-8)}-${crypto
+        .randomBytes(2)
+        .toString("hex")
+        .toUpperCase()}`;
 }
 
 function requireLogin(req, res, next) {
@@ -5575,7 +371,7 @@ function requireLogin(req, res, next) {
         return res.redirect("/login");
     }
 
-    if (user._banned) {
+    if (user.banned) {
         return res.redirect("/banned");
     }
 
@@ -5590,218 +386,54 @@ function requireAdmin(req, res, next) {
         return res.redirect("/login");
     }
 
-    if (!isAdmin(user)) {
-        return res.status(403).send(
-            page(
-                "Kein Zugriff",
-                req,
-                `
-                <div class="card">
-                    <h1>Kein Zugriff</h1>
-                    <p>Du benötigst Administrator-Rechte.</p>
-                    <a class="button" href="/">Zur Startseite</a>
-                </div>
-                `
-            )
-        );
+    if (!isAdminEmail(user.email)) {
+        return res.status(403).send(page(
+            "Kein Zugriff",
+            `
+            <div class="card">
+                <h1>Kein Zugriff</h1>
+                <p>Du hast keine Berechtigung für diesen Bereich.</p>
+                <a class="btn" href="/">Zur Startseite</a>
+            </div>
+            `
+        ));
     }
 
     req.user = user;
     next();
 }
 
-function requireTeam(req, res, next) {
-    const user = getCurrentUser(req);
-
-    if (!user) {
-        return res.redirect("/login");
-    }
-
-    if (!isTeam(user)) {
-        return res.status(403).send(
-            page(
-                "Kein Zugriff",
-                req,
-                `
-                <div class="card">
-                    <h1>Kein Zugriff</h1>
-                    <p>Dieser Bereich ist nur für das Team.</p>
-                    <a class="button" href="/">Zurück</a>
-                </div>
-                `
-            )
-        );
-    }
-
-    req.user = user;
-    next();
-}
-
-/*
-========================================================
- LOG
-========================================================
-*/
-
-function addLog(action, user, details = {}) {
-    const logs = getLogs();
+function addLog(type, text, user = null, extra = {}) {
+    const logs = readJSON(FILES.logs, []);
 
     logs.unshift({
         id: id("log"),
-        action,
+        type,
+        text,
         userId: user ? user.id : null,
-        userName: user ? user.username : "System",
-        details,
-        createdAt: new Date().toISOString()
+        email: user ? user.email : null,
+        createdAt: Date.now(),
+        ...extra
     });
 
-    if (logs.length > 5000) {
-        logs.length = 5000;
+    if (logs.length > 3000) {
+        logs.length = 3000;
     }
 
-    saveLogs(logs);
+    writeJSON(FILES.logs, logs);
 }
 
 /*
 ========================================================
- USER ERSTELLEN
+ SEITEN DESIGN
 ========================================================
 */
 
-function createUser(username, email, password, role = "user") {
-    const users = getUsers();
+function page(title, content, user = null) {
+    const loggedIn = !!user;
+    const admin = user && isAdminEmail(user.email);
 
-    const normalizedEmail = String(email)
-        .trim()
-        .toLowerCase();
-
-    if (
-        users.some(
-            u =>
-                String(u.email).toLowerCase() ===
-                normalizedEmail
-        )
-    ) {
-        return null;
-    }
-
-    const newUser = {
-        id: id("user"),
-        username: String(username).trim(),
-        email: normalizedEmail,
-        password: hashPassword(password),
-        role,
-        coins: 0,
-        createdAt: new Date().toISOString(),
-        lastDaily: null,
-        bannedUntil: null,
-        banReason: null,
-        kicked: false,
-        betaNumber: betaNumber()
-    };
-
-    users.push(newUser);
-
-    saveUsers(users);
-
-    return newUser;
-}
-
-/*
-========================================================
- OWNER AUTOMATISCH ANLEGEN
-========================================================
-*/
-
-function ensureOwner() {
-    const users = getUsers();
-
-    let owner = users.find(
-        u =>
-            String(u.email).toLowerCase() ===
-            OWNER_EMAIL.toLowerCase()
-    );
-
-    if (!owner) {
-        owner = {
-            id: id("user"),
-            username: "Florian",
-            email: OWNER_EMAIL,
-            password: hashPassword("278263"),
-            role: "owner",
-            coins: 0,
-            createdAt: new Date().toISOString(),
-            lastDaily: null,
-            bannedUntil: null,
-            banReason: null,
-            kicked: false,
-            betaNumber: betaNumber()
-        };
-
-        users.push(owner);
-        saveUsers(users);
-
-        console.log(
-            "Owner-Konto erstellt:",
-            OWNER_EMAIL
-        );
-    } else {
-        owner.role = "owner";
-        saveUsers(users);
-    }
-}
-
-ensureOwner();
-
-/*
-========================================================
- DESIGN
-========================================================
-*/
-
-function page(title, req, content) {
-    const user = req ? getCurrentUser(req) : null;
-    const settings = getSettings();
-
-    const maintenanceVisible =
-        settings.maintenance &&
-        (!user || !isAdmin(user));
-
-    const outageVisible =
-        settings.outage &&
-        (!user || !isAdmin(user));
-
-    let notices = "";
-
-    if (maintenanceVisible) {
-        notices += `
-        <div class="notice warning">
-            <strong>Wartung</strong>
-            <span>${escapeHTML(settings.maintenanceText)}</span>
-        </div>
-        `;
-    }
-
-    if (outageVisible) {
-        notices += `
-        <div class="notice danger">
-            <strong>Störung</strong>
-            <span>${escapeHTML(settings.outageText)}</span>
-        </div>
-        `;
-    }
-
-    if (settings.announcementEnabled && settings.announcement) {
-        notices += `
-        <div class="notice info">
-            <strong>Ankündigung</strong>
-            <span>${escapeHTML(settings.announcement)}</span>
-        </div>
-        `;
-    }
-
-    return `
-<!DOCTYPE html>
+    return `<!DOCTYPE html>
 <html lang="de">
 <head>
 <meta charset="UTF-8">
@@ -5809,20 +441,16 @@ function page(title, req, content) {
 <title>${escapeHTML(title)} | North Bot</title>
 
 <style>
+
 * {
     box-sizing: border-box;
 }
 
-html, body {
-    margin: 0;
-    padding: 0;
-    font-family: Arial, Helvetica, sans-serif;
-    background: #0d0f13;
-    color: #e9edf2;
-}
-
 body {
-    min-height: 100vh;
+    margin: 0;
+    font-family: Arial, Helvetica, sans-serif;
+    background: #0b0d11;
+    color: #f2f4f7;
 }
 
 a {
@@ -5831,127 +459,150 @@ a {
 }
 
 .nav {
-    height: 64px;
-    border-bottom: 1px solid #252932;
-    background: #111318;
+    height: 70px;
+    border-bottom: 1px solid #242831;
+    background: #101319;
     display: flex;
     align-items: center;
-    padding: 0 28px;
-    gap: 24px;
+    justify-content: space-between;
+    padding: 0 30px;
     position: sticky;
     top: 0;
     z-index: 20;
 }
 
 .logo {
-    font-size: 19px;
-    font-weight: 700;
-    letter-spacing: .3px;
+    font-size: 22px;
+    font-weight: 800;
 }
 
-.nav-links {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
+.logo span {
+    color: #7289da;
 }
 
-.nav-links a {
-    padding: 8px 11px;
-    border-radius: 7px;
-    color: #aeb6c2;
-    font-size: 14px;
-}
-
-.nav-links a:hover {
-    background: #1b1f27;
-    color: #fff;
-}
-
-.nav-right {
-    margin-left: auto;
+.navlinks {
     display: flex;
     gap: 8px;
     align-items: center;
+    flex-wrap: wrap;
+}
+
+.navlinks a {
+    padding: 9px 13px;
+    border-radius: 7px;
+    color: #b7bdc8;
+}
+
+.navlinks a:hover {
+    background: #1b1f27;
+    color: white;
 }
 
 .container {
-    width: min(1150px, calc(100% - 32px));
-    margin: 35px auto;
+    max-width: 1180px;
+    margin: auto;
+    padding: 35px 20px;
+}
+
+.hero {
+    padding: 70px 30px;
+    border-bottom: 1px solid #252a33;
+}
+
+.hero-inner {
+    max-width: 1180px;
+    margin: auto;
+}
+
+.hero h1 {
+    font-size: 46px;
+    margin: 0 0 12px;
+}
+
+.hero p {
+    max-width: 720px;
+    color: #aeb5c1;
+    font-size: 18px;
+    line-height: 1.6;
 }
 
 .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: 16px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+}
+
+.grid2 {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 18px;
 }
 
 .card {
-    background: #15181e;
-    border: 1px solid #272c35;
-    border-radius: 10px;
-    padding: 20px;
+    background: #11151b;
+    border: 1px solid #272d36;
+    border-radius: 12px;
+    padding: 22px;
+    margin-bottom: 18px;
 }
 
-.card h1,
 .card h2,
 .card h3 {
     margin-top: 0;
 }
 
 .muted {
-    color: #8e98a6;
+    color: #929aa7;
 }
 
-.button {
+.stat {
+    font-size: 30px;
+    font-weight: 800;
+    margin-top: 8px;
+}
+
+.btn {
     display: inline-block;
     border: 0;
+    border-radius: 7px;
+    padding: 11px 16px;
     background: #5865f2;
     color: white;
-    border-radius: 7px;
-    padding: 10px 15px;
     cursor: pointer;
     font-size: 14px;
 }
 
-.button:hover {
-    filter: brightness(1.1);
+.btn:hover {
+    background: #4752c4;
 }
 
-.button.secondary {
-    background: #252a33;
+.btn.gray {
+    background: #272d36;
 }
 
-.button.danger {
-    background: #c43c4b;
+.btn.red {
+    background: #b83232;
 }
 
-.button.success {
-    background: #318a59;
+.btn.green {
+    background: #287b49;
+}
+
+.btn.orange {
+    background: #9a6425;
 }
 
 input,
 textarea,
 select {
     width: 100%;
-    background: #0e1014;
-    border: 1px solid #303641;
-    color: #fff;
-    padding: 11px;
+    padding: 12px;
+    border: 1px solid #303640;
     border-radius: 7px;
-    margin-top: 6px;
-    margin-bottom: 13px;
+    background: #0b0e13;
+    color: white;
     outline: none;
-}
-
-input:focus,
-textarea:focus,
-select:focus {
-    border-color: #5865f2;
-}
-
-label {
-    font-size: 13px;
-    color: #aeb6c2;
+    margin: 7px 0 14px;
 }
 
 textarea {
@@ -5959,178 +610,166 @@ textarea {
     resize: vertical;
 }
 
+label {
+    color: #b9c0ca;
+    font-size: 14px;
+}
+
 .form {
-    max-width: 500px;
+    max-width: 550px;
+    margin: 30px auto;
 }
 
-.center {
-    text-align: center;
-}
-
-.notice {
-    padding: 13px 16px;
+.alert {
+    padding: 13px;
     border-radius: 8px;
-    margin-bottom: 15px;
-    display: flex;
-    gap: 12px;
-    align-items: center;
-    border: 1px solid #303641;
+    margin-bottom: 16px;
+    background: #20252d;
+    border: 1px solid #303640;
 }
 
-.notice.warning {
-    background: #27200e;
-    border-color: #695318;
+.alert.red {
+    background: #33191b;
+    border-color: #713236;
 }
 
-.notice.danger {
-    background: #291316;
-    border-color: #6b2931;
+.alert.green {
+    background: #173121;
+    border-color: #2d6742;
 }
 
-.notice.info {
-    background: #121c2e;
-    border-color: #263f6a;
+.alert.orange {
+    background: #342715;
+    border-color: #705429;
 }
 
-.stat {
-    font-size: 30px;
-    font-weight: 700;
-    margin: 7px 0;
-}
-
-.small {
-    font-size: 13px;
-}
-
-.table-wrap {
-    overflow-x: auto;
-}
-
-table {
+.table {
     width: 100%;
     border-collapse: collapse;
 }
 
-th,
-td {
-    text-align: left;
+.table th,
+.table td {
     padding: 11px;
-    border-bottom: 1px solid #292e36;
+    border-bottom: 1px solid #282e37;
+    text-align: left;
     vertical-align: top;
-}
-
-th {
-    color: #8e98a6;
-    font-size: 13px;
 }
 
 .badge {
     display: inline-block;
-    background: #242932;
-    border-radius: 999px;
-    padding: 4px 9px;
+    padding: 4px 8px;
+    border-radius: 20px;
+    background: #262c35;
+    color: #cbd0d8;
     font-size: 12px;
 }
 
-.badge.owner {
-    background: #5b3510;
-}
-
 .badge.admin {
-    background: #39215e;
+    background: #463f86;
 }
 
-.badge.manager {
-    background: #173d54;
+.badge.owner {
+    background: #7d3b3b;
 }
 
-.badge.developer {
-    background: #174d3b;
-}
-
-.badge.moderator {
-    background: #49321a;
-}
-
-.chat {
-    max-height: 450px;
-    overflow-y: auto;
-    border: 1px solid #292e36;
-    padding: 12px;
-    border-radius: 8px;
-    background: #0e1014;
+.ticket {
+    border: 1px solid #292f38;
+    border-radius: 9px;
+    padding: 16px;
+    margin-bottom: 10px;
+    background: #10141a;
 }
 
 .message {
-    padding: 10px;
-    border-bottom: 1px solid #242831;
+    padding: 12px;
+    border-bottom: 1px solid #252b34;
 }
 
 .message:last-child {
     border-bottom: 0;
 }
 
+.message-name {
+    font-weight: 700;
+}
+
+.message-time {
+    color: #737c88;
+    font-size: 12px;
+}
+
+.coin {
+    color: #f1c75b;
+    font-weight: 800;
+}
+
+.product {
+    border: 1px solid #2b313a;
+    border-radius: 10px;
+    padding: 18px;
+}
+
 .footer {
-    border-top: 1px solid #252932;
-    margin-top: 50px;
+    border-top: 1px solid #252a32;
+    margin-top: 60px;
     padding: 30px;
-    color: #737d8b;
+    color: #747d89;
     text-align: center;
 }
 
-.hero {
-    padding: 50px 0;
+.status {
+    padding: 14px;
+    margin-bottom: 15px;
+    border-radius: 8px;
 }
 
-.hero h1 {
-    font-size: clamp(32px, 6vw, 56px);
-    margin-bottom: 10px;
+.status.maintenance {
+    background: #392e16;
+    border: 1px solid #705a2a;
 }
 
-.hero p {
-    color: #9da7b5;
-    max-width: 650px;
-    line-height: 1.6;
+.status.outage {
+    background: #3a1b1b;
+    border: 1px solid #753535;
 }
 
-.actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-top: 15px;
+.small {
+    font-size: 13px;
 }
 
-hr {
-    border: 0;
-    border-top: 1px solid #292e36;
-    margin: 22px 0;
+.center {
+    text-align: center;
 }
 
-.danger-text {
-    color: #f07878;
-}
+@media(max-width: 800px) {
+    .grid,
+    .grid2 {
+        grid-template-columns: 1fr;
+    }
 
-.success-text {
-    color: #66c994;
-}
+    .hero h1 {
+        font-size: 34px;
+    }
 
-@media (max-width: 750px) {
     .nav {
         height: auto;
-        padding: 14px;
+        min-height: 70px;
+        gap: 12px;
+        padding: 15px;
         align-items: flex-start;
-        flex-wrap: wrap;
     }
 
-    .nav-right {
-        margin-left: 0;
+    .navlinks {
+        justify-content: flex-end;
     }
 
-    .container {
-        width: min(100% - 20px, 1150px);
-        margin-top: 20px;
+    .table {
+        display: block;
+        overflow-x: auto;
     }
 }
+
 </style>
 </head>
 
@@ -6138,182 +777,165 @@ hr {
 
 <nav class="nav">
 
-    <a class="logo" href="/">North Bot</a>
+<a class="logo" href="/">
+    NORTH<span>BOT</span>
+</a>
 
-    <div class="nav-links">
-        <a href="/">Start</a>
+<div class="navlinks">
 
-        ${
-            user
-            ? `
-            <a href="/tickets">Tickets</a>
-            <a href="/applications">Bewerbungen</a>
-            <a href="/coins">Coins</a>
-            <a href="/shop">Shop</a>
-            <a href="/giveaways">Gewinnspiele</a>
-            <a href="/chat">Chat</a>
-            <a href="/profile">Profil</a>
-            `
-            : ""
-        }
+<a href="/">Start</a>
 
-        ${
-            user && isTeam(user)
-            ? `<a href="/team-chat">Team-Chat</a>`
-            : ""
-        }
+${loggedIn ? `
+<a href="/dashboard">Dashboard</a>
+<a href="/tickets">Tickets</a>
+<a href="/chat">Chat</a>
+<a href="/shop">Shop</a>
+<a href="/giveaways">Gewinnspiele</a>
+<a href="/applications">Bewerbung</a>
+<a href="/profile">Profil</a>
+${admin ? `<a href="/admin">Admin</a>` : ""}
+<a href="/logout">Logout</a>
+` : `
+<a href="/login">Login</a>
+<a href="/register">Registrieren</a>
+`}
 
-        ${
-            user && isAdmin(user)
-            ? `<a href="/admin">Admin</a>`
-            : ""
-        }
-    </div>
-
-    <div class="nav-right">
-        ${
-            user
-            ? `
-                <span class="small muted">
-                    ${escapeHTML(user.username)}
-                </span>
-                <a class="button secondary" href="/logout">
-                    Abmelden
-                </a>
-            `
-            : `
-                <a class="button secondary" href="/login">Login</a>
-                <a class="button" href="/register">Registrieren</a>
-            `
-        }
-    </div>
-
+</div>
 </nav>
-
-<div class="container">
-
-${notices}
 
 ${content}
 
-</div>
-
 <footer class="footer">
-    North Bot V2 ·
-    <a href="${DISCORD_INVITE}" target="_blank">
-        Discord
-    </a>
+    North Bot · Discord Community ·
+    <a href="${DISCORD_INVITE}" target="_blank">Discord</a>
 </footer>
 
 </body>
-</html>
-`;
+</html>`;
 }
 
 /*
 ========================================================
- HOME
+ STATUS
+========================================================
+*/
+
+function statusHTML() {
+    const settings = readJSON(FILES.settings, {
+        maintenance: { enabled: false },
+        outage: { enabled: false }
+    });
+
+    let html = "";
+
+    if (settings.maintenance.enabled) {
+        html += `
+        <div class="status maintenance">
+            <strong>Wartung</strong><br>
+            ${escapeHTML(settings.maintenance.title)}<br>
+            <span class="small">
+                ${escapeHTML(settings.maintenance.text)}
+            </span>
+        </div>
+        `;
+    }
+
+    if (settings.outage.enabled) {
+        html += `
+        <div class="status outage">
+            <strong>Störung</strong><br>
+            ${escapeHTML(settings.outage.title)}<br>
+            <span class="small">
+                ${escapeHTML(settings.outage.text)}
+            </span>
+        </div>
+        `;
+    }
+
+    return html;
+}
+
+/*
+========================================================
+ STARTSEITE
 ========================================================
 */
 
 app.get("/", (req, res) => {
     const user = getCurrentUser(req);
 
-    if (user && user._banned) {
-        return res.redirect("/banned");
-    }
-
-    res.send(
-        page(
-            "Start",
-            req,
-            `
-            <section class="hero">
+    res.send(page(
+        "Startseite",
+        `
+        <section class="hero">
+            <div class="hero-inner">
+                ${statusHTML()}
 
                 <h1>North Bot</h1>
 
                 <p>
-                    Webseite für Community, Support,
-                    Bewerbungen, Coins und Teamverwaltung.
+                    Community-Webseite für North Bot.
+                    Konten, Tickets, Coins, Shop, Gewinnspiele,
+                    Bewerbungen und Verwaltung an einem Ort.
                 </p>
 
-                <div class="actions">
-                    ${
-                        user
-                        ? `
-                            <a class="button" href="/tickets">
-                                Support öffnen
-                            </a>
-
-                            <a class="button secondary" href="/profile">
-                                Profil
-                            </a>
-                        `
-                        : `
-                            <a class="button" href="/register">
-                                Konto erstellen
-                            </a>
-
-                            <a class="button secondary" href="/login">
-                                Anmelden
-                            </a>
-                        `
-                    }
-
-                    <a
-                        class="button secondary"
-                        href="${DISCORD_INVITE}"
-                        target="_blank"
-                    >
-                        Discord
+                ${
+                    user
+                    ? `
+                    <a class="btn" href="/dashboard">
+                        Zum Dashboard
                     </a>
-                </div>
+                    `
+                    : `
+                    <a class="btn" href="/register">
+                        Konto erstellen
+                    </a>
 
-            </section>
+                    <a class="btn gray" href="/login">
+                        Einloggen
+                    </a>
+                    `
+                }
+            </div>
+        </section>
+
+        <div class="container">
 
             <div class="grid">
 
                 <div class="card">
-                    <h3>Support</h3>
+                    <h3>Tickets</h3>
                     <p class="muted">
-                        Erstelle ein Ticket und verwalte
-                        deine Support-Anfragen.
+                        Erstelle Support-Tickets und behalte deine Anfragen
+                        im Blick.
                     </p>
                 </div>
 
                 <div class="card">
                     <h3>Coins</h3>
                     <p class="muted">
-                        Sammle Coins, löse Codes ein
-                        und kaufe Produkte.
-                    </p>
-                </div>
-
-                <div class="card">
-                    <h3>Bewerbungen</h3>
-                    <p class="muted">
-                        Bewirb dich als Moderator
-                        oder Developer.
+                        Sammle Coins und löse Codes ein.
                     </p>
                 </div>
 
                 <div class="card">
                     <h3>Community</h3>
                     <p class="muted">
-                        Chat, Gewinnspiele und
-                        weitere Community-Systeme.
+                        Chat, Gewinnspiele und Bewerbungen.
                     </p>
                 </div>
 
             </div>
-            `
-        )
-    );
+
+        </div>
+        `,
+        user
+    ));
 });
 
 /*
 ========================================================
- REGISTER
+ REGISTRIERUNG
 ========================================================
 */
 
@@ -6321,147 +943,128 @@ app.get("/register", (req, res) => {
     const user = getCurrentUser(req);
 
     if (user) {
-        return res.redirect("/");
+        return res.redirect("/dashboard");
     }
 
-    res.send(
-        page(
-            "Registrieren",
-            req,
-            `
-            <div class="card form">
+    res.send(page(
+        "Registrieren",
+        `
+        <div class="container">
 
-                <h1>Registrieren</h1>
+            <div class="form card">
+
+                <h1>Konto erstellen</h1>
 
                 <p class="muted">
-                    Erstelle dein North-Bot-Konto.
+                    Erstelle dein North-Bot-Webkonto.
                 </p>
 
                 <form method="POST" action="/register">
 
-                    <label>Benutzername</label>
+                    <label>Name</label>
                     <input
-                        name="username"
+                        name="name"
+                        maxlength="40"
                         required
-                        minlength="2"
-                        maxlength="32"
-                        autocomplete="username"
                     >
 
                     <label>E-Mail</label>
                     <input
                         type="email"
                         name="email"
+                        maxlength="120"
                         required
-                        autocomplete="email"
                     >
 
                     <label>Passwort</label>
                     <input
                         type="password"
                         name="password"
-                        required
                         minlength="6"
-                        autocomplete="new-password"
+                        required
                     >
 
-                    <button class="button" type="submit">
-                        Konto erstellen
+                    <button class="btn" type="submit">
+                        Registrieren
                     </button>
 
                 </form>
 
-                <hr>
-
                 <p class="small muted">
                     Bereits registriert?
-                    <a href="/login">Jetzt anmelden</a>
+                    <a href="/login">Einloggen</a>
                 </p>
 
             </div>
-            `
-        )
-    );
+
+        </div>
+        `
+    ));
 });
 
 app.post("/register", (req, res) => {
-    const username = String(req.body.username || "").trim();
-    const email = String(req.body.email || "").trim().toLowerCase();
+    const name = clean(req.body.name, 40);
+    const email = clean(req.body.email, 120).toLowerCase();
     const password = String(req.body.password || "");
 
-    if (
-        username.length < 2 ||
-        username.length > 32 ||
-        password.length < 6 ||
-        !email.includes("@")
-    ) {
-        return res.status(400).send(
-            page(
-                "Fehler",
-                req,
-                `
-                <div class="card">
-                    <h1>Registrierung fehlgeschlagen</h1>
-                    <p>
-                        Bitte überprüfe deine Angaben.
-                    </p>
-                    <a class="button" href="/register">
-                        Zurück
-                    </a>
+    if (!name || !email || password.length < 6) {
+        return res.send(page(
+            "Fehler",
+            `
+            <div class="container">
+                <div class="alert red">
+                    Bitte alle Felder ausfüllen.
+                    Das Passwort muss mindestens 6 Zeichen haben.
                 </div>
-                `
-            )
-        );
+                <a class="btn" href="/register">Zurück</a>
+            </div>
+            `
+        ));
     }
 
-    const users = getUsers();
+    const users = readJSON(FILES.users, []);
 
-    if (
-        users.some(
-            u =>
-                String(u.email).toLowerCase() === email
-        )
-    ) {
-        return res.status(409).send(
-            page(
-                "Fehler",
-                req,
-                `
-                <div class="card">
-                    <h1>E-Mail bereits vorhanden</h1>
-                    <a class="button" href="/login">
-                        Zum Login
-                    </a>
+    if (users.some(u => u.email === email)) {
+        return res.send(page(
+            "Fehler",
+            `
+            <div class="container">
+                <div class="alert red">
+                    Diese E-Mail-Adresse ist bereits registriert.
                 </div>
-                `
-            )
-        );
+                <a class="btn" href="/login">Zum Login</a>
+            </div>
+            `
+        ));
     }
 
-    const newUser = createUser(
-        username,
+    const user = {
+        id: id("user"),
+        name,
         email,
-        password,
-        "user"
-    );
+        password: hashPassword(password),
+        coins: 0,
+        role: isAdminEmail(email) ? "owner" : "user",
+        banned: false,
+        banReason: "",
+        banUntil: null,
+        dailyLastClaim: null,
+        createdAt: Date.now()
+    };
 
-    if (!newUser) {
-        return res.status(500).send("Registrierung fehlgeschlagen.");
-    }
+    users.push(user);
+
+    writeJSON(FILES.users, users);
 
     addLog(
-        "user_register",
-        newUser,
-        {
-            email: newUser.email
-        }
+        "register",
+        `Neues Konto erstellt: ${email}`,
+        user
     );
 
-    const token = createSession(newUser.id);
+    loginUser(res, user);
 
-    setLoginCookie(res, token);
-
-    res.redirect("/");
+    res.redirect("/dashboard");
 });
 
 /*
@@ -6473,23 +1076,18 @@ app.post("/register", (req, res) => {
 app.get("/login", (req, res) => {
     const user = getCurrentUser(req);
 
-    if (user && !user._banned) {
-        return res.redirect("/");
+    if (user) {
+        return res.redirect("/dashboard");
     }
 
-    res.send(
-        page(
-            "Login",
-            req,
-            `
-            <div class="card form">
+    res.send(page(
+        "Login",
+        `
+        <div class="container">
 
-                <h1>Anmelden</h1>
+            <div class="form card">
 
-                <p class="muted">
-                    Du bleibst nach dem Login
-                    30 Tage angemeldet.
-                </p>
+                <h1>Login</h1>
 
                 <form method="POST" action="/login">
 
@@ -6498,7 +1096,6 @@ app.get("/login", (req, res) => {
                         type="email"
                         name="email"
                         required
-                        autocomplete="email"
                     >
 
                     <label>Passwort</label>
@@ -6506,16 +1103,13 @@ app.get("/login", (req, res) => {
                         type="password"
                         name="password"
                         required
-                        autocomplete="current-password"
                     >
 
-                    <button class="button" type="submit">
-                        Anmelden
+                    <button class="btn" type="submit">
+                        Einloggen
                     </button>
 
                 </form>
-
-                <hr>
 
                 <p class="small muted">
                     Noch kein Konto?
@@ -6523,76 +1117,65 @@ app.get("/login", (req, res) => {
                 </p>
 
             </div>
-            `
-        )
-    );
+
+        </div>
+        `
+    ));
 });
 
 app.post("/login", (req, res) => {
-    const email = String(req.body.email || "")
-        .trim()
-        .toLowerCase();
-
+    const email = clean(req.body.email, 120).toLowerCase();
     const password = String(req.body.password || "");
 
-    const users = getUsers();
+    const users = readJSON(FILES.users, []);
 
     const user = users.find(
-        u =>
-            String(u.email).toLowerCase() === email
+        u => u.email === email
     );
 
     if (!user || !verifyPassword(password, user.password)) {
-        return res.status(401).send(
-            page(
-                "Login",
-                req,
-                `
-                <div class="card form">
-                    <h1>Login fehlgeschlagen</h1>
-
-                    <p class="danger-text">
-                        E-Mail oder Passwort ist falsch.
-                    </p>
-
-                    <a class="button" href="/login">
-                        Erneut versuchen
-                    </a>
-                </div>
-                `
-            )
+        addLog(
+            "login_failed",
+            `Fehlgeschlagener Login: ${email}`
         );
+
+        return res.send(page(
+            "Login fehlgeschlagen",
+            `
+            <div class="container">
+                <div class="alert red">
+                    E-Mail oder Passwort ist falsch.
+                </div>
+
+                <a class="btn" href="/login">
+                    Erneut versuchen
+                </a>
+            </div>
+            `
+        ));
     }
 
-    if (
-        user.bannedUntil &&
-        user.bannedUntil > Date.now()
-    ) {
-        return res.redirect("/banned");
+    if (user.banned) {
+        if (!user.banUntil || Date.now() < user.banUntil) {
+            return res.redirect("/banned");
+        }
+
+        user.banned = false;
+        user.banUntil = null;
+        user.banReason = "";
+
+        writeJSON(FILES.users, users);
     }
 
-    if (
-        user.bannedUntil &&
-        user.bannedUntil <= Date.now()
-    ) {
-        user.bannedUntil = null;
-        user.banReason = null;
-        saveUsers(users);
-    }
-
-    user.kicked = false;
-    saveUsers(users);
-
-    const token = createSession(user.id);
-
-    setLoginCookie(res, token);
+    loginUser(res, user);
 
     addLog(
         "login",
+        `Login: ${email}`,
         user
     );
 
-    res.redirect("/");
+    res.redirect("/dashboard");
 });
 
 /*
@@ -6607,79 +1190,242 @@ app.get("/logout", (req, res) => {
     if (user) {
         addLog(
             "logout",
+            `Logout: ${user.email}`,
             user
         );
     }
 
-    destroySession(req);
-    clearLoginCookie(res);
+    logoutUser(req, res);
 
     res.redirect("/login");
 });
 
 /*
 ========================================================
- BANNED
+ BANNED SEITE
 ========================================================
 */
 
 app.get("/banned", (req, res) => {
     const user = getCurrentUser(req);
 
-    if (!user || !user._banned) {
-        return res.redirect("/");
+    let reason = "Kein Grund angegeben.";
+    let until = "";
+
+    if (user) {
+        reason = user.banReason || reason;
+
+        if (user.banUntil) {
+            until = `
+            <p>
+                Ban endet:
+                <strong>${formatDate(user.banUntil)}</strong>
+            </p>
+            `;
+        }
     }
 
-    const users = getUsers();
+    res.send(page(
+        "Gebannt",
+        `
+        <div class="container">
 
-    const realUser = users.find(
-        u => u.id === user.id
-    );
-
-    const until = realUser.bannedUntil
-        ? new Date(realUser.bannedUntil).toLocaleString("de-DE")
-        : "Unbekannt";
-
-    res.send(
-        page(
-            "Gebannt",
-            req,
-            `
             <div class="card center">
 
                 <h1>Account gesperrt</h1>
 
                 <p>
-                    Dein Zugang zur Webseite wurde
-                    vorübergehend gesperrt.
+                    Dein Webseitenkonto wurde gesperrt.
                 </p>
+
+                <p>
+                    <strong>Grund:</strong><br>
+                    ${escapeHTML(reason)}
+                </p>
+
+                ${until}
 
                 <p class="muted">
-                    Grund:
-                    ${escapeHTML(realUser.banReason || "Kein Grund angegeben")}
+                    Wenn du glaubst, dass der Ban falsch ist,
+                    gehe auf unseren Discord und wende dich an das Team.
                 </p>
 
-                <p class="muted">
-                    Ende:
-                    ${escapeHTML(until)}
-                </p>
+                <a
+                    class="btn"
+                    href="${DISCORD_INVITE}"
+                    target="_blank"
+                >
+                    Auf Discord entsperren lassen
+                </a>
 
-                <div class="actions" style="justify-content:center">
+            </div>
 
-                    <a
-                        class="button"
-                        href="${DISCORD_INVITE}"
-                        target="_blank"
-                    >
-                        Auf Discord gehen
-                    </a>
+        </div>
+        `
+    ));
+});
 
+/*
+========================================================
+ DASHBOARD
+========================================================
+*/
+
+app.get("/dashboard", requireLogin, (req, res) => {
+    const user = req.user;
+
+    const tickets = readJSON(FILES.tickets, [])
+        .filter(t => t.userId === user.id);
+
+    const applications = readJSON(FILES.applications, [])
+        .filter(a => a.userId === user.id);
+
+    res.send(page(
+        "Dashboard",
+        `
+        <div class="container">
+
+            ${statusHTML()}
+
+            <h1>Dashboard</h1>
+
+            <p class="muted">
+                Willkommen zurück, ${escapeHTML(user.name)}.
+            </p>
+
+            <div class="grid">
+
+                <div class="card">
+                    <div class="muted">Coins</div>
+                    <div class="stat coin">
+                        ${Number(user.coins || 0)}
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="muted">Tickets</div>
+                    <div class="stat">
+                        ${tickets.length}
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="muted">Bewerbungen</div>
+                    <div class="stat">
+                        ${applications.length}
+                    </div>
                 </div>
 
             </div>
-            `
-        )
+
+            <div class="card">
+
+                <h2>Daily Coins</h2>
+
+                <p class="muted">
+                    Alle 14 Stunden kannst du 100 Coins abholen.
+                </p>
+
+                <form method="POST" action="/daily">
+                    <button class="btn green">
+                        100 Coins abholen
+                    </button>
+                </form>
+
+            </div>
+
+            <div class="card">
+
+                <h2>Schnellzugriff</h2>
+
+                <a class="btn" href="/tickets">
+                    Tickets
+                </a>
+
+                <a class="btn gray" href="/chat">
+                    Chat
+                </a>
+
+                <a class="btn gray" href="/shop">
+                    Coin-Shop
+                </a>
+
+                <a class="btn gray" href="/applications">
+                    Bewerbung
+                </a>
+
+            </div>
+
+        </div>
+        `,
+        user
+    ));
+});
+
+/*
+========================================================
+ DAILY 100 COINS / 14 STUNDEN
+========================================================
+*/
+
+app.post("/daily", requireLogin, (req, res) => {
+    const users = readJSON(FILES.users, []);
+
+    const user = users.find(
+        u => u.id === req.user.id
     );
+
+    const now = Date.now();
+    const cooldown = 14 * 60 * 60 * 1000;
+
+    if (
+        user.dailyLastClaim &&
+        now - user.dailyLastClaim < cooldown
+    ) {
+        const remaining =
+            cooldown - (now - user.dailyLastClaim);
+
+        const hours = Math.floor(
+            remaining / 3600000
+        );
+
+        const minutes = Math.floor(
+            (remaining % 3600000) / 60000
+        );
+
+        return res.send(page(
+            "Daily",
+            `
+            <div class="container">
+
+                <div class="alert orange">
+                    Du kannst deine 100 Coins noch nicht abholen.
+                    <br>
+                    Noch ungefähr ${hours}h ${minutes}min.
+                </div>
+
+                <a class="btn" href="/dashboard">
+                    Zurück
+                </a>
+
+            </div>
+            `,
+            req.user
+        ));
+    }
+
+    user.coins = Number(user.coins || 0) + 100;
+    user.dailyLastClaim = now;
+
+    writeJSON(FILES.users, users);
+
+    addLog(
+        "daily",
+        `${user.email} hat 100 Daily-Coins erhalten.`,
+        user
+    );
+
+    res.redirect("/dashboard");
 });
 
 /*
@@ -6691,148 +1437,164 @@ app.get("/banned", (req, res) => {
 app.get("/profile", requireLogin, (req, res) => {
     const user = req.user;
 
-    res.send(
-        page(
-            "Profil",
-            req,
-            `
-            <div class="grid">
+    res.send(page(
+        "Profil",
+        `
+        <div class="container">
 
-                <div class="card">
+            <div class="card">
 
-                    <h1>Profil</h1>
+                <h1>Mein Profil</h1>
 
-                    <p>
-                        <strong>Name:</strong>
-                        ${escapeHTML(user.username)}
-                    </p>
+                <p>
+                    <span class="badge">
+                        ${escapeHTML(user.role || "user")}
+                    </span>
+                </p>
 
-                    <p>
-                        <strong>E-Mail:</strong>
-                        ${escapeHTML(user.email)}
-                    </p>
+                <p class="muted">
+                    E-Mail: ${escapeHTML(user.email)}
+                </p>
 
-                    <p>
-                        <strong>Rolle:</strong>
-                        <span class="badge ${escapeHTML(user.role)}">
-                            ${escapeHTML(user.role)}
-                        </span>
-                    </p>
-
-                    <p>
-                        <strong>Coins:</strong>
+                <p>
+                    Coins:
+                    <strong class="coin">
                         ${Number(user.coins || 0)}
-                    </p>
-
-                    <p>
-                        <strong>Beta-Nummer:</strong>
-                        ${escapeHTML(user.betaNumber || "-")}
-                    </p>
-
-                </div>
-
-                <div class="card form">
-
-                    <h2>Profil bearbeiten</h2>
-
-                    <form method="POST" action="/profile">
-
-                        <label>Benutzername</label>
-
-                        <input
-                            name="username"
-                            value="${escapeHTML(user.username)}"
-                            required
-                            minlength="2"
-                            maxlength="32"
-                        >
-
-                        <label>Neue E-Mail</label>
-
-                        <input
-                            type="email"
-                            name="email"
-                            value="${escapeHTML(user.email)}"
-                            required
-                        >
-
-                        <label>
-                            Neues Passwort
-                            <span class="muted">
-                                (leer lassen = unverändert)
-                            </span>
-                        </label>
-
-                        <input
-                            type="password"
-                            name="password"
-                            minlength="6"
-                        >
-
-                        <button class="button" type="submit">
-                            Speichern
-                        </button>
-
-                    </form>
-
-                </div>
+                    </strong>
+                </p>
 
             </div>
-            `
-        )
-    );
+
+            <div class="card">
+
+                <h2>Profil bearbeiten</h2>
+
+                <form method="POST" action="/profile">
+
+                    <label>Name</label>
+
+                    <input
+                        name="name"
+                        maxlength="40"
+                        value="${escapeHTML(user.name)}"
+                        required
+                    >
+
+                    <button class="btn">
+                        Speichern
+                    </button>
+
+                </form>
+
+            </div>
+
+            <div class="card">
+
+                <h2>Passwort ändern</h2>
+
+                <form method="POST" action="/profile/password">
+
+                    <label>Aktuelles Passwort</label>
+
+                    <input
+                        type="password"
+                        name="oldPassword"
+                        required
+                    >
+
+                    <label>Neues Passwort</label>
+
+                    <input
+                        type="password"
+                        name="newPassword"
+                        minlength="6"
+                        required
+                    >
+
+                    <button class="btn">
+                        Passwort ändern
+                    </button>
+
+                </form>
+
+            </div>
+
+        </div>
+        `,
+        user
+    ));
 });
 
 app.post("/profile", requireLogin, (req, res) => {
-    const users = getUsers();
+    const users = readJSON(FILES.users, []);
 
     const user = users.find(
         u => u.id === req.user.id
     );
 
-    if (!user) {
-        return res.redirect("/logout");
-    }
+    user.name = clean(req.body.name, 40);
 
-    const username = String(
-        req.body.username || user.username
-    ).trim();
-
-    const email = String(
-        req.body.email || user.email
-    ).trim().toLowerCase();
-
-    const password = String(
-        req.body.password || ""
-    );
-
-    if (username.length < 2) {
-        return res.status(400).send("Name zu kurz.");
-    }
-
-    const emailTaken = users.some(
-        u =>
-            u.id !== user.id &&
-            String(u.email).toLowerCase() === email
-    );
-
-    if (emailTaken) {
-        return res.status(409).send(
-            "Diese E-Mail wird bereits verwendet."
-        );
-    }
-
-    user.username = username;
-    user.email = email;
-
-    if (password) {
-        user.password = hashPassword(password);
-    }
-
-    saveUsers(users);
+    writeJSON(FILES.users, users);
 
     addLog(
-        "profile_update",
+        "profile",
+        `${user.email} hat den Namen geändert.`,
+        user
+    );
+
+    res.redirect("/profile");
+});
+
+app.post("/profile/password", requireLogin, (req, res) => {
+    const oldPassword = String(
+        req.body.oldPassword || ""
+    );
+
+    const newPassword = String(
+        req.body.newPassword || ""
+    );
+
+    if (newPassword.length < 6) {
+        return res.send(page(
+            "Fehler",
+            `
+            <div class="container">
+                <div class="alert red">
+                    Das neue Passwort muss mindestens 6 Zeichen haben.
+                </div>
+            </div>
+            `,
+            req.user
+        ));
+    }
+
+    const users = readJSON(FILES.users, []);
+
+    const user = users.find(
+        u => u.id === req.user.id
+    );
+
+    if (!verifyPassword(oldPassword, user.password)) {
+        return res.send(page(
+            "Fehler",
+            `
+            <div class="container">
+                <div class="alert red">
+                    Das aktuelle Passwort ist falsch.
+                </div>
+            </div>
+            `,
+            req.user
+        ));
+    }
+
+    user.password = hashPassword(newPassword);
+
+    writeJSON(FILES.users, users);
+
+    addLog(
+        "password",
+        `${user.email} hat das Passwort geändert.`,
         user
     );
 
@@ -6846,43 +1608,104 @@ app.post("/profile", requireLogin, (req, res) => {
 */
 
 app.get("/tickets", requireLogin, (req, res) => {
-    const tickets = getTickets();
+    const tickets = readJSON(FILES.tickets, [])
+        .filter(t => {
+            if (isAdminEmail(req.user.email)) {
+                return true;
+            }
 
-    const ownTickets = tickets
-        .filter(
-            t =>
-                t.userId === req.user.id ||
-                isAdmin(req.user) ||
-                isTeam(req.user)
-        )
-        .sort(
-            (a, b) =>
-                new Date(b.createdAt) -
-                new Date(a.createdAt)
-        );
+            return t.userId === req.user.id;
+        });
 
-    res.send(
-        page(
-            "Tickets",
-            req,
-            `
+    res.send(page(
+        "Tickets",
+        `
+        <div class="container">
+
             <div class="card">
 
-                <h1>Support</h1>
+                <h1>Tickets</h1>
 
                 <p class="muted">
-                    Erstelle ein Support-Ticket.
+                    Deine Tickets und Tickets, auf die du als Admin Zugriff hast.
                 </p>
 
-                <form method="POST" action="/tickets/create">
+                <a class="btn" href="/tickets/new">
+                    Neues Ticket
+                </a>
 
-                    <label>Betreff</label>
+            </div>
+
+            ${
+                tickets.length
+                ? tickets.map(ticket => `
+                    <div class="ticket">
+
+                        <h3>
+                            ${escapeHTML(ticket.title)}
+                        </h3>
+
+                        <p class="muted">
+                            ${escapeHTML(ticket.category)}
+                            · ${escapeHTML(ticket.status)}
+                            · ${formatDate(ticket.createdAt)}
+                        </p>
+
+                        <a
+                            class="btn gray"
+                            href="/tickets/${ticket.id}"
+                        >
+                            Ticket öffnen
+                        </a>
+
+                    </div>
+                `).join("")
+                : `
+                <div class="card">
+                    <p class="muted">
+                        Noch keine Tickets vorhanden.
+                    </p>
+                </div>
+                `
+            }
+
+        </div>
+        `,
+        req.user
+    ));
+});
+
+app.get("/tickets/new", requireLogin, (req, res) => {
+    res.send(page(
+        "Neues Ticket",
+        `
+        <div class="container">
+
+            <div class="form card">
+
+                <h1>Neues Ticket</h1>
+
+                <form method="POST" action="/tickets/new">
+
+                    <label>Titel</label>
 
                     <input
-                        name="subject"
+                        name="title"
                         maxlength="100"
                         required
                     >
+
+                    <label>Kategorie</label>
+
+                    <select name="category">
+
+                        <option>Support</option>
+                        <option>Technik</option>
+                        <option>Bestellung</option>
+                        <option>Developer</option>
+                        <option>Sonstiges</option>
+
+                    </select>
 
                     <label>Nachricht</label>
 
@@ -6892,7 +1715,7 @@ app.get("/tickets", requireLogin, (req, res) => {
                         required
                     ></textarea>
 
-                    <button class="button" type="submit">
+                    <button class="btn">
                         Ticket erstellen
                     </button>
 
@@ -6900,1174 +1723,247 @@ app.get("/tickets", requireLogin, (req, res) => {
 
             </div>
 
-            <br>
-
-            <div class="card">
-
-                <h2>Meine Tickets</h2>
-
-                ${
-                    ownTickets.length === 0
-                    ? `
-                        <p class="muted">
-                            Noch keine Tickets.
-                        </p>
-                    `
-                    : `
-                        <div class="table-wrap">
-
-                        <table>
-
-                            <tr>
-                                <th>Nummer</th>
-                                <th>Betreff</th>
-                                <th>Status</th>
-                                <th>Erstellt</th>
-                                <th></th>
-                            </tr>
-
-                            ${ownTickets.map(t => `
-                                <tr>
-
-                                    <td>
-                                        ${escapeHTML(t.number)}
-                                    </td>
-
-                                    <td>
-                                        ${escapeHTML(t.subject)}
-                                    </td>
-
-                                    <td>
-                                        <span class="badge">
-                                            ${escapeHTML(t.status)}
-                                        </span>
-                                    </td>
-
-                                    <td>
-                                        ${new Date(t.createdAt).toLocaleString("de-DE")}
-                                    </td>
-
-                                    <td>
-                                        <a
-                                            class="button secondary"
-                                            href="/tickets/${encodeURIComponent(t.id)}"
-                                        >
-                                            Öffnen
-                                        </a>
-                                    </td>
-
-                                </tr>
-                            `).join("")}
-
-                        </table>
-
-                        </div>
-                    `
-                }
-
-            </div>
-            `
-        )
-    );
+        </div>
+        `,
+        req.user
+    ));
 });
 
-app.post("/tickets/create", requireLogin, (req, res) => {
-    const subject = String(
-        req.body.subject || ""
-    ).trim();
-
-    const message = String(
-        req.body.message || ""
-    ).trim();
-
-    if (!subject || !message) {
-        return res.status(400).send(
-            "Betreff und Nachricht fehlen."
-        );
-    }
+app.post("/tickets/new", requireLogin, (req, res) => {
+    const tickets = readJSON(FILES.tickets, []);
 
     const ticket = {
         id: id("ticket"),
-        number: ticketNumber(),
+        ticketNumber: `T-${Date.now().toString().slice(-8)}`,
         userId: req.user.id,
-        username: req.user.username,
-        subject,
-        message,
+        userName: req.user.name,
+        title: clean(req.body.title, 100),
+        category: clean(req.body.category, 50),
         status: "offen",
-        claimedBy: null,
-        claimedByName: null,
-        createdAt: new Date().toISOString(),
+        createdAt: Date.now(),
         closedAt: null,
         messages: [
             {
                 id: id("message"),
                 userId: req.user.id,
-                username: req.user.username,
-                message,
-                createdAt: new Date().toISOString()
+                userName: req.user.name,
+                message: clean(req.body.message, 5000),
+                createdAt: Date.now()
             }
         ]
     };
 
-    const tickets = getTickets();
-
     tickets.push(ticket);
 
-    saveTickets(tickets);
+    writeJSON(FILES.tickets, tickets);
 
     addLog(
         "ticket_create",
+        `Ticket ${ticket.ticketNumber} erstellt.`,
         req.user,
         {
-            ticket: ticket.number
+            ticketId: ticket.id
         }
     );
 
-    /*
-      Der Bot kann tickets.json überwachen und daraus
-      den Discord-Ticketkanal erstellen.
-    */
-
-    res.redirect(
-        "/tickets/" +
-        encodeURIComponent(ticket.id)
-    );
+    res.redirect(`/tickets/${ticket.id}`);
 });
 
 app.get("/tickets/:id", requireLogin, (req, res) => {
-    const tickets = getTickets();
+    const tickets = readJSON(FILES.tickets, []);
 
     const ticket = tickets.find(
         t => t.id === req.params.id
     );
 
     if (!ticket) {
-        return res.status(404).send("Ticket nicht gefunden.");
+        return res.status(404).send(page(
+            "Ticket nicht gefunden",
+            `
+            <div class="container">
+                <div class="card">
+                    <h1>Ticket nicht gefunden</h1>
+                </div>
+            </div>
+            `,
+            req.user
+        ));
     }
 
     const allowed =
-        ticket.userId === req.user.id ||
-        isTeam(req.user);
+        isAdminEmail(req.user.email) ||
+        ticket.userId === req.user.id;
 
     if (!allowed) {
-        return res.status(403).send("Kein Zugriff.");
+        return res.status(403).send("Kein Zugriff");
     }
 
-    res.send(
-        page(
-            ticket.number,
-            req,
-            `
+    res.send(page(
+        `Ticket ${ticket.ticketNumber}`,
+        `
+        <div class="container">
+
             <div class="card">
 
-                <h1>
-                    ${escapeHTML(ticket.subject)}
-                </h1>
+                <h1>${escapeHTML(ticket.title)}</h1>
 
                 <p class="muted">
-                    ${escapeHTML(ticket.number)}
+                    ${escapeHTML(ticket.ticketNumber)}
+                    · ${escapeHTML(ticket.category)}
+                    · ${escapeHTML(ticket.status)}
                 </p>
 
-                <p>
-                    Status:
-                    <span class="badge">
-                        ${escapeHTML(ticket.status)}
-                    </span>
-                </p>
+            </div>
+
+            <div class="card">
 
                 ${
-                    ticket.claimedByName
-                    ? `
-                        <p class="small">
-                            Übernommen von:
-                            <strong>
-                                ${escapeHTML(ticket.claimedByName)}
-                            </strong>
-                        </p>
-                    `
-                    : ""
-                }
-
-                <div class="chat">
-
-                    ${ticket.messages.map(m => `
+                    ticket.messages.map(m => `
                         <div class="message">
 
-                            <strong>
-                                ${escapeHTML(m.username)}
-                            </strong>
+                            <div class="message-name">
+                                ${escapeHTML(m.userName)}
+                            </div>
 
-                            <span class="muted small">
-                                ${new Date(m.createdAt).toLocaleString("de-DE")}
-                            </span>
+                            <div class="message-time">
+                                ${formatDate(m.createdAt)}
+                            </div>
 
-                            <div>
+                            <p>
                                 ${escapeHTML(m.message)}
-                            </div>
-
-                        </div>
-                    `).join("")}
-
-                </div>
-
-                ${
-                    ticket.status !== "geschlossen"
-                    ? `
-                    <form method="POST" action="/tickets/${encodeURIComponent(ticket.id)}/message">
-
-                        <label>Antwort</label>
-
-                        <textarea
-                            name="message"
-                            required
-                            maxlength="5000"
-                        ></textarea>
-
-                        <button class="button" type="submit">
-                            Senden
-                        </button>
-
-                    </form>
-                    `
-                    : `
-                    <p class="muted">
-                        Dieses Ticket ist geschlossen.
-                    </p>
-                    `
-                }
-
-                ${
-                    isTeam(req.user) &&
-                    ticket.status !== "geschlossen"
-                    ? `
-                    <hr>
-
-                    <div class="actions">
-
-                        ${
-                            ticket.claimedBy
-                            ? `
-                                <form
-                                    method="POST"
-                                    action="/tickets/${encodeURIComponent(ticket.id)}/unclaim"
-                                >
-                                    <button class="button secondary">
-                                        Nicht übernehmen
-                                    </button>
-                                </form>
-                            `
-                            : `
-                                <form
-                                    method="POST"
-                                    action="/tickets/${encodeURIComponent(ticket.id)}/claim"
-                                >
-                                    <button class="button">
-                                        Übernehmen
-                                    </button>
-                                </form>
-                            `
-                        }
-
-                        <form
-                            method="POST"
-                            action="/tickets/${encodeURIComponent(ticket.id)}/close"
-                        >
-                            <button class="button danger">
-                                Schließen
-                            </button>
-                        </form>
-
-                    </div>
-                    `
-                    : ""
-                }
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/tickets/:id/message", requireLogin, (req, res) => {
-    const tickets = getTickets();
-
-    const ticket = tickets.find(
-        t => t.id === req.params.id
-    );
-
-    if (!ticket) {
-        return res.status(404).send("Nicht gefunden.");
-    }
-
-    if (
-        ticket.userId !== req.user.id &&
-        !isTeam(req.user)
-    ) {
-        return res.status(403).send("Kein Zugriff.");
-    }
-
-    if (ticket.status === "geschlossen") {
-        return res.status(400).send("Ticket geschlossen.");
-    }
-
-    const message = String(
-        req.body.message || ""
-    ).trim();
-
-    if (!message) {
-        return res.redirect(
-            "/tickets/" +
-            encodeURIComponent(ticket.id)
-        );
-    }
-
-    ticket.messages.push({
-        id: id("message"),
-        userId: req.user.id,
-        username: req.user.username,
-        message,
-        createdAt: new Date().toISOString()
-    });
-
-    saveTickets(tickets);
-
-    addLog(
-        "ticket_message",
-        req.user,
-        {
-            ticket: ticket.number
-        }
-    );
-
-    res.redirect(
-        "/tickets/" +
-        encodeURIComponent(ticket.id)
-    );
-});
-
-app.post("/tickets/:id/claim", requireTeam, (req, res) => {
-    const tickets = getTickets();
-
-    const ticket = tickets.find(
-        t => t.id === req.params.id
-    );
-
-    if (!ticket) {
-        return res.status(404).send("Nicht gefunden.");
-    }
-
-    ticket.claimedBy = req.user.id;
-    ticket.claimedByName = req.user.username;
-
-    saveTickets(tickets);
-
-    addLog(
-        "ticket_claim",
-        req.user,
-        {
-            ticket: ticket.number
-        }
-    );
-
-    res.redirect(
-        "/tickets/" +
-        encodeURIComponent(ticket.id)
-    );
-});
-
-app.post("/tickets/:id/unclaim", requireTeam, (req, res) => {
-    const tickets = getTickets();
-
-    const ticket = tickets.find(
-        t => t.id === req.params.id
-    );
-
-    if (!ticket) {
-        return res.status(404).send("Nicht gefunden.");
-    }
-
-    ticket.claimedBy = null;
-    ticket.claimedByName = null;
-
-    saveTickets(tickets);
-
-    addLog(
-        "ticket_unclaim",
-        req.user,
-        {
-            ticket: ticket.number
-        }
-    );
-
-    res.redirect(
-        "/tickets/" +
-        encodeURIComponent(ticket.id)
-    );
-});
-
-app.post("/tickets/:id/close", requireTeam, (req, res) => {
-    const tickets = getTickets();
-
-    const ticket = tickets.find(
-        t => t.id === req.params.id
-    );
-
-    if (!ticket) {
-        return res.status(404).send("Nicht gefunden.");
-    }
-
-    ticket.status = "geschlossen";
-    ticket.closedAt = new Date().toISOString();
-
-    saveTickets(tickets);
-
-    addLog(
-        "ticket_close",
-        req.user,
-        {
-            ticket: ticket.number
-        }
-    );
-
-    res.redirect(
-        "/tickets/" +
-        encodeURIComponent(ticket.id)
-    );
-});
-
-/*
-========================================================
- BEWERBUNGEN
-========================================================
-*/
-
-app.get("/applications", requireLogin, (req, res) => {
-    const applications = getApplications();
-
-    const own = applications.filter(
-        a => a.userId === req.user.id
-    );
-
-    res.send(
-        page(
-            "Bewerbungen",
-            req,
-            `
-            <div class="grid">
-
-                <div class="card form">
-
-                    <h1>Bewerbung</h1>
-
-                    <form method="POST" action="/applications">
-
-                        <label>Bereich</label>
-
-                        <select name="type" required>
-
-                            <option value="moderator">
-                                Moderator
-                            </option>
-
-                            <option value="developer">
-                                Developer
-                            </option>
-
-                        </select>
-
-                        <label>Discord-Name / ID</label>
-
-                        <input
-                            name="discord"
-                            required
-                            maxlength="100"
-                        >
-
-                        <label>Alter</label>
-
-                        <input
-                            name="age"
-                            type="number"
-                            min="1"
-                            max="100"
-                            required
-                        >
-
-                        <label>Erfahrung</label>
-
-                        <textarea
-                            name="experience"
-                            required
-                        ></textarea>
-
-                        <label>Warum möchtest du ins Team?</label>
-
-                        <textarea
-                            name="motivation"
-                            required
-                        ></textarea>
-
-                        <label>Warum sollten wir dich nehmen?</label>
-
-                        <textarea
-                            name="reason"
-                            required
-                        ></textarea>
-
-                        <button class="button" type="submit">
-                            Bewerbung absenden
-                        </button>
-
-                    </form>
-
-                </div>
-
-                <div class="card">
-
-                    <h2>Meine Bewerbungen</h2>
-
-                    ${
-                        own.length === 0
-                        ? `
-                            <p class="muted">
-                                Noch keine Bewerbung.
                             </p>
-                        `
-                        : own.map(a => `
-                            <div class="card">
-
-                                <strong>
-                                    ${escapeHTML(a.number)}
-                                </strong>
-
-                                <p>
-                                    ${escapeHTML(a.type)}
-                                </p>
-
-                                <span class="badge">
-                                    ${escapeHTML(a.status)}
-                                </span>
-
-                            </div>
-                        `).join("")
-                    }
-
-                </div>
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/applications", requireLogin, (req, res) => {
-    const type = String(
-        req.body.type || ""
-    ).trim().toLowerCase();
-
-    if (
-        type !== "moderator" &&
-        type !== "developer"
-    ) {
-        return res.status(400).send("Ungültiger Bereich.");
-    }
-
-    const application = {
-        id: id("application"),
-        number: applicationNumber(),
-        userId: req.user.id,
-        username: req.user.username,
-        type,
-        discord: String(req.body.discord || "").trim(),
-        age: String(req.body.age || "").trim(),
-        experience: String(req.body.experience || "").trim(),
-        motivation: String(req.body.motivation || "").trim(),
-        reason: String(req.body.reason || "").trim(),
-        status: "offen",
-        createdAt: new Date().toISOString(),
-        reviewedBy: null,
-        reviewedAt: null,
-        reviewReason: null
-    };
-
-    const applications = getApplications();
-
-    applications.push(application);
-
-    saveApplications(applications);
-
-    addLog(
-        "application_create",
-        req.user,
-        {
-            application: application.number,
-            type
-        }
-    );
-
-    res.redirect("/applications");
-});
-
-/*
-========================================================
- COINS
-========================================================
-*/
-
-app.get("/coins", requireLogin, (req, res) => {
-    const user = req.user;
-
-    const canDaily =
-        !user.lastDaily ||
-        Date.now() - new Date(user.lastDaily).getTime()
-        >= 14 * 60 * 60 * 1000;
-
-    res.send(
-        page(
-            "Coins",
-            req,
-            `
-            <div class="grid">
-
-                <div class="card">
-
-                    <h1>Coins</h1>
-
-                    <div class="stat">
-                        ${Number(user.coins || 0)}
-                    </div>
-
-                    <p class="muted">
-                        Dein aktueller Kontostand.
-                    </p>
-
-                </div>
-
-                <div class="card">
-
-                    <h2>Daily</h2>
-
-                    <p>
-                        Alle 14 Stunden bekommst du
-                        <strong>100 Coins</strong>.
-                    </p>
-
-                    ${
-                        canDaily
-                        ? `
-                            <form method="POST" action="/coins/daily">
-
-                                <button class="button" type="submit">
-                                    100 Coins abholen
-                                </button>
-
-                            </form>
-                        `
-                        : `
-                            <p class="muted">
-                                Daily bereits abgeholt.
-                            </p>
-                        `
-                    }
-
-                </div>
-
-                <div class="card">
-
-                    <h2>Code einlösen</h2>
-
-                    <form method="POST" action="/coins/redeem">
-
-                        <input
-                            name="code"
-                            placeholder="NORTH-1234-5678"
-                            required
-                        >
-
-                        <button class="button" type="submit">
-                            Einlösen
-                        </button>
-
-                    </form>
-
-                </div>
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/coins/daily", requireLogin, (req, res) => {
-    const users = getUsers();
-
-    const user = users.find(
-        u => u.id === req.user.id
-    );
-
-    if (!user) {
-        return res.redirect("/login");
-    }
-
-    if (
-        user.lastDaily &&
-        Date.now() -
-        new Date(user.lastDaily).getTime()
-        < 14 * 60 * 60 * 1000
-    ) {
-        return res.redirect("/coins");
-    }
-
-    user.coins = Number(user.coins || 0) + 100;
-    user.lastDaily = new Date().toISOString();
-
-    saveUsers(users);
-
-    addLog(
-        "daily_coins",
-        user,
-        {
-            amount: 100
-        }
-    );
-
-    res.redirect("/coins");
-});
-
-app.post("/coins/redeem", requireLogin, (req, res) => {
-    const entered = String(
-        req.body.code || ""
-    ).trim().toUpperCase();
-
-    const codes = getCodes();
-
-    const code = codes.find(
-        c =>
-            String(c.code).toUpperCase() === entered &&
-            c.active !== false
-    );
-
-    if (!code) {
-        return res.status(400).send(
-            page(
-                "Code",
-                req,
-                `
-                <div class="card">
-                    <h1>Code ungültig</h1>
-                    <p>
-                        Dieser Code existiert nicht
-                        oder ist deaktiviert.
-                    </p>
-                    <a class="button" href="/coins">
-                        Zurück
-                    </a>
-                </div>
-                `
-            )
-        );
-    }
-
-    if (
-        code.expiresAt &&
-        new Date(code.expiresAt).getTime() < Date.now()
-    ) {
-        return res.status(400).send(
-            "Dieser Code ist abgelaufen."
-        );
-    }
-
-    if (!Array.isArray(code.usedBy)) {
-        code.usedBy = [];
-    }
-
-    if (code.usedBy.includes(req.user.id)) {
-        return res.status(400).send(
-            "Du hast diesen Code bereits verwendet."
-        );
-    }
-
-    if (
-        code.maxUses &&
-        code.usedBy.length >= Number(code.maxUses)
-    ) {
-        return res.status(400).send(
-            "Dieser Code wurde bereits zu oft verwendet."
-        );
-    }
-
-    const users = getUsers();
-
-    const user = users.find(
-        u => u.id === req.user.id
-    );
-
-    if (!user) {
-        return res.redirect("/login");
-    }
-
-    const amount = Number(code.coins || 0);
-
-    user.coins = Number(user.coins || 0) + amount;
-
-    code.usedBy.push(user.id);
-
-    saveUsers(users);
-    saveCodes(codes);
-
-    addLog(
-        "code_redeem",
-        user,
-        {
-            code: code.code,
-            coins: amount
-        }
-    );
-
-    res.redirect("/coins");
-});
-
-/*
-========================================================
- SHOP
-========================================================
-*/
-
-app.get("/shop", requireLogin, (req, res) => {
-    const products = getShop()
-        .filter(p => p.active !== false);
-
-    res.send(
-        page(
-            "Shop",
-            req,
-            `
-            <div class="card">
-
-                <h1>Coins-Shop</h1>
-
-                <p class="muted">
-                    Coins: ${Number(req.user.coins || 0)}
-                </p>
-
-            </div>
-
-            <br>
-
-            <div class="grid">
-
-                ${
-                    products.length === 0
-                    ? `
-                        <div class="card">
-                            <p class="muted">
-                                Noch keine Produkte.
-                            </p>
-                        </div>
-                    `
-                    : products.map(p => `
-                        <div class="card">
-
-                            <h2>
-                                ${escapeHTML(p.name)}
-                            </h2>
-
-                            <p class="muted">
-                                ${escapeHTML(p.description || "")}
-                            </p>
-
-                            <strong>
-                                ${Number(p.price)} Coins
-                            </strong>
-
-                            <div class="actions">
-
-                                <form
-                                    method="POST"
-                                    action="/shop/buy"
-                                >
-
-                                    <input
-                                        type="hidden"
-                                        name="productId"
-                                        value="${escapeHTML(p.id)}"
-                                    >
-
-                                    <button
-                                        class="button"
-                                        type="submit"
-                                    >
-                                        Kaufen
-                                    </button>
-
-                                </form>
-
-                            </div>
 
                         </div>
                     `).join("")
                 }
 
             </div>
-            `
-        )
-    );
-});
 
-app.post("/shop/buy", requireLogin, (req, res) => {
-    const products = getShop();
-
-    const product = products.find(
-        p =>
-            p.id === req.body.productId &&
-            p.active !== false
-    );
-
-    if (!product) {
-        return res.status(404).send(
-            "Produkt nicht gefunden."
-        );
-    }
-
-    const users = getUsers();
-
-    const user = users.find(
-        u => u.id === req.user.id
-    );
-
-    if (!user) {
-        return res.redirect("/login");
-    }
-
-    const price = Number(product.price || 0);
-
-    if (Number(user.coins || 0) < price) {
-        return res.status(400).send(
-            page(
-                "Shop",
-                req,
-                `
+            ${
+                ticket.status !== "geschlossen"
+                ? `
                 <div class="card">
-                    <h1>Nicht genug Coins</h1>
-                    <p>
-                        Du benötigst ${price} Coins.
-                    </p>
-                    <a class="button" href="/shop">
-                        Zurück zum Shop
-                    </a>
+
+                    <form method="POST"
+                          action="/tickets/${ticket.id}/message">
+
+                        <textarea
+                            name="message"
+                            placeholder="Nachricht..."
+                            required
+                        ></textarea>
+
+                        <button class="btn">
+                            Nachricht senden
+                        </button>
+
+                    </form>
+
+                    <br>
+
+                    <form method="POST"
+                          action="/tickets/${ticket.id}/close">
+
+                        <button class="btn red">
+                            Ticket schließen
+                        </button>
+
+                    </form>
+
                 </div>
                 `
-            )
-        );
+                : `
+                <div class="alert">
+                    Dieses Ticket ist geschlossen.
+                </div>
+                `
+            }
+
+        </div>
+        `,
+        req.user
+    ));
+});
+
+app.post("/tickets/:id/message", requireLogin, (req, res) => {
+    const tickets = readJSON(FILES.tickets, []);
+
+    const ticket = tickets.find(
+        t => t.id === req.params.id
+    );
+
+    if (!ticket) {
+        return res.status(404).send("Ticket nicht gefunden");
     }
 
-    user.coins -= price;
+    const allowed =
+        isAdminEmail(req.user.email) ||
+        ticket.userId === req.user.id;
 
-    const order = {
-        id: id("order"),
-        number: orderNumber(),
-        userId: user.id,
-        username: user.username,
-        productId: product.id,
-        productName: product.name,
-        price,
-        status: "offen",
-        createdAt: new Date().toISOString()
-    };
+    if (!allowed) {
+        return res.status(403).send("Kein Zugriff");
+    }
 
-    const orders = getOrders();
+    if (ticket.status === "geschlossen") {
+        return res.redirect(`/tickets/${ticket.id}`);
+    }
 
-    orders.push(order);
+    ticket.messages.push({
+        id: id("message"),
+        userId: req.user.id,
+        userName: req.user.name,
+        message: clean(req.body.message, 5000),
+        createdAt: Date.now()
+    });
 
-    saveUsers(users);
-    saveOrders(orders);
+    writeJSON(FILES.tickets, tickets);
 
     addLog(
-        "shop_purchase",
-        user,
+        "ticket_message",
+        `Neue Nachricht in ${ticket.ticketNumber}.`,
+        req.user,
         {
-            order: order.number,
-            product: product.name,
-            price
+            ticketId: ticket.id
         }
     );
 
-    res.send(
-        page(
-            "Bestellung",
-            req,
-            `
-            <div class="card center">
-
-                <h1>Bestellung erstellt</h1>
-
-                <p>
-                    Deine Bestellung wurde gespeichert.
-                </p>
-
-                <p>
-                    Bestellnummer:
-                </p>
-
-                <h2>
-                    ${escapeHTML(order.number)}
-                </h2>
-
-                <p class="muted">
-                    Diese Nummer kannst du dem Team
-                    auf Discord geben.
-                </p>
-
-                <a
-                    class="button"
-                    href="${DISCORD_INVITE}"
-                    target="_blank"
-                >
-                    Discord öffnen
-                </a>
-
-            </div>
-            `
-        )
-    );
+    res.redirect(`/tickets/${ticket.id}`);
 });
 
-/*
-========================================================
- GEWINNSPIELE
-========================================================
-*/
+app.post("/tickets/:id/close", requireLogin, (req, res) => {
+    const tickets = readJSON(FILES.tickets, []);
 
-app.get("/giveaways", requireLogin, (req, res) => {
-    const giveaways = getGiveaways()
-        .filter(g => g.active !== false);
-
-    res.send(
-        page(
-            "Gewinnspiele",
-            req,
-            `
-            <div class="card">
-
-                <h1>Gewinnspiele</h1>
-
-                <p class="muted">
-                    Nimm an laufenden Gewinnspielen teil.
-                </p>
-
-            </div>
-
-            <br>
-
-            <div class="grid">
-
-                ${
-                    giveaways.length === 0
-                    ? `
-                        <div class="card">
-                            <p class="muted">
-                                Momentan läuft kein Gewinnspiel.
-                            </p>
-                        </div>
-                    `
-                    : giveaways.map(g => {
-
-                        const joined =
-                            Array.isArray(g.participants) &&
-                            g.participants.includes(req.user.id);
-
-                        return `
-                        <div class="card">
-
-                            <h2>
-                                ${escapeHTML(g.title)}
-                            </h2>
-
-                            <p>
-                                ${escapeHTML(g.description || "")}
-                            </p>
-
-                            <p>
-                                Preis:
-                                <strong>
-                                    ${escapeHTML(g.prize || "-")}
-                                </strong>
-                            </p>
-
-                            ${
-                                joined
-                                ? `
-                                    <span class="badge">
-                                        Teilnahme gespeichert
-                                    </span>
-                                `
-                                : `
-                                    <form
-                                        method="POST"
-                                        action="/giveaways/join"
-                                    >
-
-                                        <input
-                                            type="hidden"
-                                            name="id"
-                                            value="${escapeHTML(g.id)}"
-                                        >
-
-                                        <button
-                                            class="button"
-                                            type="submit"
-                                        >
-                                            Teilnehmen
-                                        </button>
-
-                                    </form>
-                                `
-                            }
-
-                        </div>
-                        `;
-                    }).join("")
-                }
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/giveaways/join", requireLogin, (req, res) => {
-    const giveaways = getGiveaways();
-
-    const giveaway = giveaways.find(
-        g =>
-            g.id === req.body.id &&
-            g.active !== false
+    const ticket = tickets.find(
+        t => t.id === req.params.id
     );
 
-    if (!giveaway) {
-        return res.status(404).send(
-            "Gewinnspiel nicht gefunden."
-        );
+    if (!ticket) {
+        return res.status(404).send("Nicht gefunden");
     }
 
-    if (!Array.isArray(giveaway.participants)) {
-        giveaway.participants = [];
+    const allowed =
+        isAdminEmail(req.user.email) ||
+        ticket.userId === req.user.id;
+
+    if (!allowed) {
+        return res.status(403).send("Kein Zugriff");
     }
 
-    if (!giveaway.participants.includes(req.user.id)) {
-        giveaway.participants.push(req.user.id);
-        saveGiveaways(giveaways);
+    ticket.status = "geschlossen";
+    ticket.closedAt = Date.now();
 
-        addLog(
-            "giveaway_join",
-            req.user,
-            {
-                giveaway: giveaway.title
-            }
-        );
-    }
+    writeJSON(FILES.tickets, tickets);
 
-    res.redirect("/giveaways");
+    addLog(
+        "ticket_close",
+        `Ticket ${ticket.ticketNumber} geschlossen.`,
+        req.user,
+        {
+            ticketId: ticket.id
+        }
+    );
+
+    res.redirect(`/tickets/${ticket.id}`);
 });
 
 /*
@@ -8077,38 +1973,30 @@ app.post("/giveaways/join", requireLogin, (req, res) => {
 */
 
 app.get("/chat", requireLogin, (req, res) => {
-    const chats = getChats()
-        .filter(c => c.type === "public")
-        .slice(-100);
+    const messages = readJSON(FILES.messages, []);
 
-    res.send(
-        page(
-            "Chat",
-            req,
-            `
+    res.send(page(
+        "Chat",
+        `
+        <div class="container">
+
             <div class="card">
 
                 <h1>Community Chat</h1>
 
-                <div class="chat">
+                <div style="max-height:500px;overflow:auto;">
 
                     ${
-                        chats.length === 0
-                        ? `
-                            <p class="muted">
-                                Noch keine Nachrichten.
-                            </p>
-                        `
-                        : chats.map(m => `
+                        messages.slice(0, 100).reverse().map(m => `
                             <div class="message">
 
-                                <strong>
-                                    ${escapeHTML(m.username)}
-                                </strong>
+                                <div class="message-name">
+                                    ${escapeHTML(m.name)}
+                                </div>
 
-                                <span class="muted small">
-                                    ${new Date(m.createdAt).toLocaleString("de-DE")}
-                                </span>
+                                <div class="message-time">
+                                    ${formatDate(m.createdAt)}
+                                </div>
 
                                 <div>
                                     ${escapeHTML(m.message)}
@@ -8120,332 +2008,856 @@ app.get("/chat", requireLogin, (req, res) => {
 
                 </div>
 
-                <br>
+            </div>
+
+            <div class="card">
 
                 <form method="POST" action="/chat">
 
                     <textarea
                         name="message"
-                        required
                         maxlength="1000"
-                        placeholder="Nachricht schreiben..."
+                        placeholder="Schreibe eine Nachricht..."
+                        required
                     ></textarea>
 
-                    <button class="button">
+                    <button class="btn">
                         Senden
                     </button>
 
                 </form>
 
             </div>
-            `
-        )
-    );
+
+        </div>
+        `,
+        req.user
+    ));
 });
 
 app.post("/chat", requireLogin, (req, res) => {
-    const message = String(
-        req.body.message || ""
-    ).trim();
+    const messages = readJSON(FILES.messages, []);
 
-    if (!message) {
-        return res.redirect("/chat");
-    }
-
-    const chats = getChats();
-
-    chats.push({
+    messages.push({
         id: id("chat"),
-        type: "public",
         userId: req.user.id,
-        username: req.user.username,
-        message,
-        createdAt: new Date().toISOString()
+        name: req.user.name,
+        message: clean(req.body.message, 1000),
+        createdAt: Date.now()
     });
 
-    if (chats.length > 5000) {
-        chats.splice(0, chats.length - 5000);
+    if (messages.length > 5000) {
+        messages.splice(0, messages.length - 5000);
     }
 
-    saveChats(chats);
-
-    addLog(
-        "public_chat",
-        req.user
-    );
+    writeJSON(FILES.messages, messages);
 
     res.redirect("/chat");
 });
 
 /*
 ========================================================
- TEAM CHAT
+ COIN CODES
 ========================================================
 */
 
-app.get("/team-chat", requireTeam, (req, res) => {
-    const chats = getChats()
-        .filter(c => c.type === "team")
-        .slice(-100);
+app.get("/codes", requireLogin, (req, res) => {
+    res.send(page(
+        "Coin Codes",
+        `
+        <div class="container">
 
-    res.send(
-        page(
-            "Team Chat",
-            req,
-            `
             <div class="card">
 
-                <h1>Team-Chat</h1>
+                <h1>Coin-Code einlösen</h1>
 
                 <p class="muted">
-                    Nur Owner, Admin, Manager,
-                    Developer und Moderator.
+                    Jeder Code kann pro Benutzer nur einmal eingelöst werden.
                 </p>
 
-                <div class="chat">
+                <form method="POST" action="/codes/redeem">
 
-                    ${
-                        chats.length === 0
-                        ? `
-                            <p class="muted">
-                                Noch keine Nachrichten.
-                            </p>
-                        `
-                        : chats.map(m => `
-                            <div class="message">
-
-                                <strong>
-                                    ${escapeHTML(m.username)}
-                                </strong>
-
-                                <span class="badge">
-                                    ${escapeHTML(m.role || "")}
-                                </span>
-
-                                <span class="muted small">
-                                    ${new Date(m.createdAt).toLocaleString("de-DE")}
-                                </span>
-
-                                <div>
-                                    ${escapeHTML(m.message)}
-                                </div>
-
-                            </div>
-                        `).join("")
-                    }
-
-                </div>
-
-                <br>
-
-                <form method="POST" action="/team-chat">
-
-                    <textarea
-                        name="message"
+                    <input
+                        name="code"
+                        placeholder="NORTH-XXXXXX-XXXXXX"
                         required
-                        maxlength="2000"
-                    ></textarea>
+                    >
 
-                    <button class="button">
-                        Senden
+                    <button class="btn">
+                        Code einlösen
                     </button>
 
                 </form>
 
             </div>
-            `
-        )
-    );
+
+        </div>
+        `,
+        req.user
+    ));
 });
 
-app.post("/team-chat", requireTeam, (req, res) => {
-    const message = String(
-        req.body.message || ""
-    ).trim();
+app.post("/codes/redeem", requireLogin, (req, res) => {
+    const codeValue = clean(
+        req.body.code,
+        100
+    ).toUpperCase();
 
-    if (!message) {
-        return res.redirect("/team-chat");
-    }
+    const codes = readJSON(FILES.codes, []);
+    const users = readJSON(FILES.users, []);
 
-    const chats = getChats();
-
-    chats.push({
-        id: id("teamchat"),
-        type: "team",
-        userId: req.user.id,
-        username: req.user.username,
-        role: req.user.role,
-        message,
-        createdAt: new Date().toISOString()
-    });
-
-    if (chats.length > 5000) {
-        chats.splice(0, chats.length - 5000);
-    }
-
-    saveChats(chats);
-
-    addLog(
-        "team_chat",
-        req.user
+    const code = codes.find(
+        c => String(c.code).toUpperCase() === codeValue
     );
 
-    res.redirect("/team-chat");
+    if (!code) {
+        return res.send(page(
+            "Code",
+            `
+            <div class="container">
+                <div class="alert red">
+                    Der Code existiert nicht.
+                </div>
+                <a class="btn" href="/codes">Zurück</a>
+            </div>
+            `,
+            req.user
+        ));
+    }
+
+    if (code.disabled) {
+        return res.send(page(
+            "Code",
+            `
+            <div class="container">
+                <div class="alert red">
+                    Dieser Code wurde deaktiviert.
+                </div>
+            </div>
+            `,
+            req.user
+        ));
+    }
+
+    if (code.expiresAt && Date.now() > code.expiresAt) {
+        return res.send(page(
+            "Code",
+            `
+            <div class="container">
+                <div class="alert red">
+                    Dieser Code ist abgelaufen.
+                </div>
+            </div>
+            `,
+            req.user
+        ));
+    }
+
+    code.usedBy = code.usedBy || [];
+
+    if (code.usedBy.includes(req.user.id)) {
+        return res.send(page(
+            "Code",
+            `
+            <div class="container">
+                <div class="alert orange">
+                    Du hast diesen Code bereits eingelöst.
+                </div>
+            </div>
+            `,
+            req.user
+        ));
+    }
+
+    code.usedBy.push(req.user.id);
+
+    const user = users.find(
+        u => u.id === req.user.id
+    );
+
+    user.coins =
+        Number(user.coins || 0) +
+        Number(code.coins || 0);
+
+    writeJSON(FILES.codes, codes);
+    writeJSON(FILES.users, users);
+
+    addLog(
+        "code_redeem",
+        `${user.email} hat ${code.coins} Coins erhalten.`,
+        user,
+        {
+            code: code.code
+        }
+    );
+
+    res.send(page(
+        "Code eingelöst",
+        `
+        <div class="container">
+
+            <div class="alert green">
+                Code erfolgreich eingelöst.
+                <br>
+                Du hast
+                <strong>${Number(code.coins || 0)}</strong>
+                Coins erhalten.
+            </div>
+
+            <a class="btn" href="/dashboard">
+                Zum Dashboard
+            </a>
+
+        </div>
+        `,
+        user
+    ));
 });
 
 /*
 ========================================================
- ADMIN DASHBOARD
+ SHOP
 ========================================================
 */
 
-app.get("/admin", requireAdmin, (req, res) => {
-    const users = getUsers();
-    const tickets = getTickets();
-    const applications = getApplications();
-    const codes = getCodes();
-    const products = getShop();
-    const giveaways = getGiveaways();
-    const logs = getLogs();
-    const orders = getOrders();
+app.get("/shop", requireLogin, (req, res) => {
+    const shop = readJSON(FILES.shop, []);
 
-    res.send(
-        page(
-            "Admin Panel",
-            req,
-            `
+    res.send(page(
+        "Coin-Shop",
+        `
+        <div class="container">
+
             <div class="card">
 
-                <h1>Admin Panel</h1>
+                <h1>Coin-Shop</h1>
 
-                <p class="muted">
-                    Willkommen,
-                    ${escapeHTML(req.user.username)}.
+                <p>
+                    Deine Coins:
+                    <strong class="coin">
+                        ${Number(req.user.coins || 0)}
+                    </strong>
                 </p>
 
             </div>
 
-            <br>
+            <div class="grid">
+
+                ${
+                    shop.filter(p => !p.disabled).map(product => `
+                        <div class="product">
+
+                            <h2>
+                                ${escapeHTML(product.name)}
+                            </h2>
+
+                            <p class="muted">
+                                ${escapeHTML(product.description)}
+                            </p>
+
+                            <p class="coin">
+                                ${Number(product.price)} Coins
+                            </p>
+
+                            <form method="POST"
+                                  action="/shop/${product.id}/buy">
+
+                                <button class="btn">
+                                    Kaufen
+                                </button>
+
+                            </form>
+
+                        </div>
+                    `).join("")
+                }
+
+            </div>
+
+        </div>
+        `,
+        req.user
+    ));
+});
+
+app.post("/shop/:id/buy", requireLogin, (req, res) => {
+    const shop = readJSON(FILES.shop, []);
+    const users = readJSON(FILES.users, []);
+    const orders = readJSON(FILES.orders, []);
+
+    const product = shop.find(
+        p => p.id === req.params.id
+    );
+
+    const user = users.find(
+        u => u.id === req.user.id
+    );
+
+    if (!product || product.disabled) {
+        return res.send(page(
+            "Shop",
+            `
+            <div class="container">
+                <div class="alert red">
+                    Produkt nicht gefunden.
+                </div>
+            </div>
+            `,
+            user
+        ));
+    }
+
+    if (Number(user.coins || 0) < Number(product.price)) {
+        return res.send(page(
+            "Shop",
+            `
+            <div class="container">
+                <div class="alert red">
+                    Du hast nicht genügend Coins.
+                </div>
+            </div>
+            `,
+            user
+        ));
+    }
+
+    user.coins -= Number(product.price);
+
+    const order = {
+        id: id("order"),
+        orderNumber: generateOrderNumber(),
+        userId: user.id,
+        userName: user.name,
+        email: user.email,
+        productId: product.id,
+        productName: product.name,
+        price: Number(product.price),
+        status: "offen",
+        createdAt: Date.now()
+    };
+
+    orders.unshift(order);
+
+    writeJSON(FILES.users, users);
+    writeJSON(FILES.orders, orders);
+
+    addLog(
+        "order",
+        `${user.email} hat ${product.name} gekauft.`,
+        user,
+        {
+            orderNumber: order.orderNumber
+        }
+    );
+
+    res.send(page(
+        "Bestellung",
+        `
+        <div class="container">
+
+            <div class="card center">
+
+                <h1>Bestellung erfolgreich</h1>
+
+                <p>
+                    Deine Bestellung wurde erstellt.
+                </p>
+
+                <p>
+                    Bestellnummer:
+                </p>
+
+                <h2>
+                    ${escapeHTML(order.orderNumber)}
+                </h2>
+
+                <p class="muted">
+                    Gib diese Nummer bei Bedarf dem Team auf Discord.
+                </p>
+
+                <a
+                    class="btn"
+                    href="${DISCORD_INVITE}"
+                    target="_blank"
+                >
+                    Discord öffnen
+                </a>
+
+            </div>
+
+        </div>
+        `,
+        user
+    ));
+});
+
+/*
+========================================================
+ GEWINNSPIELE
+========================================================
+*/
+
+app.get("/giveaways", requireLogin, (req, res) => {
+    const giveaways = readJSON(
+        FILES.giveaways,
+        []
+    );
+
+    res.send(page(
+        "Gewinnspiele",
+        `
+        <div class="container">
+
+            <h1>Gewinnspiele</h1>
+
+            ${
+                giveaways.length
+                ? giveaways.map(g => {
+
+                    const joined =
+                        (g.participants || [])
+                            .includes(req.user.id);
+
+                    return `
+                    <div class="card">
+
+                        <h2>
+                            ${escapeHTML(g.title)}
+                        </h2>
+
+                        <p>
+                            Gewinn:
+                            <strong>
+                                ${escapeHTML(g.prize)}
+                            </strong>
+                        </p>
+
+                        <p class="muted">
+                            Ende:
+                            ${formatDate(g.endsAt)}
+                        </p>
+
+                        <p>
+                            Teilnehmer:
+                            ${(g.participants || []).length}
+                        </p>
+
+                        ${
+                            joined
+                            ? `
+                            <div class="alert green">
+                                Du nimmst bereits teil.
+                            </div>
+                            `
+                            : `
+                            <form method="POST"
+                                  action="/giveaways/${g.id}/join">
+
+                                <button class="btn">
+                                    Teilnehmen
+                                </button>
+
+                            </form>
+                            `
+                        }
+
+                    </div>
+                    `;
+                }).join("")
+                : `
+                <div class="card">
+                    <p class="muted">
+                        Aktuell gibt es keine Gewinnspiele.
+                    </p>
+                </div>
+                `
+            }
+
+        </div>
+        `,
+        req.user
+    ));
+});
+
+app.post("/giveaways/:id/join", requireLogin, (req, res) => {
+    const giveaways = readJSON(
+        FILES.giveaways,
+        []
+    );
+
+    const giveaway = giveaways.find(
+        g => g.id === req.params.id
+    );
+
+    if (!giveaway) {
+        return res.redirect("/giveaways");
+    }
+
+    giveaway.participants =
+        giveaway.participants || [];
+
+    if (!giveaway.participants.includes(req.user.id)) {
+        giveaway.participants.push(req.user.id);
+
+        writeJSON(
+            FILES.giveaways,
+            giveaways
+        );
+
+        addLog(
+            "giveaway_join",
+            `${req.user.email} nimmt an ${giveaway.title} teil.`,
+            req.user
+        );
+    }
+
+    res.redirect("/giveaways");
+});
+
+/*
+========================================================
+ BEWERBUNGEN
+========================================================
+*/
+
+app.get("/applications", requireLogin, (req, res) => {
+    const applications =
+        readJSON(FILES.applications, [])
+        .filter(a => a.userId === req.user.id);
+
+    res.send(page(
+        "Bewerbungen",
+        `
+        <div class="container">
+
+            <div class="card">
+
+                <h1>Bewerbungen</h1>
+
+                <p class="muted">
+                    Bewirb dich als Moderator oder Developer.
+                </p>
+
+                <a class="btn" href="/applications/new">
+                    Neue Bewerbung
+                </a>
+
+            </div>
+
+            ${
+                applications.map(a => `
+                    <div class="card">
+
+                        <h3>
+                            ${escapeHTML(a.applicationNumber)}
+                        </h3>
+
+                        <p>
+                            Bereich:
+                            <strong>
+                                ${escapeHTML(a.type)}
+                            </strong>
+                        </p>
+
+                        <p>
+                            Status:
+                            <span class="badge">
+                                ${escapeHTML(a.status)}
+                            </span>
+                        </p>
+
+                        <p class="muted">
+                            ${formatDate(a.createdAt)}
+                        </p>
+
+                    </div>
+                `).join("")
+            }
+
+        </div>
+        `,
+        req.user
+    ));
+});
+
+app.get("/applications/new", requireLogin, (req, res) => {
+    res.send(page(
+        "Bewerbung",
+        `
+        <div class="container">
+
+            <div class="form card">
+
+                <h1>Bewerbung</h1>
+
+                <form method="POST"
+                      action="/applications/new">
+
+                    <label>Bereich</label>
+
+                    <select name="type">
+
+                        <option>Moderator</option>
+                        <option>Developer</option>
+
+                    </select>
+
+                    <label>Warum möchtest du ins Team?</label>
+
+                    <textarea
+                        name="motivation"
+                        maxlength="5000"
+                        required
+                    ></textarea>
+
+                    <label>Erfahrung</label>
+
+                    <textarea
+                        name="experience"
+                        maxlength="5000"
+                        required
+                    ></textarea>
+
+                    <button class="btn">
+                        Bewerbung absenden
+                    </button>
+
+                </form>
+
+            </div>
+
+        </div>
+        `,
+        req.user
+    ));
+});
+
+app.post("/applications/new", requireLogin, (req, res) => {
+    const applications =
+        readJSON(FILES.applications, []);
+
+    const application = {
+        id: id("application"),
+        applicationNumber:
+            `APP-${Date.now().toString().slice(-8)}`,
+        userId: req.user.id,
+        name: req.user.name,
+        email: req.user.email,
+        type: clean(req.body.type, 40),
+        motivation: clean(req.body.motivation, 5000),
+        experience: clean(req.body.experience, 5000),
+        status: "offen",
+        createdAt: Date.now()
+    };
+
+    applications.unshift(application);
+
+    writeJSON(
+        FILES.applications,
+        applications
+    );
+
+    addLog(
+        "application",
+        `${req.user.email} hat eine Bewerbung erstellt.`,
+        req.user,
+        {
+            applicationNumber:
+                application.applicationNumber
+        }
+    );
+
+    res.redirect("/applications");
+});
+
+/*
+========================================================
+ ADMIN PANEL
+========================================================
+*/
+
+app.get("/admin", requireAdmin, (req, res) => {
+    const users = readJSON(FILES.users, []);
+    const tickets = readJSON(FILES.tickets, []);
+    const logs = readJSON(FILES.logs, []);
+    const codes = readJSON(FILES.codes, []);
+    const shop = readJSON(FILES.shop, []);
+    const giveaways = readJSON(FILES.giveaways, []);
+    const applications = readJSON(FILES.applications, []);
+    const orders = readJSON(FILES.orders, []);
+    const settings = readJSON(FILES.settings, {});
+
+    const totalCoins = users.reduce(
+        (sum, u) => sum + Number(u.coins || 0),
+        0
+    );
+
+    res.send(page(
+        "Admin Panel",
+        `
+        <div class="container">
+
+            <h1>Admin Panel</h1>
+
+            <p class="muted">
+                Verwaltung für Owner und Admins.
+            </p>
 
             <div class="grid">
 
                 <div class="card">
-                    <h3>Benutzer</h3>
-                    <div class="stat">${users.length}</div>
+                    <div class="muted">Users</div>
+                    <div class="stat">
+                        ${users.length}
+                    </div>
                 </div>
 
                 <div class="card">
-                    <h3>Tickets</h3>
-                    <div class="stat">${tickets.length}</div>
+                    <div class="muted">Coins</div>
+                    <div class="stat coin">
+                        ${totalCoins}
+                    </div>
                 </div>
 
                 <div class="card">
-                    <h3>Bewerbungen</h3>
-                    <div class="stat">${applications.length}</div>
+                    <div class="muted">Tickets</div>
+                    <div class="stat">
+                        ${tickets.length}
+                    </div>
                 </div>
 
                 <div class="card">
-                    <h3>Codes</h3>
-                    <div class="stat">${codes.length}</div>
+                    <div class="muted">Codes</div>
+                    <div class="stat">
+                        ${codes.length}
+                    </div>
                 </div>
 
                 <div class="card">
-                    <h3>Produkte</h3>
-                    <div class="stat">${products.length}</div>
+                    <div class="muted">Produkte</div>
+                    <div class="stat">
+                        ${shop.length}
+                    </div>
                 </div>
 
                 <div class="card">
-                    <h3>Gewinnspiele</h3>
-                    <div class="stat">${giveaways.length}</div>
-                </div>
-
-                <div class="card">
-                    <h3>Bestellungen</h3>
-                    <div class="stat">${orders.length}</div>
-                </div>
-
-                <div class="card">
-                    <h3>Logs</h3>
-                    <div class="stat">${logs.length}</div>
+                    <div class="muted">Logs</div>
+                    <div class="stat">
+                        ${logs.length}
+                    </div>
                 </div>
 
             </div>
 
-            <br>
-
-            <div class="grid">
+            <div class="grid2">
 
                 <div class="card">
+
                     <h2>Verwaltung</h2>
 
-                    <div class="actions">
-                        <a class="button" href="/admin/users">
+                    <p>
+                        <a class="btn" href="/admin/users">
                             Benutzer
                         </a>
+                    </p>
 
-                        <a class="button" href="/admin/applications">
-                            Bewerbungen
-                        </a>
-
-                        <a class="button" href="/admin/tickets">
+                    <p>
+                        <a class="btn" href="/admin/tickets">
                             Tickets
                         </a>
+                    </p>
 
-                        <a class="button" href="/admin/codes">
-                            Codes
+                    <p>
+                        <a class="btn" href="/admin/codes">
+                            Coin-Codes
                         </a>
+                    </p>
 
-                        <a class="button" href="/admin/shop">
-                            Shop
+                    <p>
+                        <a class="btn" href="/admin/shop">
+                            Coin-Shop
                         </a>
+                    </p>
 
-                        <a class="button" href="/admin/giveaways">
-                            Gewinnspiele
-                        </a>
-
-                        <a class="button" href="/admin/orders">
+                    <p>
+                        <a class="btn" href="/admin/orders">
                             Bestellungen
                         </a>
-
-                        <a class="button" href="/admin/logs">
-                            Logs
-                        </a>
-
-                        <a class="button" href="/admin/settings">
-                            Webseite
-                        </a>
-                    </div>
+                    </p>
 
                 </div>
 
                 <div class="card">
 
-                    <h2>Systemstatus</h2>
+                    <h2>Community</h2>
 
                     <p>
-                        Wartung:
-                        ${
-                            getSettings().maintenance
-                            ? `<span class="badge">AN</span>`
-                            : `<span class="badge">AUS</span>`
-                        }
+                        <a class="btn" href="/admin/giveaways">
+                            Gewinnspiele
+                        </a>
                     </p>
 
                     <p>
-                        Störung:
-                        ${
-                            getSettings().outage
-                            ? `<span class="badge">AN</span>`
-                            : `<span class="badge">AUS</span>`
-                        }
+                        <a class="btn" href="/admin/applications">
+                            Bewerbungen
+                        </a>
+                    </p>
+
+                    <p>
+                        <a class="btn" href="/admin/team-chat">
+                            Team Chat
+                        </a>
+                    </p>
+
+                    <p>
+                        <a class="btn" href="/admin/logs">
+                            Logs
+                        </a>
+                    </p>
+
+                    <p>
+                        <a class="btn" href="/admin/status">
+                            Wartung / Störung
+                        </a>
                     </p>
 
                 </div>
 
             </div>
-            `
-        )
-    );
+
+            <div class="card">
+
+                <h2>Admin hinzufügen</h2>
+
+                <form method="POST"
+                      action="/admin/admins/add">
+
+                    <input
+                        type="email"
+                        name="email"
+                        placeholder="E-Mail-Adresse"
+                        required
+                    >
+
+                    <button class="btn">
+                        Admin hinzufügen
+                    </button>
+
+                </form>
+
+                <p class="small muted">
+                    Aktuelle Admins:
+                    ${adminEmails.map(
+                        e => escapeHTML(e)
+                    ).join(", ")}
+                </p>
+
+            </div>
+
+        </div>
+        `,
+        req.user
+    ));
 });
 
 /*
@@ -8455,35 +2867,34 @@ app.get("/admin", requireAdmin, (req, res) => {
 */
 
 app.get("/admin/users", requireAdmin, (req, res) => {
-    const users = getUsers();
+    const users = readJSON(FILES.users, []);
 
-    res.send(
-        page(
-            "Benutzer",
-            req,
-            `
+    res.send(page(
+        "Benutzerverwaltung",
+        `
+        <div class="container">
+
             <div class="card">
 
-                <h1>Benutzerverwaltung</h1>
+                <h1>Benutzer</h1>
 
-                <div class="table-wrap">
-
-                <table>
+                <table class="table">
 
                     <tr>
                         <th>Name</th>
                         <th>E-Mail</th>
                         <th>Rolle</th>
                         <th>Coins</th>
-                        <th>Ban</th>
-                        <th>Aktionen</th>
+                        <th>Status</th>
+                        <th>Aktion</th>
                     </tr>
 
-                    ${users.map(u => `
+                    ${
+                        users.map(u => `
                         <tr>
 
                             <td>
-                                ${escapeHTML(u.username)}
+                                ${escapeHTML(u.name)}
                             </td>
 
                             <td>
@@ -8491,344 +2902,177 @@ app.get("/admin/users", requireAdmin, (req, res) => {
                             </td>
 
                             <td>
-                                <span class="badge ${escapeHTML(u.role)}">
-                                    ${escapeHTML(u.role)}
+                                <span class="badge ${
+                                    isAdminEmail(u.email)
+                                    ? "admin"
+                                    : ""
+                                }">
+                                    ${escapeHTML(u.role || "user")}
                                 </span>
                             </td>
 
-                            <td>
+                            <td class="coin">
                                 ${Number(u.coins || 0)}
                             </td>
 
                             <td>
                                 ${
-                                    u.bannedUntil &&
-                                    u.bannedUntil > Date.now()
-                                    ? `
-                                        bis
-                                        ${new Date(u.bannedUntil).toLocaleString("de-DE")}
-                                    `
-                                    : "Nein"
+                                    u.banned
+                                    ? `<span class="badge">
+                                        GEBANNT
+                                       </span>`
+                                    : "Aktiv"
                                 }
                             </td>
 
                             <td>
 
-                                <form
-                                    method="POST"
-                                    action="/admin/user/role"
-                                    style="margin-bottom:7px"
-                                >
-
-                                    <input
-                                        type="hidden"
-                                        name="id"
-                                        value="${escapeHTML(u.id)}"
-                                    >
-
-                                    <select name="role">
-
-                                        <option value="user" ${u.role === "user" ? "selected" : ""}>
-                                            user
-                                        </option>
-
-                                        <option value="moderator" ${u.role === "moderator" ? "selected" : ""}>
-                                            moderator
-                                        </option>
-
-                                        <option value="developer" ${u.role === "developer" ? "selected" : ""}>
-                                            developer
-                                        </option>
-
-                                        <option value="manager" ${u.role === "manager" ? "selected" : ""}>
-                                            manager
-                                        </option>
-
-                                        <option value="admin" ${u.role === "admin" ? "selected" : ""}>
-                                            admin
-                                        </option>
-
-                                        <option value="owner" ${u.role === "owner" ? "selected" : ""}>
-                                            owner
-                                        </option>
-
-                                    </select>
-
-                                    <button class="button secondary">
-                                        Rolle
-                                    </button>
-
-                                </form>
-
-                                <form
-                                    method="POST"
-                                    action="/admin/user/coins"
-                                    style="margin-bottom:7px"
-                                >
-
-                                    <input
-                                        type="hidden"
-                                        name="id"
-                                        value="${escapeHTML(u.id)}"
-                                    >
-
-                                    <input
-                                        name="coins"
-                                        type="number"
-                                        placeholder="Coins"
-                                    >
-
-                                    <button class="button secondary">
-                                        Coins setzen
-                                    </button>
-
-                                </form>
-
                                 ${
-                                    u.email.toLowerCase() !==
-                                    OWNER_EMAIL.toLowerCase()
+                                    !isAdminEmail(u.email)
                                     ? `
-                                    <form
-                                        method="POST"
-                                        action="/admin/user/ban"
-                                    >
-
-                                        <input
-                                            type="hidden"
-                                            name="id"
-                                            value="${escapeHTML(u.id)}"
-                                        >
-
-                                        <input
-                                            name="minutes"
-                                            type="number"
-                                            min="1"
-                                            placeholder="Minuten"
-                                            required
-                                        >
+                                    <form method="POST"
+                                          action="/admin/users/${u.id}/ban">
 
                                         <input
                                             name="reason"
-                                            placeholder="Grund"
+                                            placeholder="Ban-Grund"
                                             required
                                         >
 
-                                        <button
-                                            class="button danger"
-                                            type="submit"
-                                        >
+                                        <select name="duration">
+
+                                            <option value="1">
+                                                1 Minute
+                                            </option>
+
+                                            <option value="10">
+                                                10 Minuten
+                                            </option>
+
+                                            <option value="60">
+                                                1 Stunde
+                                            </option>
+
+                                            <option value="1440">
+                                                1 Tag
+                                            </option>
+
+                                            <option value="10080">
+                                                7 Tage
+                                            </option>
+
+                                            <option value="0">
+                                                Permanent
+                                            </option>
+
+                                        </select>
+
+                                        <button class="btn red">
                                             Ban
                                         </button>
 
                                     </form>
 
-                                    <form
-                                        method="POST"
-                                        action="/admin/user/unban"
-                                        style="margin-top:7px"
-                                    >
+                                    <form method="POST"
+                                          action="/admin/users/${u.id}/kick"
+                                          style="margin-top:8px;">
 
-                                        <input
-                                            type="hidden"
-                                            name="id"
-                                            value="${escapeHTML(u.id)}"
-                                        >
-
-                                        <button
-                                            class="button success"
-                                            type="submit"
-                                        >
-                                            Unban
+                                        <button class="btn orange">
+                                            Kick
                                         </button>
 
                                     </form>
+
+                                    ${
+                                        u.banned
+                                        ? `
+                                        <form method="POST"
+                                              action="/admin/users/${u.id}/unban"
+                                              style="margin-top:8px;">
+
+                                            <button class="btn green">
+                                                Unban
+                                            </button>
+
+                                        </form>
+                                        `
+                                        : ""
+                                    }
+
                                     `
                                     : `
-                                        <span class="muted small">
-                                            Owner geschützt
-                                        </span>
+                                    <span class="badge owner">
+                                        OWNER
+                                    </span>
                                     `
                                 }
 
                             </td>
 
                         </tr>
-                    `).join("")}
+                        `).join("")
+                    }
 
                 </table>
 
-                </div>
-
             </div>
-            `
-        )
-    );
+
+        </div>
+        `,
+        req.user
+    ));
 });
 
-app.post("/admin/user/role", requireAdmin, (req, res) => {
-    const users = getUsers();
+/*
+========================================================
+ ADMIN BAN
+========================================================
+*/
 
-    const target = users.find(
-        u => u.id === req.body.id
+app.post("/admin/users/:id/ban", requireAdmin, (req, res) => {
+    const users = readJSON(FILES.users, []);
+
+    const user = users.find(
+        u => u.id === req.params.id
     );
 
-    if (!target) {
-        return res.status(404).send("User nicht gefunden.");
+    if (!user) {
+        return res.redirect("/admin/users");
     }
 
-    if (
-        target.email.toLowerCase() ===
-        OWNER_EMAIL.toLowerCase()
-    ) {
-        target.role = "owner";
+    if (isAdminEmail(user.email)) {
+        return res.status(403).send("Admins können nicht gebannt werden.");
+    }
+
+    const reason = clean(
+        req.body.reason,
+        500
+    );
+
+    const duration = Number(
+        req.body.duration || 0
+    );
+
+    user.banned = true;
+    user.banReason = reason;
+
+    if (duration > 0) {
+        user.banUntil =
+            Date.now() +
+            duration * 60 * 1000;
     } else {
-        const allowed = [
-            "user",
-            "moderator",
-            "developer",
-            "manager",
-            "admin",
-            "owner"
-        ];
-
-        if (!allowed.includes(req.body.role)) {
-            return res.status(400).send("Ungültige Rolle.");
-        }
-
-        target.role = req.body.role;
+        user.banUntil = null;
     }
 
-    saveUsers(users);
+    writeJSON(FILES.users, users);
 
     addLog(
-        "user_role",
+        "ban",
+        `${user.email} wurde gebannt. Grund: ${reason}`,
         req.user,
         {
-            target: target.email,
-            role: target.role
-        }
-    );
-
-    res.redirect("/admin/users");
-});
-
-app.post("/admin/user/coins", requireAdmin, (req, res) => {
-    const users = getUsers();
-
-    const target = users.find(
-        u => u.id === req.body.id
-    );
-
-    if (!target) {
-        return res.status(404).send("Nicht gefunden.");
-    }
-
-    const coins = Number(req.body.coins);
-
-    if (!Number.isFinite(coins) || coins < 0) {
-        return res.status(400).send("Ungültige Coins.");
-    }
-
-    target.coins = Math.floor(coins);
-
-    saveUsers(users);
-
-    addLog(
-        "admin_coins_set",
-        req.user,
-        {
-            target: target.email,
-            coins: target.coins
-        }
-    );
-
-    res.redirect("/admin/users");
-});
-
-app.post("/admin/user/ban", requireAdmin, (req, res) => {
-    const users = getUsers();
-
-    const target = users.find(
-        u => u.id === req.body.id
-    );
-
-    if (!target) {
-        return res.status(404).send("Nicht gefunden.");
-    }
-
-    if (
-        target.email.toLowerCase() ===
-        OWNER_EMAIL.toLowerCase()
-    ) {
-        return res.status(403).send(
-            "Der Owner kann nicht gebannt werden."
-        );
-    }
-
-    const minutes = Number(req.body.minutes);
-
-    if (
-        !Number.isFinite(minutes) ||
-        minutes <= 0
-    ) {
-        return res.status(400).send(
-            "Ungültige Dauer."
-        );
-    }
-
-    target.bannedUntil =
-        Date.now() +
-        minutes * 60 * 1000;
-
-    target.banReason =
-        String(req.body.reason || "Kein Grund");
-
-    saveUsers(users);
-
-    /*
-      Alle aktiven Sessions des gebannten Users löschen.
-    */
-
-    const sessions = getSessions().filter(
-        s => s.userId !== target.id
-    );
-
-    saveSessions(sessions);
-
-    addLog(
-        "user_ban",
-        req.user,
-        {
-            target: target.email,
-            minutes,
-            reason: target.banReason
-        }
-    );
-
-    res.redirect("/admin/users");
-});
-
-app.post("/admin/user/unban", requireAdmin, (req, res) => {
-    const users = getUsers();
-
-    const target = users.find(
-        u => u.id === req.body.id
-    );
-
-    if (!target) {
-        return res.status(404).send("Nicht gefunden.");
-    }
-
-    target.bannedUntil = null;
-    target.banReason = null;
-
-    saveUsers(users);
-
-    addLog(
-        "user_unban",
-        req.user,
-        {
-            target: target.email
+            targetUserId: user.id,
+            duration
         }
     );
 
@@ -8837,187 +3081,92 @@ app.post("/admin/user/unban", requireAdmin, (req, res) => {
 
 /*
 ========================================================
- ADMIN BEWERBUNGEN
+ UNBAN
 ========================================================
 */
 
-app.get("/admin/applications", requireAdmin, (req, res) => {
-    const applications = getApplications();
+app.post("/admin/users/:id/unban", requireAdmin, (req, res) => {
+    const users = readJSON(FILES.users, []);
 
-    res.send(
-        page(
-            "Bewerbungen",
-            req,
-            `
-            <div class="card">
-
-                <h1>Bewerbungen</h1>
-
-                ${
-                    applications.length === 0
-                    ? `<p class="muted">Keine Bewerbungen.</p>`
-                    : `
-                    <div class="table-wrap">
-
-                    <table>
-
-                        <tr>
-                            <th>Nummer</th>
-                            <th>User</th>
-                            <th>Bereich</th>
-                            <th>Details</th>
-                            <th>Status</th>
-                            <th>Aktion</th>
-                        </tr>
-
-                        ${applications.map(a => `
-                            <tr>
-
-                                <td>
-                                    ${escapeHTML(a.number)}
-                                </td>
-
-                                <td>
-                                    ${escapeHTML(a.username)}
-                                </td>
-
-                                <td>
-                                    ${escapeHTML(a.type)}
-                                </td>
-
-                                <td>
-                                    <strong>Discord:</strong>
-                                    ${escapeHTML(a.discord)}
-                                    <br><br>
-
-                                    <strong>Alter:</strong>
-                                    ${escapeHTML(a.age)}
-                                    <br><br>
-
-                                    <strong>Erfahrung:</strong>
-                                    ${escapeHTML(a.experience)}
-                                    <br><br>
-
-                                    <strong>Motivation:</strong>
-                                    ${escapeHTML(a.motivation)}
-                                    <br><br>
-
-                                    <strong>Warum:</strong>
-                                    ${escapeHTML(a.reason)}
-                                </td>
-
-                                <td>
-                                    ${escapeHTML(a.status)}
-                                </td>
-
-                                <td>
-
-                                    ${
-                                        a.status === "offen"
-                                        ? `
-                                        <form
-                                            method="POST"
-                                            action="/admin/application/status"
-                                        >
-
-                                            <input
-                                                type="hidden"
-                                                name="id"
-                                                value="${escapeHTML(a.id)}"
-                                            >
-
-                                            <select name="status">
-
-                                                <option value="angenommen">
-                                                    Annehmen
-                                                </option>
-
-                                                <option value="abgelehnt">
-                                                    Ablehnen
-                                                </option>
-
-                                            </select>
-
-                                            <input
-                                                name="reason"
-                                                placeholder="Grund"
-                                            >
-
-                                            <button class="button">
-                                                Speichern
-                                            </button>
-
-                                        </form>
-                                        `
-                                        : `
-                                            <span class="muted">
-                                                Bearbeitet
-                                            </span>
-                                        `
-                                    }
-
-                                </td>
-
-                            </tr>
-                        `).join("")}
-
-                    </table>
-
-                    </div>
-                    `
-                }
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/admin/application/status", requireAdmin, (req, res) => {
-    const applications = getApplications();
-
-    const application = applications.find(
-        a => a.id === req.body.id
+    const user = users.find(
+        u => u.id === req.params.id
     );
 
-    if (!application) {
-        return res.status(404).send(
-            "Bewerbung nicht gefunden."
-        );
+    if (!user) {
+        return res.redirect("/admin/users");
     }
 
-    const status = String(
-        req.body.status || ""
-    );
+    user.banned = false;
+    user.banReason = "";
+    user.banUntil = null;
 
-    if (
-        status !== "angenommen" &&
-        status !== "abgelehnt"
-    ) {
-        return res.status(400).send(
-            "Ungültiger Status."
-        );
-    }
-
-    application.status = status;
-    application.reviewedBy = req.user.username;
-    application.reviewedAt = new Date().toISOString();
-    application.reviewReason =
-        String(req.body.reason || "").trim();
-
-    saveApplications(applications);
+    writeJSON(FILES.users, users);
 
     addLog(
-        "application_status",
+        "unban",
+        `${user.email} wurde entbannt.`,
         req.user,
         {
-            application: application.number,
-            status,
-            reason: application.reviewReason
+            targetUserId: user.id
         }
     );
 
-    res.redirect("/admin/applications");
+    res.redirect("/admin/users");
+});
+
+/*
+========================================================
+ KICK
+========================================================
+*/
+
+app.post("/admin/users/:id/kick", requireAdmin, (req, res) => {
+    const sessions = readJSON(FILES.sessions, []);
+
+    const filtered = sessions.filter(
+        s => s.userId !== req.params.id
+    );
+
+    writeJSON(FILES.sessions, filtered);
+
+    addLog(
+        "kick",
+        `Benutzer ${req.params.id} wurde ausgeloggt.`,
+        req.user,
+        {
+            targetUserId: req.params.id
+        }
+    );
+
+    res.redirect("/admin/users");
+});
+
+/*
+========================================================
+ ADMIN HINZUFÜGEN
+========================================================
+*/
+
+app.post("/admin/admins/add", requireAdmin, (req, res) => {
+    const email = clean(
+        req.body.email,
+        120
+    ).toLowerCase();
+
+    if (
+        email &&
+        !adminEmails.includes(email)
+    ) {
+        adminEmails.push(email);
+    }
+
+    addLog(
+        "admin_add",
+        `Admin hinzugefügt: ${email}`,
+        req.user
+    );
+
+    res.redirect("/admin");
 });
 
 /*
@@ -9027,156 +3176,151 @@ app.post("/admin/application/status", requireAdmin, (req, res) => {
 */
 
 app.get("/admin/codes", requireAdmin, (req, res) => {
-    const codes = getCodes();
+    const codes = readJSON(FILES.codes, []);
 
-    res.send(
-        page(
-            "Codes",
-            req,
-            `
-            <div class="grid">
+    res.send(page(
+        "Coin-Codes",
+        `
+        <div class="container">
 
-                <div class="card form">
+            <div class="card">
 
-                    <h1>Coin-Code erstellen</h1>
+                <h1>Coin-Codes</h1>
 
-                    <form method="POST" action="/admin/codes/create">
+                <form method="POST"
+                      action="/admin/codes/create">
 
-                        <label>Coins</label>
+                    <label>Coins</label>
 
-                        <input
-                            type="number"
-                            name="coins"
-                            min="1"
-                            value="100"
-                            required
-                        >
+                    <input
+                        type="number"
+                        name="coins"
+                        min="1"
+                        max="1000000"
+                        required
+                    >
 
-                        <label>Max. Benutzer</label>
+                    <label>Anzahl</label>
 
-                        <input
-                            type="number"
-                            name="maxUses"
-                            min="1"
-                            value="1"
-                            required
-                        >
+                    <input
+                        type="number"
+                        name="amount"
+                        min="1"
+                        max="100"
+                        value="1"
+                        required
+                    >
 
-                        <button class="button">
-                            Code erstellen
-                        </button>
+                    <label>Gültigkeit in Tagen</label>
 
-                    </form>
+                    <input
+                        type="number"
+                        name="days"
+                        min="0"
+                        value="0"
+                    >
 
-                </div>
+                    <button class="btn">
+                        Codes erstellen
+                    </button>
 
-                <div class="card">
-
-                    <h2>Vorhandene Codes</h2>
-
-                    ${
-                        codes.length === 0
-                        ? `<p class="muted">Keine Codes.</p>`
-                        : `
-                        <div class="table-wrap">
-
-                        <table>
-
-                            <tr>
-                                <th>Code</th>
-                                <th>Coins</th>
-                                <th>Nutzung</th>
-                                <th>Status</th>
-                            </tr>
-
-                            ${codes.map(c => `
-                                <tr>
-
-                                    <td>
-                                        <strong>
-                                            ${escapeHTML(c.code)}
-                                        </strong>
-                                    </td>
-
-                                    <td>
-                                        ${Number(c.coins)}
-                                    </td>
-
-                                    <td>
-                                        ${
-                                            Array.isArray(c.usedBy)
-                                            ? c.usedBy.length
-                                            : 0
-                                        }
-                                        /
-                                        ${Number(c.maxUses)}
-                                    </td>
-
-                                    <td>
-                                        ${
-                                            c.active !== false
-                                            ? "Aktiv"
-                                            : "Deaktiviert"
-                                        }
-                                    </td>
-
-                                </tr>
-                            `).join("")}
-
-                        </table>
-
-                        </div>
-                        `
-                    }
-
-                </div>
+                </form>
 
             </div>
-            `
-        )
-    );
+
+            <div class="card">
+
+                <h2>Erstellte Codes</h2>
+
+                <table class="table">
+
+                    <tr>
+                        <th>Code</th>
+                        <th>Coins</th>
+                        <th>Benutzt</th>
+                        <th>Gültig bis</th>
+                    </tr>
+
+                    ${
+                        codes.map(c => `
+                        <tr>
+
+                            <td>
+                                <strong>
+                                    ${escapeHTML(c.code)}
+                                </strong>
+                            </td>
+
+                            <td class="coin">
+                                ${Number(c.coins)}
+                            </td>
+
+                            <td>
+                                ${(c.usedBy || []).length}
+                            </td>
+
+                            <td>
+                                ${
+                                    c.expiresAt
+                                    ? formatDate(c.expiresAt)
+                                    : "Unbegrenzt"
+                                }
+                            </td>
+
+                        </tr>
+                        `).join("")
+                    }
+
+                </table>
+
+            </div>
+
+        </div>
+        `,
+        req.user
+    ));
 });
 
 app.post("/admin/codes/create", requireAdmin, (req, res) => {
-    const coins = Number(req.body.coins);
-    const maxUses = Number(req.body.maxUses);
+    const codes = readJSON(FILES.codes, []);
 
-    if (
-        !Number.isFinite(coins) ||
-        coins < 1 ||
-        !Number.isFinite(maxUses) ||
-        maxUses < 1
-    ) {
-        return res.status(400).send(
-            "Ungültige Werte."
-        );
+    const coins = Math.max(
+        1,
+        Number(req.body.coins || 1)
+    );
+
+    const amount = Math.min(
+        100,
+        Math.max(1, Number(req.body.amount || 1))
+    );
+
+    const days = Math.max(
+        0,
+        Number(req.body.days || 0)
+    );
+
+    for (let i = 0; i < amount; i++) {
+        codes.unshift({
+            id: id("code"),
+            code: generateCode(),
+            coins,
+            usedBy: [],
+            disabled: false,
+            createdAt: Date.now(),
+            expiresAt:
+                days > 0
+                ? Date.now() +
+                  days * 24 * 60 * 60 * 1000
+                : null
+        });
     }
 
-    const codes = getCodes();
-
-    const code = {
-        id: id("code"),
-        code: codeNumber(),
-        coins: Math.floor(coins),
-        maxUses: Math.floor(maxUses),
-        usedBy: [],
-        active: true,
-        createdBy: req.user.id,
-        createdAt: new Date().toISOString()
-    };
-
-    codes.push(code);
-
-    saveCodes(codes);
+    writeJSON(FILES.codes, codes);
 
     addLog(
-        "code_create",
-        req.user,
-        {
-            code: code.code,
-            coins: code.coins,
-            maxUses: code.maxUses
-        }
+        "codes_create",
+        `${amount} Codes mit ${coins} Coins erstellt.`,
+        req.user
     );
 
     res.redirect("/admin/codes");
@@ -9189,273 +3333,136 @@ app.post("/admin/codes/create", requireAdmin, (req, res) => {
 */
 
 app.get("/admin/shop", requireAdmin, (req, res) => {
-    const products = getShop();
+    const shop = readJSON(FILES.shop, []);
 
-    res.send(
-        page(
-            "Shop Verwaltung",
-            req,
-            `
-            <div class="grid">
+    res.send(page(
+        "Shop Verwaltung",
+        `
+        <div class="container">
 
-                <div class="card form">
+            <div class="card">
 
-                    <h1>Produkt hinzufügen</h1>
+                <h1>Coin-Shop verwalten</h1>
 
-                    <form method="POST" action="/admin/shop/create">
+                <form method="POST"
+                      action="/admin/shop/create">
 
-                        <label>Name</label>
+                    <label>Name</label>
 
-                        <input
-                            name="name"
-                            required
-                            maxlength="100"
-                        >
+                    <input
+                        name="name"
+                        maxlength="100"
+                        required
+                    >
 
-                        <label>Beschreibung</label>
+                    <label>Beschreibung</label>
 
-                        <textarea
-                            name="description"
-                        ></textarea>
+                    <textarea
+                        name="description"
+                        maxlength="1000"
+                    ></textarea>
 
-                        <label>Preis in Coins</label>
+                    <label>Preis in Coins</label>
 
-                        <input
-                            type="number"
-                            name="price"
-                            min="1"
-                            required
-                        >
+                    <input
+                        type="number"
+                        name="price"
+                        min="1"
+                        required
+                    >
 
-                        <button class="button">
-                            Produkt erstellen
+                    <button class="btn">
+                        Produkt hinzufügen
+                    </button>
+
+                </form>
+
+            </div>
+
+            ${
+                shop.map(p => `
+                <div class="card">
+
+                    <h2>
+                        ${escapeHTML(p.name)}
+                    </h2>
+
+                    <p>
+                        ${escapeHTML(p.description)}
+                    </p>
+
+                    <p class="coin">
+                        ${Number(p.price)} Coins
+                    </p>
+
+                    <p>
+                        Status:
+                        ${p.disabled ? "Deaktiviert" : "Aktiv"}
+                    </p>
+
+                    <form method="POST"
+                          action="/admin/shop/${p.id}/toggle">
+
+                        <button class="btn gray">
+                            ${
+                                p.disabled
+                                ? "Aktivieren"
+                                : "Deaktivieren"
+                            }
                         </button>
 
                     </form>
 
                 </div>
+                `).join("")
+            }
 
-                <div class="card">
-
-                    <h2>Produkte</h2>
-
-                    ${
-                        products.length === 0
-                        ? `<p class="muted">Keine Produkte.</p>`
-                        : products.map(p => `
-                            <div class="card">
-
-                                <h3>
-                                    ${escapeHTML(p.name)}
-                                </h3>
-
-                                <p>
-                                    ${escapeHTML(p.description || "")}
-                                </p>
-
-                                <strong>
-                                    ${Number(p.price)} Coins
-                                </strong>
-
-                            </div>
-                        `).join("")
-                    }
-
-                </div>
-
-            </div>
-            `
-        )
-    );
+        </div>
+        `,
+        req.user
+    ));
 });
 
 app.post("/admin/shop/create", requireAdmin, (req, res) => {
-    const name = String(
-        req.body.name || ""
-    ).trim();
+    const shop = readJSON(FILES.shop, []);
 
-    const description = String(
-        req.body.description || ""
-    ).trim();
-
-    const price = Number(req.body.price);
-
-    if (
-        !name ||
-        !Number.isFinite(price) ||
-        price < 1
-    ) {
-        return res.status(400).send(
-            "Ungültige Produktdaten."
-        );
-    }
-
-    const products = getShop();
-
-    products.push({
+    shop.unshift({
         id: id("product"),
-        name,
-        slug: slugify(name),
-        description,
-        price: Math.floor(price),
-        active: true,
-        createdBy: req.user.id,
-        createdAt: new Date().toISOString()
+        name: clean(req.body.name, 100),
+        description: clean(req.body.description, 1000),
+        price: Math.max(
+            1,
+            Number(req.body.price || 1)
+        ),
+        disabled: false,
+        createdAt: Date.now()
     });
 
-    saveShop(products);
+    writeJSON(FILES.shop, shop);
 
     addLog(
-        "shop_product_create",
-        req.user,
-        {
-            product: name
-        }
+        "shop_create",
+        "Neues Shop-Produkt erstellt.",
+        req.user
     );
 
     res.redirect("/admin/shop");
 });
 
-/*
-========================================================
- ADMIN GEWINNSPIELE
-========================================================
-*/
+app.post("/admin/shop/:id/toggle", requireAdmin, (req, res) => {
+    const shop = readJSON(FILES.shop, []);
 
-app.get("/admin/giveaways", requireAdmin, (req, res) => {
-    const giveaways = getGiveaways();
-
-    res.send(
-        page(
-            "Gewinnspiele",
-            req,
-            `
-            <div class="grid">
-
-                <div class="card form">
-
-                    <h1>Gewinnspiel erstellen</h1>
-
-                    <form
-                        method="POST"
-                        action="/admin/giveaways/create"
-                    >
-
-                        <label>Titel</label>
-
-                        <input
-                            name="title"
-                            required
-                        >
-
-                        <label>Beschreibung</label>
-
-                        <textarea
-                            name="description"
-                        ></textarea>
-
-                        <label>Gewinn</label>
-
-                        <input
-                            name="prize"
-                            required
-                        >
-
-                        <button class="button">
-                            Erstellen
-                        </button>
-
-                    </form>
-
-                </div>
-
-                <div class="card">
-
-                    <h2>Gewinnspiele</h2>
-
-                    ${
-                        giveaways.length === 0
-                        ? `<p class="muted">Keine Gewinnspiele.</p>`
-                        : giveaways.map(g => `
-                            <div class="card">
-
-                                <h3>
-                                    ${escapeHTML(g.title)}
-                                </h3>
-
-                                <p>
-                                    ${escapeHTML(g.description || "")}
-                                </p>
-
-                                <p>
-                                    Gewinn:
-                                    ${escapeHTML(g.prize || "")}
-                                </p>
-
-                                <p>
-                                    Teilnehmer:
-                                    ${
-                                        Array.isArray(g.participants)
-                                        ? g.participants.length
-                                        : 0
-                                    }
-                                </p>
-
-                            </div>
-                        `).join("")
-                    }
-
-                </div>
-
-            </div>
-            `
-        )
+    const product = shop.find(
+        p => p.id === req.params.id
     );
-});
 
-app.post("/admin/giveaways/create", requireAdmin, (req, res) => {
-    const title = String(
-        req.body.title || ""
-    ).trim();
-
-    const description = String(
-        req.body.description || ""
-    ).trim();
-
-    const prize = String(
-        req.body.prize || ""
-    ).trim();
-
-    if (!title || !prize) {
-        return res.status(400).send(
-            "Titel und Gewinn sind erforderlich."
-        );
+    if (product) {
+        product.disabled = !product.disabled;
     }
 
-    const giveaways = getGiveaways();
+    writeJSON(FILES.shop, shop);
 
-    giveaways.push({
-        id: id("giveaway"),
-        title,
-        description,
-        prize,
-        participants: [],
-        active: true,
-        createdBy: req.user.id,
-        createdAt: new Date().toISOString()
-    });
-
-    saveGiveaways(giveaways);
-
-    addLog(
-        "giveaway_create",
-        req.user,
-        {
-            title
-        }
-    );
-
-    res.redirect("/admin/giveaways");
+    res.redirect("/admin/shop");
 });
 
 /*
@@ -9465,73 +3472,53 @@ app.post("/admin/giveaways/create", requireAdmin, (req, res) => {
 */
 
 app.get("/admin/tickets", requireAdmin, (req, res) => {
-    const tickets = getTickets();
+    const tickets = readJSON(FILES.tickets, []);
 
-    res.send(
-        page(
-            "Ticketverwaltung",
-            req,
-            `
+    res.send(page(
+        "Ticket Verwaltung",
+        `
+        <div class="container">
+
             <div class="card">
 
-                <h1>Tickets</h1>
+                <h1>Alle Tickets</h1>
 
-                <div class="table-wrap">
+                ${
+                    tickets.map(t => `
+                    <div class="ticket">
 
-                <table>
+                        <h3>
+                            ${escapeHTML(t.ticketNumber)}
+                        </h3>
 
-                    <tr>
-                        <th>Nummer</th>
-                        <th>User</th>
-                        <th>Betreff</th>
-                        <th>Status</th>
-                        <th>Übernommen</th>
-                        <th></th>
-                    </tr>
+                        <p>
+                            ${escapeHTML(t.title)}
+                        </p>
 
-                    ${tickets.map(t => `
-                        <tr>
+                        <p class="muted">
+                            User:
+                            ${escapeHTML(t.userName)}
+                            ·
+                            ${escapeHTML(t.status)}
+                        </p>
 
-                            <td>
-                                ${escapeHTML(t.number)}
-                            </td>
+                        <a
+                            class="btn"
+                            href="/tickets/${t.id}"
+                        >
+                            Öffnen
+                        </a>
 
-                            <td>
-                                ${escapeHTML(t.username)}
-                            </td>
-
-                            <td>
-                                ${escapeHTML(t.subject)}
-                            </td>
-
-                            <td>
-                                ${escapeHTML(t.status)}
-                            </td>
-
-                            <td>
-                                ${escapeHTML(t.claimedByName || "-")}
-                            </td>
-
-                            <td>
-                                <a
-                                    class="button secondary"
-                                    href="/tickets/${encodeURIComponent(t.id)}"
-                                >
-                                    Öffnen
-                                </a>
-                            </td>
-
-                        </tr>
-                    `).join("")}
-
-                </table>
-
-                </div>
+                    </div>
+                    `).join("")
+                }
 
             </div>
-            `
-        )
-    );
+
+        </div>
+        `,
+        req.user
+    ));
 });
 
 /*
@@ -9541,20 +3528,18 @@ app.get("/admin/tickets", requireAdmin, (req, res) => {
 */
 
 app.get("/admin/orders", requireAdmin, (req, res) => {
-    const orders = getOrders();
+    const orders = readJSON(FILES.orders, []);
 
-    res.send(
-        page(
-            "Bestellungen",
-            req,
-            `
+    res.send(page(
+        "Bestellungen",
+        `
+        <div class="container">
+
             <div class="card">
 
                 <h1>Bestellungen</h1>
 
-                <div class="table-wrap">
-
-                <table>
+                <table class="table">
 
                     <tr>
                         <th>Bestellnummer</th>
@@ -9562,25 +3547,25 @@ app.get("/admin/orders", requireAdmin, (req, res) => {
                         <th>Produkt</th>
                         <th>Preis</th>
                         <th>Status</th>
-                        <th>Datum</th>
                     </tr>
 
-                    ${orders.map(o => `
+                    ${
+                        orders.map(o => `
                         <tr>
 
                             <td>
-                                ${escapeHTML(o.number)}
+                                ${escapeHTML(o.orderNumber)}
                             </td>
 
                             <td>
-                                ${escapeHTML(o.username)}
+                                ${escapeHTML(o.email)}
                             </td>
 
                             <td>
                                 ${escapeHTML(o.productName)}
                             </td>
 
-                            <td>
+                            <td class="coin">
                                 ${Number(o.price)}
                             </td>
 
@@ -9588,21 +3573,407 @@ app.get("/admin/orders", requireAdmin, (req, res) => {
                                 ${escapeHTML(o.status)}
                             </td>
 
-                            <td>
-                                ${new Date(o.createdAt).toLocaleString("de-DE")}
-                            </td>
-
                         </tr>
-                    `).join("")}
+                        `).join("")
+                    }
 
                 </table>
+
+            </div>
+
+        </div>
+        `,
+        req.user
+    ));
+});
+
+/*
+========================================================
+ ADMIN GEWINNSPIELE
+========================================================
+*/
+
+app.get("/admin/giveaways", requireAdmin, (req, res) => {
+    const giveaways = readJSON(
+        FILES.giveaways,
+        []
+    );
+
+    res.send(page(
+        "Gewinnspiele verwalten",
+        `
+        <div class="container">
+
+            <div class="card">
+
+                <h1>Gewinnspiel erstellen</h1>
+
+                <form method="POST"
+                      action="/admin/giveaways/create">
+
+                    <label>Titel</label>
+
+                    <input
+                        name="title"
+                        maxlength="100"
+                        required
+                    >
+
+                    <label>Gewinn</label>
+
+                    <input
+                        name="prize"
+                        maxlength="200"
+                        required
+                    >
+
+                    <label>Dauer in Stunden</label>
+
+                    <input
+                        type="number"
+                        name="hours"
+                        min="1"
+                        value="24"
+                        required
+                    >
+
+                    <button class="btn">
+                        Gewinnspiel erstellen
+                    </button>
+
+                </form>
+
+            </div>
+
+            ${
+                giveaways.map(g => `
+                <div class="card">
+
+                    <h2>
+                        ${escapeHTML(g.title)}
+                    </h2>
+
+                    <p>
+                        Gewinn:
+                        ${escapeHTML(g.prize)}
+                    </p>
+
+                    <p>
+                        Teilnehmer:
+                        ${(g.participants || []).length}
+                    </p>
+
+                    <p class="muted">
+                        Ende:
+                        ${formatDate(g.endsAt)}
+                    </p>
+
+                    <form method="POST"
+                          action="/admin/giveaways/${g.id}/finish">
+
+                        <button class="btn red">
+                            Beenden
+                        </button>
+
+                    </form>
+
+                </div>
+                `).join("")
+            }
+
+        </div>
+        `,
+        req.user
+    ));
+});
+
+app.post("/admin/giveaways/create", requireAdmin, (req, res) => {
+    const giveaways = readJSON(
+        FILES.giveaways,
+        []
+    );
+
+    const hours = Math.max(
+        1,
+        Number(req.body.hours || 24)
+    );
+
+    giveaways.unshift({
+        id: id("giveaway"),
+        title: clean(req.body.title, 100),
+        prize: clean(req.body.prize, 200),
+        participants: [],
+        createdAt: Date.now(),
+        endsAt: Date.now() +
+            hours * 60 * 60 * 1000,
+        status: "aktiv",
+        winnerId: null
+    });
+
+    writeJSON(
+        FILES.giveaways,
+        giveaways
+    );
+
+    addLog(
+        "giveaway_create",
+        "Gewinnspiel erstellt.",
+        req.user
+    );
+
+    res.redirect("/admin/giveaways");
+});
+
+app.post("/admin/giveaways/:id/finish", requireAdmin, (req, res) => {
+    const giveaways = readJSON(
+        FILES.giveaways,
+        []
+    );
+
+    const giveaway = giveaways.find(
+        g => g.id === req.params.id
+    );
+
+    if (giveaway) {
+        giveaway.status = "beendet";
+
+        const participants =
+            giveaway.participants || [];
+
+        if (participants.length > 0) {
+            giveaway.winnerId =
+                participants[
+                    Math.floor(
+                        Math.random() *
+                        participants.length
+                    )
+                ];
+        }
+    }
+
+    writeJSON(
+        FILES.giveaways,
+        giveaways
+    );
+
+    addLog(
+        "giveaway_finish",
+        "Gewinnspiel beendet.",
+        req.user
+    );
+
+    res.redirect("/admin/giveaways");
+});
+
+/*
+========================================================
+ ADMIN BEWERBUNGEN
+========================================================
+*/
+
+app.get("/admin/applications", requireAdmin, (req, res) => {
+    const applications =
+        readJSON(FILES.applications, []);
+
+    res.send(page(
+        "Bewerbungen",
+        `
+        <div class="container">
+
+            <div class="card">
+
+                <h1>Bewerbungen</h1>
+
+                ${
+                    applications.map(a => `
+                    <div class="ticket">
+
+                        <h2>
+                            ${escapeHTML(a.applicationNumber)}
+                        </h2>
+
+                        <p>
+                            <strong>
+                                ${escapeHTML(a.name)}
+                            </strong>
+                            ·
+                            ${escapeHTML(a.type)}
+                        </p>
+
+                        <p>
+                            ${escapeHTML(a.motivation)}
+                        </p>
+
+                        <p>
+                            ${escapeHTML(a.experience)}
+                        </p>
+
+                        <p>
+                            Status:
+                            ${escapeHTML(a.status)}
+                        </p>
+
+                        <form method="POST"
+                              action="/admin/applications/${a.id}/status">
+
+                            <select name="status">
+
+                                <option>offen</option>
+                                <option>angenommen</option>
+                                <option>abgelehnt</option>
+
+                            </select>
+
+                            <button class="btn">
+                                Status ändern
+                            </button>
+
+                        </form>
+
+                    </div>
+                    `).join("")
+                }
+
+            </div>
+
+        </div>
+        `,
+        req.user
+    ));
+});
+
+app.post("/admin/applications/:id/status", requireAdmin, (req, res) => {
+    const applications =
+        readJSON(FILES.applications, []);
+
+    const application = applications.find(
+        a => a.id === req.params.id
+    );
+
+    if (application) {
+        application.status =
+            clean(req.body.status, 40);
+    }
+
+    writeJSON(
+        FILES.applications,
+        applications
+    );
+
+    addLog(
+        "application_status",
+        `Bewerbung ${req.params.id} geändert.`,
+        req.user
+    );
+
+    res.redirect("/admin/applications");
+});
+
+/*
+========================================================
+ TEAM CHAT
+========================================================
+*/
+
+app.get("/admin/team-chat", requireAdmin, (req, res) => {
+    const messages =
+        readJSON(FILES.teamMessages, []);
+
+    res.send(page(
+        "Team Chat",
+        `
+        <div class="container">
+
+            <div class="card">
+
+                <h1>Team Chat</h1>
+
+                <div style="max-height:600px;overflow:auto;">
+
+                    ${
+                        messages.slice(-200).map(m => `
+                        <div class="message">
+
+                            <div class="message-name">
+                                ${escapeHTML(m.name)}
+                            </div>
+
+                            <div class="message-time">
+                                ${formatDate(m.createdAt)}
+                            </div>
+
+                            <p>
+                                ${escapeHTML(m.message)}
+                            </p>
+
+                        </div>
+                        `).join("")
+                    }
 
                 </div>
 
             </div>
-            `
-        )
+
+            <div class="card">
+
+                <form method="POST"
+                      action="/admin/team-chat">
+
+                    <textarea
+                        name="message"
+                        maxlength="2000"
+                        required
+                        placeholder="Team-Nachricht..."
+                    ></textarea>
+
+                    <button class="btn">
+                        Senden
+                    </button>
+
+                </form>
+
+            </div>
+
+        </div>
+        `,
+        req.user
+    ));
+});
+
+app.post("/admin/team-chat", requireAdmin, (req, res) => {
+    const messages =
+        readJSON(FILES.teamMessages, []);
+
+    messages.push({
+        id: id("teamchat"),
+        userId: req.user.id,
+        name: req.user.name,
+        message: clean(
+            req.body.message,
+            2000
+        ),
+        createdAt: Date.now()
+    });
+
+    if (messages.length > 5000) {
+        messages.splice(
+            0,
+            messages.length - 5000
+        );
+    }
+
+    writeJSON(
+        FILES.teamMessages,
+        messages
     );
+
+    addLog(
+        "team_chat",
+        `${req.user.email} schrieb im Team-Chat.`,
+        req.user
+    );
+
+    res.redirect("/admin/team-chat");
 });
 
 /*
@@ -9612,347 +3983,244 @@ app.get("/admin/orders", requireAdmin, (req, res) => {
 */
 
 app.get("/admin/logs", requireAdmin, (req, res) => {
-    const logs = getLogs();
+    const logs = readJSON(FILES.logs, []);
 
-    res.send(
-        page(
-            "Logs",
-            req,
-            `
+    res.send(page(
+        "Logs",
+        `
+        <div class="container">
+
             <div class="card">
 
                 <h1>Logs</h1>
 
                 <p class="muted">
-                    Die letzten ${logs.length} Einträge.
+                    ${logs.length} Einträge
                 </p>
 
-                <div class="table-wrap">
-
-                <table>
+                <table class="table">
 
                     <tr>
                         <th>Zeit</th>
-                        <th>Aktion</th>
+                        <th>Typ</th>
                         <th>User</th>
-                        <th>Details</th>
+                        <th>Aktion</th>
                     </tr>
 
-                    ${logs.map(log => `
+                    ${
+                        logs.map(l => `
                         <tr>
 
                             <td>
-                                ${new Date(log.createdAt).toLocaleString("de-DE")}
+                                ${formatDate(l.createdAt)}
                             </td>
 
                             <td>
                                 <span class="badge">
-                                    ${escapeHTML(log.action)}
+                                    ${escapeHTML(l.type)}
                                 </span>
                             </td>
 
                             <td>
-                                ${escapeHTML(log.userName)}
+                                ${escapeHTML(l.email || "-")}
                             </td>
 
                             <td>
-                                ${escapeHTML(
-                                    JSON.stringify(log.details || {})
-                                )}
+                                ${escapeHTML(l.text)}
                             </td>
 
                         </tr>
-                    `).join("")}
+                        `).join("")
+                    }
 
                 </table>
 
-                </div>
-
             </div>
-            `
-        )
-    );
+
+        </div>
+        `,
+        req.user
+    ));
 });
 
 /*
 ========================================================
- ADMIN WEBSEITE / WARTUNG / STÖRUNG / ANKÜNDIGUNG
+ WARTUNG / STÖRUNG
 ========================================================
 */
 
-app.get("/admin/settings", requireAdmin, (req, res) => {
-    const settings = getSettings();
-
-    res.send(
-        page(
-            "Webseite",
-            req,
-            `
-            <div class="grid">
-
-                <div class="card form">
-
-                    <h1>Wartung</h1>
-
-                    <form
-                        method="POST"
-                        action="/admin/settings/maintenance"
-                    >
-
-                        <label>
-                            Text
-                        </label>
-
-                        <textarea name="text">${escapeHTML(settings.maintenanceText)}</textarea>
-
-                        <button
-                            class="button"
-                            name="enabled"
-                            value="true"
-                        >
-                            Wartung aktivieren
-                        </button>
-
-                        <button
-                            class="button secondary"
-                            name="enabled"
-                            value="false"
-                        >
-                            Wartung deaktivieren
-                        </button>
-
-                    </form>
-
-                </div>
-
-                <div class="card form">
-
-                    <h1>Störung</h1>
-
-                    <form
-                        method="POST"
-                        action="/admin/settings/outage"
-                    >
-
-                        <label>
-                            Text
-                        </label>
-
-                        <textarea name="text">${escapeHTML(settings.outageText)}</textarea>
-
-                        <button
-                            class="button danger"
-                            name="enabled"
-                            value="true"
-                        >
-                            Störung aktivieren
-                        </button>
-
-                        <button
-                            class="button secondary"
-                            name="enabled"
-                            value="false"
-                        >
-                            Störung deaktivieren
-                        </button>
-
-                    </form>
-
-                </div>
-
-                <div class="card form">
-
-                    <h1>Ankündigung</h1>
-
-                    <form
-                        method="POST"
-                        action="/admin/settings/announcement"
-                    >
-
-                        <label>
-                            Text
-                        </label>
-
-                        <textarea name="text">${escapeHTML(settings.announcement)}</textarea>
-
-                        <button
-                            class="button"
-                            name="enabled"
-                            value="true"
-                        >
-                            Anzeigen
-                        </button>
-
-                        <button
-                            class="button secondary"
-                            name="enabled"
-                            value="false"
-                        >
-                            Ausblenden
-                        </button>
-
-                    </form>
-
-                </div>
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post(
-    "/admin/settings/maintenance",
-    requireAdmin,
-    (req, res) => {
-
-        const settings = getSettings();
-
-        settings.maintenance =
-            req.body.enabled === "true";
-
-        settings.maintenanceText =
-            String(
-                req.body.text ||
-                "Die Webseite befindet sich momentan in Wartung."
-            ).trim();
-
-        saveSettings(settings);
-
-        addLog(
-            "maintenance_change",
-            req.user,
-            {
-                enabled: settings.maintenance
-            }
-        );
-
-        res.redirect("/admin/settings");
-    }
-);
-
-app.post(
-    "/admin/settings/outage",
-    requireAdmin,
-    (req, res) => {
-
-        const settings = getSettings();
-
-        settings.outage =
-            req.body.enabled === "true";
-
-        settings.outageText =
-            String(
-                req.body.text ||
-                "Aktuell liegt eine Störung vor."
-            ).trim();
-
-        saveSettings(settings);
-
-        addLog(
-            "outage_change",
-            req.user,
-            {
-                enabled: settings.outage
-            }
-        );
-
-        res.redirect("/admin/settings");
-    }
-);
-
-app.post(
-    "/admin/settings/announcement",
-    requireAdmin,
-    (req, res) => {
-
-        const settings = getSettings();
-
-        settings.announcementEnabled =
-            req.body.enabled === "true";
-
-        settings.announcement =
-            String(
-                req.body.text || ""
-            ).trim();
-
-        saveSettings(settings);
-
-        const announcements =
-            getAnnouncements();
-
-        announcements.unshift({
-            id: id("announcement"),
-            text: settings.announcement,
-            enabled: settings.announcementEnabled,
-            createdBy: req.user.username,
-            createdAt: new Date().toISOString()
+app.get("/admin/status", requireAdmin, (req, res) => {
+    const settings =
+        readJSON(FILES.settings, {
+            maintenance: {},
+            outage: {}
         });
 
-        saveAnnouncements(
-            announcements.slice(0, 100)
-        );
+    res.send(page(
+        "Status",
+        `
+        <div class="container">
 
-        addLog(
-            "announcement_change",
-            req.user,
-            {
-                enabled:
-                    settings.announcementEnabled
-            }
-        );
+            <div class="card">
 
-        res.redirect("/admin/settings");
-    }
-);
+                <h1>Wartung</h1>
 
-/*
-========================================================
- ADMIN KICK
-========================================================
-*/
+                <form method="POST"
+                      action="/admin/status/maintenance">
 
-app.post("/admin/user/kick", requireAdmin, (req, res) => {
-    const users = getUsers();
+                    <label>
+                        Aktiv
+                    </label>
 
-    const target = users.find(
-        u => u.id === req.body.id
+                    <select name="enabled">
+
+                        <option
+                            value="true"
+                            ${settings.maintenance.enabled ? "selected" : ""}
+                        >
+                            Ja
+                        </option>
+
+                        <option
+                            value="false"
+                            ${!settings.maintenance.enabled ? "selected" : ""}
+                        >
+                            Nein
+                        </option>
+
+                    </select>
+
+                    <label>Titel</label>
+
+                    <input
+                        name="title"
+                        value="${escapeHTML(settings.maintenance.title || "Wartung")}"
+                    >
+
+                    <label>Text</label>
+
+                    <textarea
+                        name="text"
+                    >${escapeHTML(settings.maintenance.text || "")}</textarea>
+
+                    <button class="btn">
+                        Wartung speichern
+                    </button>
+
+                </form>
+
+            </div>
+
+            <div class="card">
+
+                <h1>Störung</h1>
+
+                <form method="POST"
+                      action="/admin/status/outage">
+
+                    <label>
+                        Aktiv
+                    </label>
+
+                    <select name="enabled">
+
+                        <option
+                            value="true"
+                            ${settings.outage.enabled ? "selected" : ""}
+                        >
+                            Ja
+                        </option>
+
+                        <option
+                            value="false"
+                            ${!settings.outage.enabled ? "selected" : ""}
+                        >
+                            Nein
+                        </option>
+
+                    </select>
+
+                    <label>Titel</label>
+
+                    <input
+                        name="title"
+                        value="${escapeHTML(settings.outage.title || "Störung")}"
+                    >
+
+                    <label>Text</label>
+
+                    <textarea
+                        name="text"
+                    >${escapeHTML(settings.outage.text || "")}</textarea>
+
+                    <button class="btn">
+                        Störung speichern
+                    </button>
+
+                </form>
+
+            </div>
+
+        </div>
+        `,
+        req.user
+    ));
+});
+
+app.post("/admin/status/maintenance", requireAdmin, (req, res) => {
+    const settings =
+        readJSON(FILES.settings, {});
+
+    settings.maintenance = {
+        enabled: req.body.enabled === "true",
+        title: clean(req.body.title, 150),
+        text: clean(req.body.text, 1000)
+    };
+
+    writeJSON(
+        FILES.settings,
+        settings
     );
-
-    if (!target) {
-        return res.status(404).send(
-            "User nicht gefunden."
-        );
-    }
-
-    if (
-        target.email.toLowerCase() ===
-        OWNER_EMAIL.toLowerCase()
-    ) {
-        return res.status(403).send(
-            "Owner kann nicht gekickt werden."
-        );
-    }
-
-    target.kicked = true;
-
-    saveUsers(users);
-
-    const sessions = getSessions().filter(
-        s => s.userId !== target.id
-    );
-
-    saveSessions(sessions);
 
     addLog(
-        "user_kick",
-        req.user,
-        {
-            target: target.email
-        }
+        "maintenance",
+        `Wartungsstatus geändert: ${
+            settings.maintenance.enabled
+            ? "AN"
+            : "AUS"
+        }`,
+        req.user
     );
 
-    res.redirect("/admin/users");
+    res.redirect("/admin/status");
+});
+
+app.post("/admin/status/outage", requireAdmin, (req, res) => {
+    const settings =
+        readJSON(FILES.settings, {});
+
+    settings.outage = {
+        enabled: req.body.enabled === "true",
+        title: clean(req.body.title, 150),
+        text: clean(req.body.text, 1000)
+    };
+
+    writeJSON(
+        FILES.settings,
+        settings
+    );
+
+    addLog(
+        "outage",
+        `Störungsstatus geändert: ${
+            settings.outage.enabled
+            ? "AN"
+            : "AUS"
+        }`,
+        req.user
+    );
+
+    res.redirect("/admin/status");
 });
 
 /*
@@ -9962,11 +4230,13 @@ app.post("/admin/user/kick", requireAdmin, (req, res) => {
 */
 
 app.use((req, res) => {
-    res.status(404).send(
-        page(
-            "Nicht gefunden",
-            req,
-            `
+    const user = getCurrentUser(req);
+
+    res.status(404).send(page(
+        "404",
+        `
+        <div class="container">
+
             <div class="card center">
 
                 <h1>404</h1>
@@ -9975,51 +4245,107 @@ app.use((req, res) => {
                     Diese Seite wurde nicht gefunden.
                 </p>
 
-                <a class="button" href="/">
-                    Zur Startseite
+                <a class="btn" href="/">
+                    Startseite
                 </a>
 
             </div>
-            `
-        )
-    );
+
+        </div>
+        `,
+        user
+    ));
 });
 
 /*
 ========================================================
- ERROR HANDLER
+ FEHLERHANDLER
 ========================================================
 */
 
-app.use((err, req, res, next) => {
-    console.error("Webseiten-Fehler:", err);
+app.use((error, req, res, next) => {
+    console.error("Webseitenfehler:", error);
 
-    if (res.headersSent) {
-        return next(err);
+    const user = getCurrentUser(req);
+
+    res.status(500).send(page(
+        "Fehler",
+        `
+        <div class="container">
+
+            <div class="alert red">
+                Bei der Verarbeitung ist ein Fehler aufgetreten.
+            </div>
+
+            <a class="btn" href="/">
+                Startseite
+            </a>
+
+        </div>
+        `,
+        user
+    ));
+});
+
+/*
+========================================================
+ AUTOMATISCHE BEREINIGUNG
+========================================================
+*/
+
+setInterval(() => {
+
+    try {
+
+        const sessions =
+            readJSON(FILES.sessions, []);
+
+        const now = Date.now();
+
+        const validSessions =
+            sessions.filter(
+                s => !s.expiresAt ||
+                     s.expiresAt > now
+            );
+
+        writeJSON(
+            FILES.sessions,
+            validSessions
+        );
+
+        const users =
+            readJSON(FILES.users, []);
+
+        let changed = false;
+
+        for (const user of users) {
+
+            if (
+                user.banned &&
+                user.banUntil &&
+                now >= user.banUntil
+            ) {
+
+                user.banned = false;
+                user.banReason = "";
+                user.banUntil = null;
+
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            writeJSON(FILES.users, users);
+        }
+
+    } catch (error) {
+        console.error(
+            "Automatische Bereinigung:",
+            error.message
+        );
     }
 
-    res.status(500).send(
-        page(
-            "Fehler",
-            req,
-            `
-            <div class="card">
-
-                <h1>Fehler</h1>
-
-                <p>
-                    Bei der Verarbeitung ist ein Fehler aufgetreten.
-                </p>
-
-                <a class="button" href="/">
-                    Zur Startseite
-                </a>
-
-            </div>
-            `
-        )
-    );
-});
+}, 60 * 1000);
 
 /*
 ========================================================
@@ -10028,12 +4354,15 @@ app.use((err, req, res, next) => {
 */
 
 app.listen(PORT, "0.0.0.0", () => {
+
     console.log("");
     console.log("======================================");
-    console.log(" North Bot V2 Webseite");
+    console.log(" North-Bot-2 Webseite");
     console.log("======================================");
-    console.log("Server läuft auf Port:", PORT);
-    console.log("Discord:", DISCORD_INVITE);
-    console.log("Owner:", OWNER_EMAIL);
+    console.log(`Server läuft auf Port: ${PORT}`);
+    console.log(`Discord: ${DISCORD_INVITE}`);
+    console.log(`Owner: ${OWNER_EMAIL}`);
     console.log("======================================");
+    console.log("");
+
 });
