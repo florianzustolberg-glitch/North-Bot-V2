@@ -1,11 +1,10 @@
 {
   "name": "florian-weisserhai-minecraft-hosting",
   "version": "1.0.0",
-  "description": "Minecraft Hosting Webseite mit Benutzerkonten, Serververwaltung und Owner/Admin-Bereich",
+  "description": "Minecraft Hosting",
   "main": "webseite.js",
   "scripts": {
-    "start": "node webseite.js",
-    "dev": "node webseite.js"
+    "start": "node webseite.js"
   },
   "engines": {
     "node": ">=20"
