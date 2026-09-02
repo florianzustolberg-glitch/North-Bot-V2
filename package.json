@@ -1,19 +1,14 @@
 {
-  "name": "florian-weisserhai-minecraft-hosting",
+  "name": "minecraft-hosting",
   "version": "1.0.0",
-  "description": "Minecraft Hosting",
   "main": "webseite.js",
   "scripts": {
     "start": "node webseite.js"
   },
-  "engines": {
-    "node": ">=20"
-  },
   "dependencies": {
-    "bcryptjs": "^2.4.3",
-    "connect-sqlite3": "^0.9.15",
-    "express": "^4.21.2",
-    "express-session": "^1.18.1",
-    "sqlite3": "^5.1.7"
+    "bcryptjs": "^3.0.2",
+    "express": "^5.1.0",
+    "express-session": "^1.18.2",
+    "nodemailer": "^7.0.6"
   }
 }
