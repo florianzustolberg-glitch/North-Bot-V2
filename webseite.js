@@ -1,84 +1,283 @@
 'use strict';
 
 /*
- * ============================================================
- * Florian / WeisserHai Minecraft Hosting
- * komplette webseite.js
- * ============================================================
- *
- * Benötigte Pakete:
- *
- * npm install express express-session connect-sqlite3 sqlite3 bcryptjs
- *
- * Start:
- *
- * node webseite.js
- *
- * Environment:
- *
- * PORT=10000
- * SESSION_SECRET=ein-langes-geheimes-passwort
- * OWNER_EMAIL=florianzustolberg@gmail.com
- *
- * ============================================================
- */
+===========================================================
+ FLORIAN / WEISSERHAI
+ MINECRAFT HOSTING WEBSEITE
+===========================================================
+
+Node.js:
+  empfohlen: Node.js 20+
+
+Installation:
+  npm install express express-session bcryptjs nodemailer
+
+Start:
+  node webseite.js
+
+ENV:
+  PORT=3000
+
+  SESSION_SECRET=BITTE_EIN_LANGES_ZUFAELLIGES_PASSWORT
+
+  GMAIL_USER=deine@gmail.com
+  GMAIL_APP_PASSWORD=DEIN_GOOGLE_APP_PASSWORT
+
+  OWNER_EMAIL=florianzustolberg@gmail.com
+
+===========================================================
+*/
 
 const express = require('express');
 const session = require('express-session');
-const SQLiteStoreFactory = require('connect-sqlite3')(session);
-const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
-const path = require('path');
+const nodemailer = require('nodemailer');
 const fs = require('fs');
-
-/* ============================================================
-   KONFIGURATION
-   ============================================================ */
+const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 
-const PORT = Number(process.env.PORT || 10000);
+const PORT = Number(process.env.PORT || 3000);
+
+const DATA_DIR = path.join(__dirname, 'data');
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const SERVERS_FILE = path.join(DATA_DIR, 'servers.json');
+const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
+const CODES_FILE = path.join(DATA_DIR, 'codes.json');
+const APPLICATIONS_FILE = path.join(DATA_DIR, 'applications.json');
 
 const OWNER_EMAIL = String(
     process.env.OWNER_EMAIL || 'florianzustolberg@gmail.com'
-).toLowerCase().trim();
+).toLowerCase();
 
-const SESSION_SECRET = String(
-    process.env.SESSION_SECRET || 'CHANGE-ME-IN-RENDER'
-);
-
-const DATA_DIR = path.join(__dirname, 'data');
+const SESSION_SECRET =
+    process.env.SESSION_SECRET ||
+    'CHANGE_THIS_SESSION_SECRET_123456789';
 
 if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-const DB_FILE = path.join(DATA_DIR, 'hosting.db');
-const SESSION_DB = path.join(DATA_DIR, 'sessions.db');
+function ensureFile(file, fallback) {
+    if (!fs.existsSync(file)) {
+        fs.writeFileSync(
+            file,
+            JSON.stringify(fallback, null, 2),
+            'utf8'
+        );
+    }
+}
 
-/* ============================================================
+ensureFile(USERS_FILE, []);
+ensureFile(SERVERS_FILE, []);
+ensureFile(ORDERS_FILE, []);
+ensureFile(CODES_FILE, []);
+ensureFile(APPLICATIONS_FILE, []);
+
+function readJSON(file, fallback = []) {
+    try {
+        if (!fs.existsSync(file)) {
+            return fallback;
+        }
+
+        const raw = fs.readFileSync(file, 'utf8');
+
+        if (!raw.trim()) {
+            return fallback;
+        }
+
+        const data = JSON.parse(raw);
+
+        return data;
+    } catch (error) {
+        console.error('JSON Fehler:', file, error.message);
+        return fallback;
+    }
+}
+
+function writeJSON(file, data) {
+    const tempFile = file + '.tmp';
+
+    fs.writeFileSync(
+        tempFile,
+        JSON.stringify(data, null, 2),
+        'utf8'
+    );
+
+    fs.renameSync(tempFile, file);
+}
+
+function id(prefix = 'id') {
+    return (
+        prefix +
+        '_' +
+        Date.now().toString(36) +
+        '_' +
+        crypto.randomBytes(5).toString('hex')
+    );
+}
+
+function randomToken() {
+    return crypto.randomBytes(32).toString('hex');
+}
+
+function now() {
+    return new Date().toISOString();
+}
+
+function cleanEmail(value) {
+    return String(value || '')
+        .trim()
+        .toLowerCase();
+}
+
+function escapeHTML(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+}
+
+function safeServerName(name) {
+    return String(name || '')
+        .trim()
+        .replace(/[^\wäöüÄÖÜß ._-]/g, '')
+        .slice(0, 40);
+}
+
+function getUsers() {
+    return readJSON(USERS_FILE, []);
+}
+
+function saveUsers(users) {
+    writeJSON(USERS_FILE, users);
+}
+
+function getServers() {
+    return readJSON(SERVERS_FILE, []);
+}
+
+function saveServers(servers) {
+    writeJSON(SERVERS_FILE, servers);
+}
+
+function getOrders() {
+    return readJSON(ORDERS_FILE, []);
+}
+
+function saveOrders(orders) {
+    writeJSON(ORDERS_FILE, orders);
+}
+
+function getCodes() {
+    return readJSON(CODES_FILE, []);
+}
+
+function saveCodes(codes) {
+    writeJSON(CODES_FILE, codes);
+}
+
+function getApplications() {
+    return readJSON(APPLICATIONS_FILE, []);
+}
+
+function saveApplications(applications) {
+    writeJSON(APPLICATIONS_FILE, applications);
+}
+
+function findUserByEmail(email) {
+    email = cleanEmail(email);
+
+    return getUsers().find(
+        user => cleanEmail(user.email) === email
+    );
+}
+
+function findUserById(userId) {
+    return getUsers().find(
+        user => user.id === userId
+    );
+}
+
+function isOwner(user) {
+    return !!user &&
+        cleanEmail(user.email) === OWNER_EMAIL;
+}
+
+function currentUser(req) {
+    if (!req.session.userId) {
+        return null;
+    }
+
+    return findUserById(req.session.userId) || null;
+}
+
+function requireLogin(req, res, next) {
+    const user = currentUser(req);
+
+    if (!user) {
+        return res.redirect('/login');
+    }
+
+    if (user.banned) {
+        req.session.destroy(() => {});
+        return res.status(403).send(page(
+            'Gesperrt',
+            `
+            <div class="box">
+                <h1>🚫 Konto gesperrt</h1>
+                <p>Dieses Konto wurde gesperrt.</p>
+            </div>
+            `
+        ));
+    }
+
+    next();
+}
+
+function requireOwner(req, res, next) {
+    const user = currentUser(req);
+
+    if (!user) {
+        return res.redirect('/login');
+    }
+
+    if (!isOwner(user)) {
+        return res.status(403).send(page(
+            'Kein Zugriff',
+            `
+            <div class="box">
+                <h1>🚫 Kein Zugriff</h1>
+                <p>Dieser Bereich ist nur für den Owner verfügbar.</p>
+            </div>
+            `
+        ));
+    }
+
+    next();
+}
+
+/* =========================================================
    EXPRESS
-   ============================================================ */
-
-app.disable('x-powered-by');
+========================================================= */
 
 app.use(express.urlencoded({
     extended: true,
-    limit: '1mb'
+    limit: '2mb'
 }));
 
 app.use(express.json({
-    limit: '1mb'
+    limit: '2mb'
 }));
 
 app.use(session({
-    store: new SQLiteStoreFactory({
-        db: 'sessions.db',
-        dir: DATA_DIR
-    }),
     secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
+    rolling: true,
     cookie: {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
@@ -87,2574 +286,2719 @@ app.use(session({
     }
 }));
 
-/* ============================================================
-   SQLITE
-   ============================================================ */
+/* =========================================================
+   GMAIL
+========================================================= */
 
-const db = new sqlite3.Database(DB_FILE);
+let mailer = null;
 
-db.serialize(function () {
-
-    db.run(`
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            username TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'user',
-            banned INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-    `);
-
-    db.run(`
-        CREATE TABLE IF NOT EXISTS servers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            owner_id INTEGER NOT NULL,
-            name TEXT NOT NULL,
-            version TEXT NOT NULL DEFAULT '1.21.1',
-            ram INTEGER NOT NULL DEFAULT 2048,
-            status TEXT NOT NULL DEFAULT 'offline',
-            locked INTEGER NOT NULL DEFAULT 0,
-            maintenance INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY(owner_id) REFERENCES users(id)
-        )
-    `);
-
-    db.run(`
-        CREATE TABLE IF NOT EXISTS logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            action TEXT NOT NULL,
-            details TEXT,
-            created_at TEXT NOT NULL
-        )
-    `);
-
-    db.run(`
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )
-    `);
-
-    db.run(`
-        INSERT OR IGNORE INTO settings (key, value)
-        VALUES ('maintenance', '0')
-    `);
-
-    db.run(`
-        INSERT OR IGNORE INTO settings (key, value)
-        VALUES ('registration', '1')
-    `);
-
-});
-
-/* ============================================================
-   DB HELFER
-   ============================================================ */
-
-function dbGet(sql, params) {
-    return new Promise(function (resolve, reject) {
-        db.get(sql, params || [], function (err, row) {
-            if (err) {
-                reject(err);
-                return;
-            }
-
-            resolve(row);
-        });
+if (
+    process.env.GMAIL_USER &&
+    process.env.GMAIL_APP_PASSWORD
+) {
+    mailer = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+            user: process.env.GMAIL_USER,
+            pass: process.env.GMAIL_APP_PASSWORD
+        }
     });
 }
 
-function dbAll(sql, params) {
-    return new Promise(function (resolve, reject) {
-        db.all(sql, params || [], function (err, rows) {
-            if (err) {
-                reject(err);
-                return;
-            }
-
-            resolve(rows || []);
-        });
-    });
-}
-
-function dbRun(sql, params) {
-    return new Promise(function (resolve, reject) {
-        db.run(sql, params || [], function (err) {
-            if (err) {
-                reject(err);
-                return;
-            }
-
-            resolve({
-                id: this.lastID,
-                changes: this.changes
-            });
-        });
-    });
-}
-
-/* ============================================================
-   ALLGEMEINE HELFER
-   ============================================================ */
-
-function now() {
-    return new Date().toISOString();
-}
-
-function escapeHtml(value) {
-    return String(value === undefined || value === null ? '' : value)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-}
-
-function safeName(value) {
-    return String(value || '')
-        .trim()
-        .replace(/[^a-zA-Z0-9äöüÄÖÜß _.-]/g, '')
-        .substring(0, 40);
-}
-
-function validEmail(value) {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
-        String(value || '').toLowerCase()
-    );
-}
-
-function validServerName(value) {
-    const name = String(value || '').trim();
-
-    if (name.length < 2) {
-        return false;
-    }
-
-    if (name.length > 32) {
-        return false;
-    }
-
-    return /^[a-zA-Z0-9äöüÄÖÜß _.-]+$/.test(name);
-}
-
-function validVersion(value) {
-    const version = String(value || '').trim();
-
-    if (version.length < 3 || version.length > 20) {
-        return false;
-    }
-
-    return /^[0-9A-Za-z._-]+$/.test(version);
-}
-
-function validRam(value) {
-    const ram = Number(value);
-
-    if (!Number.isInteger(ram)) {
-        return false;
-    }
-
-    return ram >= 512 && ram <= 16384;
-}
-
-async function logAction(userId, action, details) {
-    try {
-        await dbRun(
-            `
-            INSERT INTO logs
-            (user_id, action, details, created_at)
-            VALUES (?, ?, ?, ?)
-            `,
-            [
-                userId || null,
-                action,
-                details || '',
-                now()
-            ]
+async function sendMail(to, subject, html) {
+    if (!mailer) {
+        console.warn(
+            'Gmail ist nicht eingerichtet. E-Mail wurde nicht verschickt.'
         );
-    } catch (error) {
-        console.error('Log-Fehler:', error);
-    }
-}
 
-/* ============================================================
-   USER
-   ============================================================ */
-
-async function findUserById(id) {
-    return dbGet(
-        `
-        SELECT *
-        FROM users
-        WHERE id = ?
-        `,
-        [id]
-    );
-}
-
-async function findUserByEmail(email) {
-    return dbGet(
-        `
-        SELECT *
-        FROM users
-        WHERE LOWER(email) = LOWER(?)
-        `,
-        [email]
-    );
-}
-
-async function isOwner(user) {
-    if (!user) {
         return false;
     }
 
-    return String(user.email).toLowerCase() === OWNER_EMAIL;
-}
+    try {
+        await mailer.sendMail({
+            from: `"Minecraft Hosting" <${process.env.GMAIL_USER}>`,
+            to,
+            subject,
+            html
+        });
 
-async function isAdmin(user) {
-    if (!user) {
-        return false;
-    }
-
-    if (String(user.role) === 'admin') {
         return true;
-    }
-
-    return isOwner(user);
-}
-
-/* ============================================================
-   SESSION USER
-   ============================================================ */
-
-async function getCurrentUser(req) {
-    if (!req.session || !req.session.userId) {
-        return null;
-    }
-
-    const user = await findUserById(req.session.userId);
-
-    if (!user) {
-        req.session.destroy(function () {});
-        return null;
-    }
-
-    return user;
-}
-
-/* ============================================================
-   AUTH MIDDLEWARE
-   ============================================================ */
-
-async function requireLogin(req, res, next) {
-    try {
-        const user = await getCurrentUser(req);
-
-        if (!user) {
-            return res.redirect('/login');
-        }
-
-        if (Number(user.banned) === 1) {
-            req.session.destroy(function () {});
-            return res.status(403).send(
-                page(
-                    'Konto gesperrt',
-                    '<div class="card"><h1>Konto gesperrt</h1><p>Dein Konto wurde gesperrt.</p></div>'
-                )
-            );
-        }
-
-        req.user = user;
-
-        next();
     } catch (error) {
-        console.error(error);
-
-        res.status(500).send(
-            page(
-                'Fehler',
-                '<div class="card"><h1>Fehler</h1><p>Beim Laden ist ein Fehler aufgetreten.</p></div>'
-            )
+        console.error(
+            'Gmail Fehler:',
+            error.message
         );
+
+        return false;
     }
 }
 
-async function requireAdmin(req, res, next) {
-    try {
-        const user = await getCurrentUser(req);
+/* =========================================================
+   HTML
+========================================================= */
 
-        if (!user) {
-            return res.redirect('/login');
-        }
+function page(title, body, user = null) {
+    const owner = isOwner(user);
 
-        if (!(await isAdmin(user))) {
-            return res.status(403).send(
-                page(
-                    'Kein Zugriff',
-                    '<div class="card"><h1>Kein Zugriff</h1><p>Dieser Bereich ist nur für den Owner/Admin verfügbar.</p></div>'
-                )
-            );
-        }
+    return `
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHTML(title)} - Minecraft Hosting</title>
 
-        req.user = user;
-
-        next();
-    } catch (error) {
-        console.error(error);
-
-        res.status(500).send(
-            page(
-                'Fehler',
-                '<div class="card"><h1>Fehler</h1><p>Interner Fehler.</p></div>'
-            )
-        );
-    }
+<style>
+* {
+    box-sizing: border-box;
 }
 
-/* ============================================================
-   HTML DESIGN
-   ============================================================ */
-
-function page(title, content, user) {
-
-    const loggedIn = !!user;
-
-    const navigation = loggedIn
-        ? [
-            '<a href="/">Dashboard</a>',
-            '<a href="/servers">Meine Server</a>',
-            '<a href="/server/create">Server erstellen</a>',
-            '<a href="/account">Konto</a>',
-            (user && (user.role === 'admin' || String(user.email).toLowerCase() === OWNER_EMAIL))
-                ? '<a href="/admin">Admin</a>'
-                : '',
-            '<a href="/logout">Logout</a>'
-        ].join('')
-        : [
-            '<a href="/login">Login</a>',
-            '<a href="/register">Registrieren</a>'
-        ].join('');
-
-    return [
-        '<!DOCTYPE html>',
-        '<html lang="de">',
-        '<head>',
-        '<meta charset="UTF-8">',
-        '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
-        '<title>',
-        escapeHtml(title),
-        ' | Florian / WeisserHai Minecraft Hosting',
-        '</title>',
-        '<style>',
-        '*{box-sizing:border-box}',
-        'body{margin:0;background:#090d14;color:#eef2f7;font-family:Arial,Helvetica,sans-serif}',
-        'a{color:inherit;text-decoration:none}',
-        '.nav{background:#101722;border-bottom:1px solid #263244;padding:16px 24px;display:flex;align-items:center;justify-content:space-between;gap:20px;position:sticky;top:0;z-index:10}',
-        '.brand{font-size:20px;font-weight:800}',
-        '.navlinks{display:flex;gap:8px;flex-wrap:wrap}',
-        '.navlinks a{padding:9px 12px;border-radius:8px;color:#cbd5e1}',
-        '.navlinks a:hover{background:#1b2534;color:white}',
-        '.container{max-width:1200px;margin:0 auto;padding:30px 18px}',
-        '.hero{padding:45px 30px;background:linear-gradient(135deg,#111827,#162236);border:1px solid #263244;border-radius:18px;margin-bottom:24px}',
-        '.hero h1{font-size:42px;margin:0 0 12px}',
-        '.hero p{color:#aeb9c9;font-size:17px;line-height:1.6}',
-        '.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:18px}',
-        '.card{background:#111722;border:1px solid #273346;border-radius:14px;padding:22px;margin-bottom:18px}',
-        '.card h2,.card h3{margin-top:0}',
-        '.muted{color:#9ca9bb}',
-        '.stat{font-size:32px;font-weight:800}',
-        '.btn{display:inline-block;border:0;border-radius:9px;padding:11px 16px;background:#2563eb;color:white;cursor:pointer;font-weight:700}',
-        '.btn:hover{background:#1d4ed8}',
-        '.btn.red{background:#dc2626}',
-        '.btn.red:hover{background:#b91c1c}',
-        '.btn.green{background:#16a34a}',
-        '.btn.gray{background:#374151}',
-        'button.btn{font-family:inherit}',
-        'form{margin:0}',
-        'label{display:block;margin:14px 0 7px;font-weight:700}',
-        'input,select{width:100%;background:#0b111b;border:1px solid #344155;border-radius:8px;color:white;padding:12px;font-size:15px;outline:none}',
-        'input:focus,select:focus{border-color:#3b82f6}',
-        '.form{max-width:520px;margin:auto}',
-        '.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}',
-        '.notice{padding:13px 15px;border-radius:9px;background:#172033;border:1px solid #2d3d56;margin-bottom:18px}',
-        '.error{background:#3a1518;border-color:#7f1d1d}',
-        '.success{background:#102d1a;border-color:#166534}',
-        '.warning{background:#33270d;border-color:#854d0e}',
-        '.server{position:relative}',
-        '.badge{display:inline-block;padding:5px 9px;border-radius:999px;font-size:12px;font-weight:800;background:#334155}',
-        '.badge.green{background:#166534}',
-        '.badge.red{background:#991b1b}',
-        '.badge.yellow{background:#854d0e}',
-        '.badge.blue{background:#1d4ed8}',
-        '.table-wrap{overflow:auto}',
-        'table{width:100%;border-collapse:collapse}',
-        'th,td{text-align:left;padding:12px;border-bottom:1px solid #273346;white-space:nowrap}',
-        'th{color:#aeb9c9}',
-        'footer{text-align:center;padding:30px;color:#718096}',
-        '.small{font-size:13px}',
-        '@media(max-width:700px){.nav{align-items:flex-start;flex-direction:column}.hero h1{font-size:30px}.container{padding:18px 12px}}',
-        '</style>',
-        '</head>',
-        '<body>',
-        '<nav class="nav">',
-        '<div class="brand">⛏️ Florian / WeisserHai Hosting</div>',
-        '<div class="navlinks">',
-        navigation,
-        '</div>',
-        '</nav>',
-        '<main class="container">',
-        content,
-        '</main>',
-        '<footer>',
-        'Florian / WeisserHai Minecraft Hosting',
-        '</footer>',
-        '</body>',
-        '</html>'
-    ].join('');
+body {
+    margin: 0;
+    font-family: Arial, Helvetica, sans-serif;
+    background: #0b0f14;
+    color: #f5f5f5;
 }
 
-/* ============================================================
-   ROOT
-   ============================================================ */
+a {
+    color: inherit;
+    text-decoration: none;
+}
 
-app.get('/', async function (req, res) {
+nav {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: #111821;
+    border-bottom: 1px solid #26303c;
+    padding: 15px 25px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 20px;
+}
 
-    try {
+.logo {
+    font-size: 21px;
+    font-weight: 800;
+}
 
-        const user = await getCurrentUser(req);
+.navlinks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
 
-        if (!user) {
+.navlinks a {
+    padding: 9px 12px;
+    border-radius: 8px;
+    background: #19222d;
+}
 
-            const content = [
-                '<section class="hero">',
-                '<h1>Dein Minecraft Hosting</h1>',
-                '<p>',
-                'Erstelle und verwalte deine Minecraft-Server über eine einfache Oberfläche.',
-                '</p>',
-                '<div class="actions">',
-                '<a class="btn" href="/register">Jetzt registrieren</a>',
-                '<a class="btn gray" href="/login">Einloggen</a>',
-                '</div>',
-                '</section>',
+.navlinks a:hover {
+    background: #243142;
+}
 
-                '<div class="grid">',
+main {
+    width: min(1200px, 94%);
+    margin: 35px auto;
+}
 
-                '<div class="card">',
-                '<h3>🟢 Kostenlos starten</h3>',
-                '<p class="muted">Normale Benutzer können einen kostenlosen Minecraft-Server erstellen.</p>',
-                '</div>',
+.hero {
+    padding: 45px;
+    border-radius: 18px;
+    background:
+        linear-gradient(135deg,#162331,#0e141c);
+    border: 1px solid #273444;
+    margin-bottom: 25px;
+}
 
-                '<div class="card">',
-                '<h3>⚙️ Serververwaltung</h3>',
-                '<p class="muted">Server erstellen, starten, stoppen und verwalten.</p>',
-                '</div>',
+.hero h1 {
+    font-size: 42px;
+    margin-top: 0;
+}
 
-                '<div class="card">',
-                '<h3>🔐 Sichere Konten</h3>',
-                '<p class="muted">Passwörter werden mit bcrypt sicher gespeichert.</p>',
-                '</div>',
+.grid {
+    display: grid;
+    grid-template-columns:
+        repeat(auto-fit,minmax(250px,1fr));
+    gap: 18px;
+}
 
-                '</div>'
-            ].join('');
+.card,
+.box {
+    background: #111821;
+    border: 1px solid #26303c;
+    border-radius: 14px;
+    padding: 22px;
+    margin-bottom: 18px;
+}
 
-            return res.send(page('Startseite', content));
-        }
+.card h2,
+.box h2 {
+    margin-top: 0;
+}
 
-        const servers = await dbAll(
+input,
+select,
+textarea {
+    width: 100%;
+    padding: 12px;
+    margin: 7px 0 14px;
+    border-radius: 8px;
+    border: 1px solid #344252;
+    background: #0b1118;
+    color: white;
+}
+
+textarea {
+    min-height: 130px;
+    resize: vertical;
+}
+
+button,
+.btn {
+    display: inline-block;
+    border: 0;
+    border-radius: 8px;
+    padding: 11px 15px;
+    background: #2d7cff;
+    color: white;
+    cursor: pointer;
+    font-weight: 700;
+}
+
+button:hover,
+.btn:hover {
+    filter: brightness(1.12);
+}
+
+.btn-red {
+    background: #d94343;
+}
+
+.btn-green {
+    background: #24a15c;
+}
+
+.btn-gray {
+    background: #384554;
+}
+
+.status {
+    display: inline-block;
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 13px;
+    background: #273444;
+}
+
+.online {
+    background: #1f7044;
+}
+
+.offline {
+    background: #613334;
+}
+
+.warning {
+    padding: 14px;
+    border-radius: 10px;
+    background: #4c3b18;
+    border: 1px solid #8d702d;
+    margin-bottom: 15px;
+}
+
+.success {
+    padding: 14px;
+    border-radius: 10px;
+    background: #153e29;
+    border: 1px solid #28784d;
+    margin-bottom: 15px;
+}
+
+.error {
+    padding: 14px;
+    border-radius: 10px;
+    background: #4c2020;
+    border: 1px solid #8d3939;
+    margin-bottom: 15px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th,
+td {
+    padding: 11px;
+    border-bottom: 1px solid #29333f;
+    text-align: left;
+    vertical-align: top;
+}
+
+.small {
+    color: #aeb8c4;
+    font-size: 14px;
+}
+
+.coins {
+    font-weight: 800;
+    color: #ffd45c;
+}
+
+footer {
+    text-align: center;
+    padding: 35px;
+    color: #7e8996;
+}
+</style>
+</head>
+
+<body>
+
+<nav>
+    <div class="logo">⛏️ Minecraft Hosting</div>
+
+    <div class="navlinks">
+        <a href="/">Home</a>
+
+        ${
+            user
+            ? `
+                <a href="/dashboard">Dashboard</a>
+                <a href="/servers">Server</a>
+                <a href="/orders">Bestellungen</a>
+                <a href="/applications">Bewerbungen</a>
+                ${
+                    owner
+                    ? `<a href="/admin">Admin</a>`
+                    : ''
+                }
+                <a href="/logout">Logout</a>
             `
-            SELECT *
-            FROM servers
-            WHERE owner_id = ?
-            ORDER BY id DESC
-            `,
-            [user.id]
-        );
+            : `
+                <a href="/login">Login</a>
+                <a href="/register">Registrieren</a>
+            `
+        }
+    </div>
+</nav>
 
-        const content = [
-            '<section class="hero">',
-            '<h1>Willkommen, ',
-            escapeHtml(user.username),
-            '</h1>',
-            '<p>Verwalte deine Minecraft-Server zentral über dein Dashboard.</p>',
-            '<div class="actions">',
-            '<a class="btn" href="/server/create">+ Server erstellen</a>',
-            '<a class="btn gray" href="/servers">Meine Server</a>',
-            '</div>',
-            '</section>',
+<main>
+${body}
+</main>
 
-            '<div class="grid">',
+<footer>
+Minecraft Hosting • Florian / WeisserHai
+</footer>
 
-            '<div class="card">',
-            '<div class="muted">Deine Server</div>',
-            '<div class="stat">',
-            String(servers.length),
-            '</div>',
-            '</div>',
+</body>
+</html>
+`;
+}
 
-            '<div class="card">',
-            '<div class="muted">Konto</div>',
-            '<div class="stat">',
-            user.role === 'admin' || String(user.email).toLowerCase() === OWNER_EMAIL
-                ? 'ADMIN'
-                : 'USER',
-            '</div>',
-            '</div>',
+/* =========================================================
+   HOME
+========================================================= */
 
-            '<div class="card">',
-            '<div class="muted">Account seit</div>',
-            '<div class="stat small">',
-            escapeHtml(user.created_at),
-            '</div>',
-            '</div>',
+app.get('/', (req, res) => {
+    const user = currentUser(req);
 
-            '</div>'
-        ].join('');
+    res.send(page(
+        'Minecraft Hosting',
+        `
+        <section class="hero">
+            <h1>⛏️ Minecraft Hosting</h1>
+            <p>
+                Verwalte deine Minecraft-Server einfach über
+                ein modernes Webinterface.
+            </p>
 
-        res.send(page('Dashboard', content, user));
+            ${
+                user
+                ? `
+                <a class="btn" href="/dashboard">
+                    Zum Dashboard
+                </a>
+                `
+                : `
+                <a class="btn" href="/register">
+                    Jetzt registrieren
+                </a>
+                `
+            }
+        </section>
 
-    } catch (error) {
+        <div class="grid">
+            <div class="card">
+                <h2>🖥️ Server</h2>
+                <p>Erstelle und verwalte deine Minecraft-Server.</p>
+            </div>
 
-        console.error(error);
+            <div class="card">
+                <h2>🔐 Sicherer Login</h2>
+                <p>Passwörter werden gehasht gespeichert.</p>
+            </div>
 
-        res.status(500).send(
-            page(
-                'Fehler',
-                '<div class="card"><h1>Fehler</h1><p>Dashboard konnte nicht geladen werden.</p></div>'
-            )
-        );
-    }
+            <div class="card">
+                <h2>📧 Passwort vergessen</h2>
+                <p>Passwort per Gmail zurücksetzen.</p>
+            </div>
+
+            <div class="card">
+                <h2>💰 Coins</h2>
+                <p>Coins verwalten und Codes einlösen.</p>
+            </div>
+        </div>
+        `,
+        user
+    ));
 });
 
-/* ============================================================
+/* =========================================================
    REGISTER
-   ============================================================ */
+========================================================= */
 
-app.get('/register', async function (req, res) {
-
-    const user = await getCurrentUser(req);
-
-    if (user) {
-        return res.redirect('/');
+app.get('/register', (req, res) => {
+    if (currentUser(req)) {
+        return res.redirect('/dashboard');
     }
 
-    const setting = await dbGet(
-        `SELECT value FROM settings WHERE key = 'registration'`
+    res.send(page(
+        'Registrieren',
+        `
+        <div class="box">
+            <h1>📝 Registrieren</h1>
+
+            <form method="POST" action="/register">
+                <label>Name</label>
+                <input
+                    name="name"
+                    required
+                    maxlength="40"
+                >
+
+                <label>E-Mail</label>
+                <input
+                    type="email"
+                    name="email"
+                    required
+                >
+
+                <label>Passwort</label>
+                <input
+                    type="password"
+                    name="password"
+                    required
+                    minlength="8"
+                >
+
+                <button type="submit">
+                    Konto erstellen
+                </button>
+            </form>
+
+            <p>
+                Bereits registriert?
+                <a href="/login">Login</a>
+            </p>
+        </div>
+        `
+    ));
+});
+
+app.post('/register', async (req, res) => {
+    const name = String(req.body.name || '').trim();
+    const email = cleanEmail(req.body.email);
+    const password = String(req.body.password || '');
+
+    if (!name || !email || password.length < 8) {
+        return res.status(400).send(page(
+            'Fehler',
+            `
+            <div class="error">
+                Bitte Name, gültige E-Mail und ein Passwort
+                mit mindestens 8 Zeichen eingeben.
+            </div>
+            <a class="btn" href="/register">Zurück</a>
+            `
+        ));
+    }
+
+    if (findUserByEmail(email)) {
+        return res.status(409).send(page(
+            'Fehler',
+            `
+            <div class="error">
+                Diese E-Mail ist bereits registriert.
+            </div>
+            <a class="btn" href="/login">Zum Login</a>
+            `
+        ));
+    }
+
+    const users = getUsers();
+
+    const passwordHash = await bcrypt.hash(
+        password,
+        12
     );
 
-    if (setting && setting.value === '0') {
-        return res.status(403).send(
-            page(
-                'Registrierung deaktiviert',
-                '<div class="card"><h1>Registrierung deaktiviert</h1><p>Neue Registrierungen sind momentan deaktiviert.</p></div>'
-            )
-        );
-    }
+    const user = {
+        id: id('user'),
+        name,
+        email,
+        passwordHash,
+        coins: 0,
+        banned: false,
+        createdAt: now()
+    };
 
-    const content = [
-        '<div class="card form">',
-        '<h1>Registrieren</h1>',
-        '<p class="muted">Erstelle dein Hosting-Konto.</p>',
-        '<form method="POST" action="/register">',
+    users.push(user);
 
-        '<label>Benutzername</label>',
-        '<input name="username" maxlength="32" required autocomplete="username">',
+    saveUsers(users);
 
-        '<label>E-Mail</label>',
-        '<input name="email" type="email" required autocomplete="email">',
+    req.session.userId = user.id;
 
-        '<label>Passwort</label>',
-        '<input name="password" type="password" minlength="6" required autocomplete="new-password">',
-
-        '<label>Passwort wiederholen</label>',
-        '<input name="password2" type="password" minlength="6" required autocomplete="new-password">',
-
-        '<div class="actions">',
-        '<button class="btn" type="submit">Konto erstellen</button>',
-        '<a class="btn gray" href="/login">Ich habe bereits ein Konto</a>',
-        '</div>',
-
-        '</form>',
-        '</div>'
-    ].join('');
-
-    res.send(page('Registrierung', content));
+    res.redirect('/dashboard');
 });
 
-app.post('/register', async function (req, res) {
-
-    try {
-
-        const username = safeName(req.body.username);
-        const email = String(req.body.email || '').toLowerCase().trim();
-        const password = String(req.body.password || '');
-        const password2 = String(req.body.password2 || '');
-
-        if (username.length < 2) {
-            return res.status(400).send(
-                page(
-                    'Fehler',
-                    '<div class="card error"><h1>Fehler</h1><p>Der Benutzername ist ungültig.</p><a class="btn" href="/register">Zurück</a></div>'
-                )
-            );
-        }
-
-        if (!validEmail(email)) {
-            return res.status(400).send(
-                page(
-                    'Fehler',
-                    '<div class="card error"><h1>Fehler</h1><p>Die E-Mail-Adresse ist ungültig.</p><a class="btn" href="/register">Zurück</a></div>'
-                )
-            );
-        }
-
-        if (password.length < 6) {
-            return res.status(400).send(
-                page(
-                    'Fehler',
-                    '<div class="card error"><h1>Fehler</h1><p>Das Passwort muss mindestens 6 Zeichen lang sein.</p><a class="btn" href="/register">Zurück</a></div>'
-                )
-            );
-        }
-
-        if (password !== password2) {
-            return res.status(400).send(
-                page(
-                    'Fehler',
-                    '<div class="card error"><h1>Fehler</h1><p>Die Passwörter stimmen nicht überein.</p><a class="btn" href="/register">Zurück</a></div>'
-                )
-            );
-        }
-
-        const existing = await findUserByEmail(email);
-
-        if (existing) {
-            return res.status(409).send(
-                page(
-                    'Konto vorhanden',
-                    '<div class="card error"><h1>Konto vorhanden</h1><p>Diese E-Mail ist bereits registriert.</p><a class="btn" href="/login">Zum Login</a></div>'
-                )
-            );
-        }
-
-        const hash = await bcrypt.hash(password, 12);
-
-        const role = email === OWNER_EMAIL ? 'admin' : 'user';
-
-        const result = await dbRun(
-            `
-            INSERT INTO users
-            (email, password, username, role, banned, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 0, ?, ?)
-            `,
-            [
-                email,
-                hash,
-                username,
-                role,
-                now(),
-                now()
-            ]
-        );
-
-        await logAction(
-            result.id,
-            'REGISTER',
-            'Neues Konto erstellt'
-        );
-
-        req.session.userId = result.id;
-
-        res.redirect('/');
-
-    } catch (error) {
-
-        console.error('Register:', error);
-
-        res.status(500).send(
-            page(
-                'Fehler',
-                '<div class="card error"><h1>Registrierung fehlgeschlagen</h1><p>Bitte versuche es erneut.</p><a class="btn" href="/register">Zurück</a></div>'
-            )
-        );
-    }
-});
-
-/* ============================================================
+/* =========================================================
    LOGIN
-   ============================================================ */
+========================================================= */
 
-app.get('/login', async function (req, res) {
-
-    const user = await getCurrentUser(req);
-
-    if (user) {
-        return res.redirect('/');
+app.get('/login', (req, res) => {
+    if (currentUser(req)) {
+        return res.redirect('/dashboard');
     }
 
-    const content = [
-        '<div class="card form">',
-        '<h1>Login</h1>',
-        '<p class="muted">Melde dich mit deinem Konto an.</p>',
-        '<form method="POST" action="/login">',
+    res.send(page(
+        'Login',
+        `
+        <div class="box">
+            <h1>🔐 Login</h1>
 
-        '<label>E-Mail</label>',
-        '<input name="email" type="email" required autocomplete="email">',
+            <form method="POST" action="/login">
+                <label>E-Mail</label>
+                <input
+                    type="email"
+                    name="email"
+                    required
+                >
 
-        '<label>Passwort</label>',
-        '<input name="password" type="password" required autocomplete="current-password">',
+                <label>Passwort</label>
+                <input
+                    type="password"
+                    name="password"
+                    required
+                >
 
-        '<div class="actions">',
-        '<button class="btn" type="submit">Einloggen</button>',
-        '<a class="btn gray" href="/register">Registrieren</a>',
-        '</div>',
+                <button type="submit">
+                    Einloggen
+                </button>
+            </form>
 
-        '</form>',
-        '</div>'
-    ].join('');
+            <p>
+                <a href="/forgot-password">
+                    Passwort vergessen?
+                </a>
+            </p>
 
-    res.send(page('Login', content));
+            <p>
+                Noch kein Konto?
+                <a href="/register">Registrieren</a>
+            </p>
+        </div>
+        `
+    ));
 });
 
-app.post('/login', async function (req, res) {
+app.post('/login', async (req, res) => {
+    const email = cleanEmail(req.body.email);
+    const password = String(req.body.password || '');
 
-    try {
+    const user = findUserByEmail(email);
 
-        const email = String(req.body.email || '').toLowerCase().trim();
-        const password = String(req.body.password || '');
-
-        const user = await findUserByEmail(email);
-
-        if (!user) {
-            return res.status(401).send(
-                page(
-                    'Login fehlgeschlagen',
-                    '<div class="card error"><h1>Login fehlgeschlagen</h1><p>E-Mail oder Passwort ist falsch.</p><a class="btn" href="/login">Erneut versuchen</a></div>'
-                )
-            );
-        }
-
-        if (Number(user.banned) === 1) {
-            return res.status(403).send(
-                page(
-                    'Konto gesperrt',
-                    '<div class="card error"><h1>Konto gesperrt</h1><p>Dieses Konto wurde gesperrt.</p></div>'
-                )
-            );
-        }
-
-        const correct = await bcrypt.compare(
-            password,
-            user.password
-        );
-
-        if (!correct) {
-            await logAction(
-                user.id,
-                'LOGIN_FAILED',
-                'Falsches Passwort'
-            );
-
-            return res.status(401).send(
-                page(
-                    'Login fehlgeschlagen',
-                    '<div class="card error"><h1>Login fehlgeschlagen</h1><p>E-Mail oder Passwort ist falsch.</p><a class="btn" href="/login">Erneut versuchen</a></div>'
-                )
-            );
-        }
-
-        req.session.regenerate(function (err) {
-
-            if (err) {
-                console.error(err);
-
-                return res.status(500).send(
-                    page(
-                        'Fehler',
-                        '<div class="card error"><h1>Login-Fehler</h1><p>Die Sitzung konnte nicht erstellt werden.</p></div>'
-                    )
-                );
-            }
-
-            req.session.userId = user.id;
-
-            req.session.save(async function (saveError) {
-
-                if (saveError) {
-                    console.error(saveError);
-
-                    return res.status(500).send(
-                        page(
-                            'Fehler',
-                            '<div class="card error"><h1>Login-Fehler</h1><p>Die Sitzung konnte nicht gespeichert werden.</p></div>'
-                        )
-                    );
-                }
-
-                await logAction(
-                    user.id,
-                    'LOGIN',
-                    'Erfolgreich eingeloggt'
-                );
-
-                res.redirect('/');
-            });
-        });
-
-    } catch (error) {
-
-        console.error('Login:', error);
-
-        res.status(500).send(
-            page(
-                'Fehler',
-                '<div class="card error"><h1>Fehler</h1><p>Beim Login ist ein Fehler aufgetreten.</p></div>'
-            )
-        );
+    if (!user) {
+        return res.status(401).send(page(
+            'Login fehlgeschlagen',
+            `
+            <div class="error">
+                E-Mail oder Passwort ist falsch.
+            </div>
+            <a class="btn" href="/login">Zurück</a>
+            `
+        ));
     }
+
+    if (user.banned) {
+        return res.status(403).send(page(
+            'Gesperrt',
+            `
+            <div class="error">
+                Dieses Konto wurde gesperrt.
+            </div>
+            `
+        ));
+    }
+
+    const valid = await bcrypt.compare(
+        password,
+        user.passwordHash
+    );
+
+    if (!valid) {
+        return res.status(401).send(page(
+            'Login fehlgeschlagen',
+            `
+            <div class="error">
+                E-Mail oder Passwort ist falsch.
+            </div>
+            <a class="btn" href="/login">Zurück</a>
+            `
+        ));
+    }
+
+    req.session.userId = user.id;
+
+    res.redirect('/dashboard');
 });
 
-/* ============================================================
+/* =========================================================
    LOGOUT
-   ============================================================ */
+========================================================= */
 
-app.get('/logout', async function (req, res) {
-
-    const user = await getCurrentUser(req);
-
-    if (user) {
-        await logAction(
-            user.id,
-            'LOGOUT',
-            'Ausgeloggt'
-        );
-    }
-
-    req.session.destroy(function () {
-        res.redirect('/login');
+app.get('/logout', (req, res) => {
+    req.session.destroy(() => {
+        res.redirect('/');
     });
 });
 
-/* ============================================================
-   SERVER ÜBERSICHT
-   ============================================================ */
+/* =========================================================
+   FORGOT PASSWORD
+========================================================= */
 
-app.get('/servers', requireLogin, async function (req, res) {
+app.get('/forgot-password', (req, res) => {
+    res.send(page(
+        'Passwort vergessen',
+        `
+        <div class="box">
+            <h1>📧 Passwort vergessen</h1>
 
-    try {
+            <p>
+                Gib deine registrierte E-Mail-Adresse ein.
+                Wenn sie existiert, bekommst du einen Reset-Link.
+            </p>
 
-        const servers = await dbAll(
-            `
-            SELECT *
-            FROM servers
-            WHERE owner_id = ?
-            ORDER BY id DESC
-            `,
-            [req.user.id]
-        );
+            <form method="POST" action="/forgot-password">
+                <label>E-Mail</label>
 
-        let cards = '';
+                <input
+                    type="email"
+                    name="email"
+                    required
+                >
 
-        if (servers.length === 0) {
-
-            cards = [
-                '<div class="card">',
-                '<h2>Noch kein Server</h2>',
-                '<p class="muted">Du hast noch keinen Minecraft-Server erstellt.</p>',
-                '<a class="btn" href="/server/create">Server erstellen</a>',
-                '</div>'
-            ].join('');
-
-        } else {
-
-            cards = servers.map(function (server) {
-
-                let statusClass = '';
-
-                if (server.status === 'online') {
-                    statusClass = 'green';
-                } else if (server.status === 'offline') {
-                    statusClass = 'red';
-                } else {
-                    statusClass = 'yellow';
-                }
-
-                const lockedText = Number(server.locked) === 1
-                    ? '<span class="badge red">GESPERRT</span>'
-                    : '<span class="badge green">FREI</span>';
-
-                const maintenanceText = Number(server.maintenance) === 1
-                    ? '<span class="badge yellow">WARTUNG</span>'
-                    : '';
-
-                return [
-                    '<div class="card server">',
-                    '<h2>',
-                    escapeHtml(server.name),
-                    '</h2>',
-                    '<p>',
-                    '<span class="badge ',
-                    statusClass,
-                    '">',
-                    escapeHtml(server.status.toUpperCase()),
-                    '</span> ',
-                    lockedText,
-                    ' ',
-                    maintenanceText,
-                    '</p>',
-                    '<p class="muted">',
-                    'Version: ',
-                    escapeHtml(server.version),
-                    '<br>',
-                    'RAM: ',
-                    String(server.ram),
-                    ' MB',
-                    '</p>',
-                    '<div class="actions">',
-                    '<a class="btn" href="/server/',
-                    String(server.id),
-                    '">Verwalten</a>',
-                    '</div>',
-                    '</div>'
-                ].join('');
-
-            }).join('');
-        }
-
-        const content = [
-            '<div class="actions" style="margin-bottom:18px">',
-            '<a class="btn" href="/server/create">+ Server erstellen</a>',
-            '</div>',
-            '<div class="grid">',
-            cards,
-            '</div>'
-        ].join('');
-
-        res.send(
-            page(
-                'Meine Server',
-                content,
-                req.user
-            )
-        );
-
-    } catch (error) {
-
-        console.error(error);
-
-        res.status(500).send(
-            page(
-                'Fehler',
-                '<div class="card error"><h1>Fehler</h1><p>Server konnten nicht geladen werden.</p></div>',
-                req.user
-            )
-        );
-    }
+                <button type="submit">
+                    Reset-Link senden
+                </button>
+            </form>
+        </div>
+        `
+    ));
 });
 
-/* ============================================================
-   SERVER ERSTELLEN
-   ============================================================ */
+app.post('/forgot-password', async (req, res) => {
+    const email = cleanEmail(req.body.email);
+    const user = findUserByEmail(email);
 
-app.get('/server/create', requireLogin, async function (req, res) {
+    /*
+       Absichtlich gleiche Antwort,
+       damit niemand herausfinden kann,
+       welche E-Mails registriert sind.
+    */
 
-    const owner = await isOwner(req.user);
+    if (user) {
+        const token = randomToken();
 
-    const countRow = await dbGet(
+        const users = getUsers();
+
+        const index = users.findIndex(
+            u => u.id === user.id
+        );
+
+        users[index].resetToken = token;
+
+        users[index].resetExpires =
+            Date.now() + 1000 * 60 * 30;
+
+        saveUsers(users);
+
+        const baseURL =
+            process.env.BASE_URL ||
+            `http://localhost:${PORT}`;
+
+        const resetURL =
+            `${baseURL}/reset-password/${token}`;
+
+        await sendMail(
+            user.email,
+            'Passwort zurücksetzen',
+            `
+            <h2>Passwort zurücksetzen</h2>
+
+            <p>
+                Hallo ${escapeHTML(user.name)},
+            </p>
+
+            <p>
+                Du hast einen Passwort-Reset angefordert.
+            </p>
+
+            <p>
+                <a href="${resetURL}">
+                    Passwort zurücksetzen
+                </a>
+            </p>
+
+            <p>
+                Der Link ist 30 Minuten gültig.
+            </p>
+            `
+        );
+    }
+
+    res.send(page(
+        'E-Mail gesendet',
         `
-        SELECT COUNT(*) AS count
-        FROM servers
-        WHERE owner_id = ?
-        `,
-        [req.user.id]
+        <div class="success">
+            Wenn ein Konto mit dieser E-Mail existiert,
+            wurde ein Reset-Link verschickt.
+        </div>
+
+        <a class="btn" href="/login">
+            Zum Login
+        </a>
+        `
+    ));
+});
+
+/* =========================================================
+   RESET PASSWORD
+========================================================= */
+
+app.get('/reset-password/:token', (req, res) => {
+    const token = String(req.params.token || '');
+
+    const users = getUsers();
+
+    const user = users.find(
+        u =>
+            u.resetToken === token &&
+            Number(u.resetExpires || 0) > Date.now()
     );
 
-    const count = Number(countRow ? countRow.count : 0);
-
-    if (!owner && count >= 1) {
-
-        const content = [
-            '<div class="card warning">',
-            '<h1>Server-Limit erreicht</h1>',
-            '<p>',
-            'Normale Benutzer können aktuell einen kostenlosen Server besitzen.',
-            '</p>',
-            '<p class="muted">',
-            'Der Owner kann unbegrenzt Server erstellen.',
-            '</p>',
-            '<a class="btn" href="/servers">Zurück zu meinen Servern</a>',
-            '</div>'
-        ].join('');
-
-        return res.send(
-            page(
-                'Server-Limit',
-                content,
-                req.user
-            )
-        );
+    if (!user) {
+        return res.status(400).send(page(
+            'Ungültiger Link',
+            `
+            <div class="error">
+                Dieser Reset-Link ist ungültig oder abgelaufen.
+            </div>
+            <a class="btn" href="/forgot-password">
+                Neuen Link anfordern
+            </a>
+            `
+        ));
     }
 
-    const content = [
-        '<div class="card form">',
-        '<h1>Minecraft-Server erstellen</h1>',
-        '<p class="muted">Erstelle einen neuen Server.</p>',
-
-        '<form method="POST" action="/server/create">',
-
-        '<label>Servername</label>',
-        '<input name="name" maxlength="32" required placeholder="Mein Minecraft Server">',
-
-        '<label>Minecraft-Version</label>',
-        '<input name="version" maxlength="20" value="1.21.1" required>',
-
-        '<label>RAM in MB</label>',
-        '<select name="ram">',
-        '<option value="1024">1024 MB</option>',
-        '<option value="2048" selected>2048 MB</option>',
-        '<option value="4096">4096 MB</option>',
-        '<option value="6144">6144 MB</option>',
-        '<option value="8192">8192 MB</option>',
-        '<option value="16384">16384 MB</option>',
-        '</select>',
-
-        '<div class="actions">',
-        '<button class="btn" type="submit">Server erstellen</button>',
-        '<a class="btn gray" href="/servers">Abbrechen</a>',
-        '</div>',
-
-        '</form>',
-        '</div>'
-    ].join('');
-
-    res.send(
-        page(
-            'Server erstellen',
-            content,
-            req.user
-        )
-    );
-});
-
-app.post('/server/create', requireLogin, async function (req, res) {
-
-    try {
-
-        const owner = await isOwner(req.user);
-
-        const countRow = await dbGet(
-            `
-            SELECT COUNT(*) AS count
-            FROM servers
-            WHERE owner_id = ?
-            `,
-            [req.user.id]
-        );
-
-        const count = Number(countRow ? countRow.count : 0);
-
-        if (!owner && count >= 1) {
-            return res.status(403).send(
-                page(
-                    'Limit',
-                    '<div class="card error"><h1>Server-Limit</h1><p>Du kannst maximal einen kostenlosen Server besitzen.</p><a class="btn" href="/servers">Zurück</a></div>',
-                    req.user
-                )
-            );
-        }
-
-        const name = safeName(req.body.name);
-        const version = String(req.body.version || '').trim();
-        const ram = Number(req.body.ram);
-
-        if (!validServerName(name)) {
-            return res.status(400).send(
-                page(
-                    'Fehler',
-                    '<div class="card error"><h1>Ungültiger Servername</h1><p>Verwende 2 bis 32 Zeichen.</p><a class="btn" href="/server/create">Zurück</a></div>',
-                    req.user
-                )
-            );
-        }
-
-        if (!validVersion(version)) {
-            return res.status(400).send(
-                page(
-                    'Fehler',
-                    '<div class="card error"><h1>Ungültige Version</h1><p>Die Minecraft-Version ist ungültig.</p><a class="btn" href="/server/create">Zurück</a></div>',
-                    req.user
-                )
-            );
-        }
-
-        if (!validRam(ram)) {
-            return res.status(400).send(
-                page(
-                    'Fehler',
-                    '<div class="card error"><h1>Ungültiger RAM</h1><p>Der RAM muss zwischen 512 und 16384 MB liegen.</p><a class="btn" href="/server/create">Zurück</a></div>',
-                    req.user
-                )
-            );
-        }
-
-        const result = await dbRun(
-            `
-            INSERT INTO servers
-            (owner_id, name, version, ram, status, locked, maintenance, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'offline', 0, 0, ?, ?)
-            `,
-            [
-                req.user.id,
-                name,
-                version,
-                ram,
-                now(),
-                now()
-            ]
-        );
-
-        await logAction(
-            req.user.id,
-            'SERVER_CREATE',
-            'Server #' + result.id + ' erstellt: ' + name
-        );
-
-        res.redirect('/server/' + result.id);
-
-    } catch (error) {
-
-        console.error('Server erstellen:', error);
-
-        res.status(500).send(
-            page(
-                'Fehler',
-                '<div class="card error"><h1>Server konnte nicht erstellt werden</h1><p>Bitte versuche es erneut.</p><a class="btn" href="/servers">Zurück</a></div>',
-                req.user
-            )
-        );
-    }
-});
-
-/* ============================================================
-   SERVER DETAILS
-   ============================================================ */
-
-app.get('/server/:id', requireLogin, async function (req, res) {
-
-    try {
-
-        const serverId = Number(req.params.id);
-
-        if (!Number.isInteger(serverId)) {
-            return res.status(400).send(
-                page(
-                    'Fehler',
-                    '<div class="card error"><h1>Ungültige Server-ID</h1></div>',
-                    req.user
-                )
-            );
-        }
-
-        const server = await dbGet(
-            `
-            SELECT *
-            FROM servers
-            WHERE id = ?
-            `,
-            [serverId]
-        );
-
-        if (!server) {
-            return res.status(404).send(
-                page(
-                    'Nicht gefunden',
-                    '<div class="card error"><h1>Server nicht gefunden</h1><a class="btn" href="/servers">Zurück</a></div>',
-                    req.user
-                )
-            );
-        }
-
-        const owner = await isOwner(req.user);
-
-        if (Number(server.owner_id) !== Number(req.user.id) && !owner) {
-            return res.status(403).send(
-                page(
-                    'Kein Zugriff',
-                    '<div class="card error"><h1>Kein Zugriff</h1><p>Du besitzt diesen Server nicht.</p></div>',
-                    req.user
-                )
-            );
-        }
-
-        const locked = Number(server.locked) === 1;
-        const maintenance = Number(server.maintenance) === 1;
-
-        const controls = locked
-            ? [
-                '<form method="POST" action="/server/',
-                server.id,
-                '/unlock"><button class="btn green" type="submit">Server entsperren</button></form>'
-            ].join('')
-            : [
-                '<form method="POST" action="/server/',
-                server.id,
-                '/lock"><button class="btn red" type="submit">Server sperren</button></form>'
-            ].join('');
-
-        const maintenanceButton = maintenance
-            ? [
-                '<form method="POST" action="/server/',
-                server.id,
-                '/maintenance/off"><button class="btn green" type="submit">Wartung beenden</button></form>'
-            ].join('')
-            : [
-                '<form method="POST" action="/server/',
-                server.id,
-                '/maintenance/on"><button class="btn gray" type="submit">Wartung aktivieren</button></form>'
-            ].join('');
-
-        const startButton = [
-            '<form method="POST" action="/server/',
-            server.id,
-            '/start"><button class="btn green" type="submit">▶ Starten</button></form>'
-        ].join('');
-
-        const stopButton = [
-            '<form method="POST" action="/server/',
-            server.id,
-            '/stop"><button class="btn red" type="submit">■ Stoppen</button></form>'
-        ].join('');
-
-        const restartButton = [
-            '<form method="POST" action="/server/',
-            server.id,
-            '/restart"><button class="btn" type="submit">↻ Neustarten</button></form>'
-        ].join('');
-
-        const content = [
-            '<div class="card">',
-            '<h1>',
-            escapeHtml(server.name),
-            '</h1>',
-            '<p>',
-            '<span class="badge ',
-            server.status === 'online' ? 'green' : 'red',
-            '">',
-            escapeHtml(server.status.toUpperCase()),
-            '</span> ',
-            locked
-                ? '<span class="badge red">GESPERRT</span>'
-                : '<span class="badge green">ENTSPERRT</span>',
-            ' ',
-            maintenance
-                ? '<span class="badge yellow">WARTUNG</span>'
-                : '',
-            '</p>',
-            '</div>',
-
-            '<div class="grid">',
-
-            '<div class="card">',
-            '<h3>Serverdaten</h3>',
-            '<p class="muted">Server-ID</p>',
-            '<p>',
-            String(server.id),
-            '</p>',
-            '<p class="muted">Version</p>',
-            '<p>',
-            escapeHtml(server.version),
-            '</p>',
-            '<p class="muted">RAM</p>',
-            '<p>',
-            String(server.ram),
-            ' MB',
-            '</p>',
-            '</div>',
-
-            '<div class="card">',
-            '<h3>Steuerung</h3>',
-            '<div class="actions">',
-            startButton,
-            stopButton,
-            restartButton,
-            '</div>',
-            '<div class="actions">',
-            controls,
-            maintenanceButton,
-            '</div>',
-            '</div>',
-
-            '</div>',
-
-            '<div class="card">',
-            '<h3>Server löschen</h3>',
-            '<p class="muted">Das Löschen kann nicht rückgängig gemacht werden.</p>',
-            '<form method="POST" action="/server/',
-            server.id,
-            '/delete" onsubmit="return confirm(\'Server wirklich löschen?\')">',
-            '<button class="btn red" type="submit">Server löschen</button>',
-            '</form>',
-            '</div>',
-
-            '<div class="actions">',
-            '<a class="btn gray" href="/servers">← Zurück</a>',
-            '</div>'
-        ].join('');
-
-        res.send(
-            page(
-                server.name,
-                content,
-                req.user
-            )
-        );
-
-    } catch (error) {
-
-        console.error(error);
-
-        res.status(500).send(
-            page(
-                'Fehler',
-                '<div class="card error"><h1>Fehler</h1><p>Server konnte nicht geladen werden.</p></div>',
-                req.user
-            )
-        );
-    }
-});
-
-/* ============================================================
-   SERVER AKTIONEN
-   ============================================================ */
-
-async function getServerForUser(serverId, user) {
-
-    const server = await dbGet(
+    res.send(page(
+        'Neues Passwort',
         `
-        SELECT *
-        FROM servers
-        WHERE id = ?
+        <div class="box">
+            <h1>🔑 Neues Passwort</h1>
+
+            <form method="POST"
+                  action="/reset-password/${escapeHTML(token)}">
+
+                <label>Neues Passwort</label>
+
+                <input
+                    type="password"
+                    name="password"
+                    minlength="8"
+                    required
+                >
+
+                <label>Passwort wiederholen</label>
+
+                <input
+                    type="password"
+                    name="password2"
+                    minlength="8"
+                    required
+                >
+
+                <button type="submit">
+                    Passwort ändern
+                </button>
+            </form>
+        </div>
+        `
+    ));
+});
+
+app.post('/reset-password/:token', async (req, res) => {
+    const token = String(req.params.token || '');
+
+    const password = String(
+        req.body.password || ''
+    );
+
+    const password2 = String(
+        req.body.password2 || ''
+    );
+
+    if (
+        password.length < 8 ||
+        password !== password2
+    ) {
+        return res.status(400).send(page(
+            'Fehler',
+            `
+            <div class="error">
+                Die Passwörter müssen identisch sein
+                und mindestens 8 Zeichen haben.
+            </div>
+
+            <a class="btn" href="javascript:history.back()">
+                Zurück
+            </a>
+            `
+        ));
+    }
+
+    const users = getUsers();
+
+    const index = users.findIndex(
+        u =>
+            u.resetToken === token &&
+            Number(u.resetExpires || 0) > Date.now()
+    );
+
+    if (index === -1) {
+        return res.status(400).send(page(
+            'Ungültiger Link',
+            `
+            <div class="error">
+                Der Reset-Link ist ungültig oder abgelaufen.
+            </div>
+            `
+        ));
+    }
+
+    users[index].passwordHash =
+        await bcrypt.hash(password, 12);
+
+    delete users[index].resetToken;
+    delete users[index].resetExpires;
+
+    saveUsers(users);
+
+    res.send(page(
+        'Passwort geändert',
+        `
+        <div class="success">
+            Dein Passwort wurde erfolgreich geändert.
+        </div>
+
+        <a class="btn" href="/login">
+            Zum Login
+        </a>
+        `
+    ));
+});
+
+/* =========================================================
+   DASHBOARD
+========================================================= */
+
+app.get('/dashboard', requireLogin, (req, res) => {
+    const user = currentUser(req);
+
+    const servers = getServers().filter(
+        server => server.ownerId === user.id
+    );
+
+    const orders = getOrders().filter(
+        order => order.userId === user.id
+    );
+
+    res.send(page(
+        'Dashboard',
+        `
+        <div class="hero">
+            <h1>👋 Hallo ${escapeHTML(user.name)}</h1>
+
+            <p>
+                Willkommen in deinem Minecraft-Hosting.
+            </p>
+
+            <p class="coins">
+                💰 ${Number(user.coins || 0)} Coins
+            </p>
+        </div>
+
+        <div class="grid">
+
+            <div class="card">
+                <h2>🖥️ Server</h2>
+                <p>
+                    ${servers.length} Server
+                </p>
+
+                <a class="btn" href="/servers">
+                    Server verwalten
+                </a>
+            </div>
+
+            <div class="card">
+                <h2>🛒 Bestellungen</h2>
+                <p>
+                    ${orders.length} Bestellungen
+                </p>
+
+                <a class="btn" href="/orders">
+                    Bestellungen
+                </a>
+            </div>
+
+            <div class="card">
+                <h2>📝 Bewerbung</h2>
+
+                <a class="btn" href="/applications">
+                    Bewerbung erstellen
+                </a>
+            </div>
+
+        </div>
         `,
-        [serverId]
+        user
+    ));
+});
+
+/* =========================================================
+   SERVERS
+========================================================= */
+
+app.get('/servers', requireLogin, (req, res) => {
+    const user = currentUser(req);
+
+    const servers = getServers().filter(
+        server => server.ownerId === user.id
+    );
+
+    res.send(page(
+        'Meine Server',
+        `
+        <div class="box">
+            <h1>🖥️ Meine Minecraft-Server</h1>
+
+            <form method="POST" action="/servers/create">
+                <label>Servername</label>
+
+                <input
+                    name="name"
+                    maxlength="40"
+                    placeholder="Mein Minecraft Server"
+                    required
+                >
+
+                <label>Version</label>
+
+                <select name="version">
+                    <option value="1.21.8">1.21.8</option>
+                    <option value="1.21.7">1.21.7</option>
+                    <option value="1.21.6">1.21.6</option>
+                    <option value="1.20.6">1.20.6</option>
+                </select>
+
+                <button type="submit">
+                    Server erstellen
+                </button>
+            </form>
+        </div>
+
+        ${
+            servers.length
+            ? servers.map(server => `
+                <div class="card">
+
+                    <h2>
+                        ⛏️ ${escapeHTML(server.name)}
+                    </h2>
+
+                    <p class="small">
+                        Version:
+                        ${escapeHTML(server.version)}
+                    </p>
+
+                    <p>
+                        Status:
+                        <span class="status ${
+                            server.status === 'online'
+                            ? 'online'
+                            : 'offline'
+                        }">
+                            ${escapeHTML(server.status)}
+                        </span>
+                    </p>
+
+                    ${
+                        server.locked
+                        ? `
+                        <p class="warning">
+                            🔒 Dieser Server wurde gesperrt.
+                        </p>
+                        `
+                        : ''
+                    }
+
+                    <a
+                        class="btn"
+                        href="/servers/${server.id}"
+                    >
+                        Verwalten
+                    </a>
+                </div>
+            `).join('')
+            : `
+                <div class="box">
+                    <p>Noch keine Server vorhanden.</p>
+                </div>
+            `
+        }
+        `,
+        user
+    ));
+});
+
+app.post('/servers/create', requireLogin, (req, res) => {
+    const user = currentUser(req);
+
+    const name = safeServerName(req.body.name);
+    const version = String(
+        req.body.version || '1.21.8'
+    );
+
+    if (!name) {
+        return res.status(400).send(page(
+            'Fehler',
+            `
+            <div class="error">
+                Ungültiger Servername.
+            </div>
+            `,
+            user
+        ));
+    }
+
+    const servers = getServers();
+
+    const server = {
+        id: id('server'),
+        ownerId: user.id,
+        name,
+        version,
+        status: 'offline',
+        locked: false,
+        createdAt: now(),
+        files: {
+            'server.properties':
+                `motd=${name}\n` +
+                `online-mode=true\n` +
+                `max-players=20\n`,
+            'README.txt':
+                'Minecraft Server Dateien\n'
+        }
+    };
+
+    servers.push(server);
+
+    saveServers(servers);
+
+    res.redirect('/servers');
+});
+
+/* =========================================================
+   SERVER MANAGEMENT
+========================================================= */
+
+app.get('/servers/:serverId', requireLogin, (req, res) => {
+    const user = currentUser(req);
+
+    const server = getServers().find(
+        s =>
+            s.id === req.params.serverId &&
+            s.ownerId === user.id
     );
 
     if (!server) {
-        return null;
-    }
-
-    const owner = await isOwner(user);
-
-    if (
-        Number(server.owner_id) !== Number(user.id) &&
-        !owner
-    ) {
-        return null;
-    }
-
-    return server;
-}
-
-app.post('/server/:id/start', requireLogin, async function (req, res) {
-
-    try {
-
-        const server = await getServerForUser(
-            Number(req.params.id),
-            req.user
-        );
-
-        if (!server) {
-            return res.status(404).send('Server nicht gefunden');
-        }
-
-        if (Number(server.locked) === 1) {
-            return res.status(403).send('Server ist gesperrt');
-        }
-
-        if (Number(server.maintenance) === 1) {
-            return res.status(403).send('Server befindet sich in Wartung');
-        }
-
-        await dbRun(
+        return res.status(404).send(page(
+            'Nicht gefunden',
             `
-            UPDATE servers
-            SET status = 'online',
-                updated_at = ?
-            WHERE id = ?
+            <div class="error">
+                Server nicht gefunden.
+            </div>
             `,
-            [now(), server.id]
-        );
-
-        await logAction(
-            req.user.id,
-            'SERVER_START',
-            'Server #' + server.id
-        );
-
-        res.redirect('/server/' + server.id);
-
-    } catch (error) {
-
-        console.error(error);
-        res.status(500).send('Fehler');
+            user
+        ));
     }
-});
 
-app.post('/server/:id/stop', requireLogin, async function (req, res) {
+    const files = server.files || {};
 
-    try {
+    res.send(page(
+        server.name,
+        `
+        <div class="box">
 
-        const server = await getServerForUser(
-            Number(req.params.id),
-            req.user
-        );
+            <h1>
+                ⛏️ ${escapeHTML(server.name)}
+            </h1>
 
-        if (!server) {
-            return res.status(404).send('Server nicht gefunden');
-        }
+            <p>
+                Status:
+                <span class="status ${
+                    server.status === 'online'
+                    ? 'online'
+                    : 'offline'
+                }">
+                    ${escapeHTML(server.status)}
+                </span>
+            </p>
 
-        await dbRun(
-            `
-            UPDATE servers
-            SET status = 'offline',
-                updated_at = ?
-            WHERE id = ?
-            `,
-            [now(), server.id]
-        );
-
-        await logAction(
-            req.user.id,
-            'SERVER_STOP',
-            'Server #' + server.id
-        );
-
-        res.redirect('/server/' + server.id);
-
-    } catch (error) {
-
-        console.error(error);
-        res.status(500).send('Fehler');
-    }
-});
-
-app.post('/server/:id/restart', requireLogin, async function (req, res) {
-
-    try {
-
-        const server = await getServerForUser(
-            Number(req.params.id),
-            req.user
-        );
-
-        if (!server) {
-            return res.status(404).send('Server nicht gefunden');
-        }
-
-        if (Number(server.locked) === 1) {
-            return res.status(403).send('Server ist gesperrt');
-        }
-
-        if (Number(server.maintenance) === 1) {
-            return res.status(403).send('Server befindet sich in Wartung');
-        }
-
-        await dbRun(
-            `
-            UPDATE servers
-            SET status = 'restarting',
-                updated_at = ?
-            WHERE id = ?
-            `,
-            [now(), server.id]
-        );
-
-        await logAction(
-            req.user.id,
-            'SERVER_RESTART',
-            'Server #' + server.id
-        );
-
-        setTimeout(async function () {
-
-            try {
-
-                await dbRun(
-                    `
-                    UPDATE servers
-                    SET status = 'online',
-                        updated_at = ?
-                    WHERE id = ?
-                    `,
-                    [now(), server.id]
-                );
-
-            } catch (error) {
-                console.error('Restart:', error);
+            ${
+                server.locked
+                ? `
+                <div class="error">
+                    🔒 Der Server ist gesperrt.
+                </div>
+                `
+                : ''
             }
 
-        }, 1500);
+            <form
+                method="POST"
+                action="/servers/${server.id}/start"
+                style="display:inline"
+            >
+                <button
+                    class="btn-green"
+                    type="submit"
+                >
+                    ▶ Start
+                </button>
+            </form>
 
-        res.redirect('/server/' + server.id);
+            <form
+                method="POST"
+                action="/servers/${server.id}/stop"
+                style="display:inline"
+            >
+                <button
+                    class="btn-red"
+                    type="submit"
+                >
+                    ■ Stop
+                </button>
+            </form>
 
-    } catch (error) {
+            <form
+                method="POST"
+                action="/servers/${server.id}/restart"
+                style="display:inline"
+            >
+                <button
+                    type="submit"
+                >
+                    🔄 Neustart
+                </button>
+            </form>
 
-        console.error(error);
-        res.status(500).send('Fehler');
-    }
+        </div>
+
+        <div class="box">
+
+            <h2>✏️ Server umbenennen</h2>
+
+            <form
+                method="POST"
+                action="/servers/${server.id}/rename"
+            >
+                <input
+                    name="name"
+                    value="${escapeHTML(server.name)}"
+                    maxlength="40"
+                    required
+                >
+
+                <button type="submit">
+                    Speichern
+                </button>
+            </form>
+
+        </div>
+
+        <div class="box">
+
+            <h2>📁 Server-Dateien</h2>
+
+            <form
+                method="POST"
+                action="/servers/${server.id}/file"
+            >
+
+                <label>Dateiname</label>
+
+                <input
+                    name="filename"
+                    placeholder="plugins/mein-plugin.yml"
+                    required
+                >
+
+                <label>Inhalt</label>
+
+                <textarea
+                    name="content"
+                    placeholder="Hier deinen Inhalt einfügen..."
+                ></textarea>
+
+                <button type="submit">
+                    Datei speichern
+                </button>
+
+            </form>
+
+            <hr>
+
+            ${
+                Object.keys(files).length
+                ? Object.entries(files).map(
+                    ([filename, content]) => `
+                    <div class="card">
+                        <h3>
+                            📄 ${escapeHTML(filename)}
+                        </h3>
+
+                        <form
+                            method="POST"
+                            action="/servers/${server.id}/file"
+                        >
+
+                            <input
+                                type="hidden"
+                                name="filename"
+                                value="${escapeHTML(filename)}"
+                            >
+
+                            <textarea
+                                name="content"
+                            >${escapeHTML(content)}</textarea>
+
+                            <button type="submit">
+                                Datei aktualisieren
+                            </button>
+                        </form>
+
+                        <form
+                            method="POST"
+                            action="/servers/${server.id}/file/delete"
+                        >
+
+                            <input
+                                type="hidden"
+                                name="filename"
+                                value="${escapeHTML(filename)}"
+                            >
+
+                            <button
+                                class="btn-red"
+                                type="submit"
+                            >
+                                Datei löschen
+                            </button>
+
+                        </form>
+                    </div>
+                    `
+                ).join('')
+                : '<p>Keine Dateien.</p>'
+            }
+
+        </div>
+        `,
+        user
+    ));
 });
 
-app.post('/server/:id/lock', requireLogin, async function (req, res) {
+function getOwnedServer(req) {
+    const user = currentUser(req);
 
-    try {
-
-        const server = await getServerForUser(
-            Number(req.params.id),
-            req.user
-        );
-
-        if (!server) {
-            return res.status(404).send('Server nicht gefunden');
-        }
-
-        await dbRun(
-            `
-            UPDATE servers
-            SET locked = 1,
-                status = 'offline',
-                updated_at = ?
-            WHERE id = ?
-            `,
-            [now(), server.id]
-        );
-
-        await logAction(
-            req.user.id,
-            'SERVER_LOCK',
-            'Server #' + server.id
-        );
-
-        res.redirect('/server/' + server.id);
-
-    } catch (error) {
-
-        console.error(error);
-        res.status(500).send('Fehler');
-    }
-});
-
-app.post('/server/:id/unlock', requireLogin, async function (req, res) {
-
-    try {
-
-        const server = await getServerForUser(
-            Number(req.params.id),
-            req.user
-        );
-
-        if (!server) {
-            return res.status(404).send('Server nicht gefunden');
-        }
-
-        await dbRun(
-            `
-            UPDATE servers
-            SET locked = 0,
-                updated_at = ?
-            WHERE id = ?
-            `,
-            [now(), server.id]
-        );
-
-        await logAction(
-            req.user.id,
-            'SERVER_UNLOCK',
-            'Server #' + server.id
-        );
-
-        res.redirect('/server/' + server.id);
-
-    } catch (error) {
-
-        console.error(error);
-        res.status(500).send('Fehler');
-    }
-});
-
-app.post('/server/:id/maintenance/on', requireLogin, async function (req, res) {
-
-    try {
-
-        const server = await getServerForUser(
-            Number(req.params.id),
-            req.user
-        );
-
-        if (!server) {
-            return res.status(404).send('Server nicht gefunden');
-        }
-
-        await dbRun(
-            `
-            UPDATE servers
-            SET maintenance = 1,
-                status = 'offline',
-                updated_at = ?
-            WHERE id = ?
-            `,
-            [now(), server.id]
-        );
-
-        await logAction(
-            req.user.id,
-            'SERVER_MAINTENANCE_ON',
-            'Server #' + server.id
-        );
-
-        res.redirect('/server/' + server.id);
-
-    } catch (error) {
-
-        console.error(error);
-        res.status(500).send('Fehler');
-    }
-});
-
-app.post('/server/:id/maintenance/off', requireLogin, async function (req, res) {
-
-    try {
-
-        const server = await getServerForUser(
-            Number(req.params.id),
-            req.user
-        );
-
-        if (!server) {
-            return res.status(404).send('Server nicht gefunden');
-        }
-
-        await dbRun(
-            `
-            UPDATE servers
-            SET maintenance = 0,
-                updated_at = ?
-            WHERE id = ?
-            `,
-            [now(), server.id]
-        );
-
-        await logAction(
-            req.user.id,
-            'SERVER_MAINTENANCE_OFF',
-            'Server #' + server.id
-        );
-
-        res.redirect('/server/' + server.id);
-
-    } catch (error) {
-
-        console.error(error);
-        res.status(500).send('Fehler');
-    }
-});
-
-app.post('/server/:id/delete', requireLogin, async function (req, res) {
-
-    try {
-
-        const server = await getServerForUser(
-            Number(req.params.id),
-            req.user
-        );
-
-        if (!server) {
-            return res.status(404).send('Server nicht gefunden');
-        }
-
-        await dbRun(
-            `
-            DELETE FROM servers
-            WHERE id = ?
-            `,
-            [server.id]
-        );
-
-        await logAction(
-            req.user.id,
-            'SERVER_DELETE',
-            'Server #' + server.id + ' gelöscht'
-        );
-
-        res.redirect('/servers');
-
-    } catch (error) {
-
-        console.error(error);
-        res.status(500).send('Fehler');
-    }
-});
-
-/* ============================================================
-   ACCOUNT
-   ============================================================ */
-
-app.get('/account', requireLogin, async function (req, res) {
-
-    const content = [
-        '<div class="card">',
-        '<h1>Mein Konto</h1>',
-        '<p><strong>Benutzername:</strong> ',
-        escapeHtml(req.user.username),
-        '</p>',
-        '<p><strong>E-Mail:</strong> ',
-        escapeHtml(req.user.email),
-        '</p>',
-        '<p><strong>Rolle:</strong> ',
-        escapeHtml(req.user.role),
-        '</p>',
-        '<p><strong>Registriert:</strong> ',
-        escapeHtml(req.user.created_at),
-        '</p>',
-        '</div>',
-
-        '<div class="card form">',
-        '<h2>Passwort ändern</h2>',
-        '<form method="POST" action="/account/password">',
-
-        '<label>Aktuelles Passwort</label>',
-        '<input type="password" name="oldPassword" required>',
-
-        '<label>Neues Passwort</label>',
-        '<input type="password" name="newPassword" minlength="6" required>',
-
-        '<label>Neues Passwort wiederholen</label>',
-        '<input type="password" name="newPassword2" minlength="6" required>',
-
-        '<div class="actions">',
-        '<button class="btn" type="submit">Passwort ändern</button>',
-        '</div>',
-
-        '</form>',
-        '</div>'
-    ].join('');
-
-    res.send(
-        page(
-            'Konto',
-            content,
-            req.user
-        )
+    return getServers().find(
+        server =>
+            server.id === req.params.serverId &&
+            server.ownerId === user.id
     );
-});
+}
 
-app.post('/account/password', requireLogin, async function (req, res) {
+app.post(
+    '/servers/:serverId/start',
+    requireLogin,
+    (req, res) => {
 
-    try {
+        const server = getOwnedServer(req);
 
-        const oldPassword = String(
-            req.body.oldPassword || ''
-        );
-
-        const newPassword = String(
-            req.body.newPassword || ''
-        );
-
-        const newPassword2 = String(
-            req.body.newPassword2 || ''
-        );
-
-        const correct = await bcrypt.compare(
-            oldPassword,
-            req.user.password
-        );
-
-        if (!correct) {
-            return res.status(400).send(
-                page(
-                    'Fehler',
-                    '<div class="card error"><h1>Falsches Passwort</h1><p>Das aktuelle Passwort ist falsch.</p><a class="btn" href="/account">Zurück</a></div>',
-                    req.user
-                )
-            );
+        if (!server) {
+            return res.status(404).send('Server nicht gefunden');
         }
 
-        if (newPassword.length < 6) {
-            return res.status(400).send(
-                page(
-                    'Fehler',
-                    '<div class="card error"><h1>Fehler</h1><p>Das neue Passwort muss mindestens 6 Zeichen lang sein.</p><a class="btn" href="/account">Zurück</a></div>',
-                    req.user
-                )
-            );
+        if (server.locked) {
+            return res.status(403).send('Server gesperrt');
         }
 
-        if (newPassword !== newPassword2) {
-            return res.status(400).send(
-                page(
-                    'Fehler',
-                    '<div class="card error"><h1>Fehler</h1><p>Die neuen Passwörter stimmen nicht überein.</p><a class="btn" href="/account">Zurück</a></div>',
-                    req.user
-                )
-            );
-        }
+        server.status = 'online';
 
-        const hash = await bcrypt.hash(
-            newPassword,
-            12
-        );
+        saveServers(getServers());
 
-        await dbRun(
-            `
-            UPDATE users
-            SET password = ?,
-                updated_at = ?
-            WHERE id = ?
-            `,
-            [
-                hash,
-                now(),
-                req.user.id
-            ]
-        );
-
-        await logAction(
-            req.user.id,
-            'PASSWORD_CHANGE',
-            'Passwort geändert'
-        );
-
-        res.send(
-            page(
-                'Passwort geändert',
-                '<div class="card success"><h1>Passwort geändert</h1><p>Dein Passwort wurde erfolgreich geändert.</p><a class="btn" href="/account">Zum Konto</a></div>',
-                req.user
-            )
-        );
-
-    } catch (error) {
-
-        console.error(error);
-
-        res.status(500).send(
-            page(
-                'Fehler',
-                '<div class="card error"><h1>Fehler</h1><p>Passwort konnte nicht geändert werden.</p></div>',
-                req.user
-            )
-        );
-    }
-});
-
-/* ============================================================
-   ADMIN PANEL
-   ============================================================ */
-
-app.get('/admin', requireAdmin, async function (req, res) {
-
-    try {
-
-        const users = await dbAll(
-            `
-            SELECT id, email, username, role, banned, created_at
-            FROM users
-            ORDER BY id DESC
-            `
-        );
-
-        const servers = await dbAll(
-            `
-            SELECT
-                servers.*,
-                users.email AS owner_email,
-                users.username AS owner_username
-            FROM servers
-            LEFT JOIN users
-                ON users.id = servers.owner_id
-            ORDER BY servers.id DESC
-            `
-        );
-
-        const logs = await dbAll(
-            `
-            SELECT
-                logs.*,
-                users.email AS user_email
-            FROM logs
-            LEFT JOIN users
-                ON users.id = logs.user_id
-            ORDER BY logs.id DESC
-            LIMIT 100
-            `
-        );
-
-        const userRows = users.map(function (user) {
-
-            const banned = Number(user.banned) === 1;
-
-            const banButton = banned
-                ? [
-                    '<form method="POST" action="/admin/user/',
-                    user.id,
-                    '/unban">',
-                    '<button class="btn green" type="submit">Entsperren</button>',
-                    '</form>'
-                ].join('')
-                : [
-                    '<form method="POST" action="/admin/user/',
-                    user.id,
-                    '/ban">',
-                    '<button class="btn red" type="submit">Sperren</button>',
-                    '</form>'
-                ].join('');
-
-            return [
-                '<tr>',
-                '<td>',
-                String(user.id),
-                '</td>',
-                '<td>',
-                escapeHtml(user.username),
-                '</td>',
-                '<td>',
-                escapeHtml(user.email),
-                '</td>',
-                '<td>',
-                escapeHtml(user.role),
-                '</td>',
-                '<td>',
-                banned
-                    ? '<span class="badge red">GESPERRT</span>'
-                    : '<span class="badge green">AKTIV</span>',
-                '</td>',
-                '<td>',
-                '<div class="actions">',
-                banButton,
-                '</div>',
-                '</td>',
-                '</tr>'
-            ].join('');
-
-        }).join('');
-
-        const serverRows = servers.map(function (server) {
-
-            return [
-                '<tr>',
-                '<td>',
-                String(server.id),
-                '</td>',
-                '<td>',
-                escapeHtml(server.name),
-                '</td>',
-                '<td>',
-                escapeHtml(server.owner_username || '-'),
-                '</td>',
-                '<td>',
-                escapeHtml(server.owner_email || '-'),
-                '</td>',
-                '<td>',
-                '<span class="badge ',
-                server.status === 'online' ? 'green' : 'red',
-                '">',
-                escapeHtml(server.status),
-                '</span>',
-                '</td>',
-                '<td>',
-                '<div class="actions">',
-                '<form method="POST" action="/admin/server/',
-                server.id,
-                '/stop">',
-                '<button class="btn red" type="submit">Stoppen</button>',
-                '</form>',
-                '<form method="POST" action="/admin/server/',
-                server.id,
-                '/lock">',
-                '<button class="btn gray" type="submit">Sperren</button>',
-                '</form>',
-                '<form method="POST" action="/admin/server/',
-                server.id,
-                '/delete" onsubmit="return confirm(\'Server wirklich löschen?\')">',
-                '<button class="btn red" type="submit">Löschen</button>',
-                '</form>',
-                '</div>',
-                '</td>',
-                '</tr>'
-            ].join('');
-
-        }).join('');
-
-        const logRows = logs.map(function (log) {
-
-            return [
-                '<tr>',
-                '<td>',
-                String(log.id),
-                '</td>',
-                '<td>',
-                escapeHtml(log.user_email || 'System'),
-                '</td>',
-                '<td>',
-                escapeHtml(log.action),
-                '</td>',
-                '<td>',
-                escapeHtml(log.details || ''),
-                '</td>',
-                '<td>',
-                escapeHtml(log.created_at),
-                '</td>',
-                '</tr>'
-            ].join('');
-
-        }).join('');
-
-        const content = [
-            '<section class="hero">',
-            '<h1>Admin Panel</h1>',
-            '<p>Owner-/Administratorverwaltung für das Hosting.</p>',
-            '</section>',
-
-            '<div class="grid">',
-
-            '<div class="card">',
-            '<div class="muted">Benutzer</div>',
-            '<div class="stat">',
-            String(users.length),
-            '</div>',
-            '</div>',
-
-            '<div class="card">',
-            '<div class="muted">Server</div>',
-            '<div class="stat">',
-            String(servers.length),
-            '</div>',
-            '</div>',
-
-            '<div class="card">',
-            '<div class="muted">Owner</div>',
-            '<div class="small">',
-            escapeHtml(OWNER_EMAIL),
-            '</div>',
-            '</div>',
-
-            '</div>',
-
-            '<div class="card">',
-            '<h2>Globale Einstellungen</h2>',
-            '<div class="actions">',
-            '<form method="POST" action="/admin/maintenance/on">',
-            '<button class="btn gray" type="submit">Alle Server Wartung</button>',
-            '</form>',
-            '<form method="POST" action="/admin/shutdown">',
-            '<button class="btn red" type="submit">Alle Server stoppen</button>',
-            '</form>',
-            '<form method="POST" action="/admin/maintenance/off">',
-            '<button class="btn green" type="submit">Wartung beenden</button>',
-            '</form>',
-            '</div>',
-            '</div>',
-
-            '<div class="card">',
-            '<h2>Benutzer</h2>',
-            '<div class="table-wrap">',
-            '<table>',
-            '<thead><tr>',
-            '<th>ID</th>',
-            '<th>Name</th>',
-            '<th>E-Mail</th>',
-            '<th>Rolle</th>',
-            '<th>Status</th>',
-            '<th>Aktion</th>',
-            '</tr></thead>',
-            '<tbody>',
-            userRows,
-            '</tbody>',
-            '</table>',
-            '</div>',
-            '</div>',
-
-            '<div class="card">',
-            '<h2>Alle Server</h2>',
-            '<div class="table-wrap">',
-            '<table>',
-            '<thead><tr>',
-            '<th>ID</th>',
-            '<th>Name</th>',
-            '<th>Owner</th>',
-            '<th>E-Mail</th>',
-            '<th>Status</th>',
-            '<th>Aktion</th>',
-            '</tr></thead>',
-            '<tbody>',
-            serverRows,
-            '</tbody>',
-            '</table>',
-            '</div>',
-            '</div>',
-
-            '<div class="card">',
-            '<h2>Logs</h2>',
-            '<div class="table-wrap">',
-            '<table>',
-            '<thead><tr>',
-            '<th>ID</th>',
-            '<th>User</th>',
-            '<th>Aktion</th>',
-            '<th>Details</th>',
-            '<th>Zeit</th>',
-            '</tr></thead>',
-            '<tbody>',
-            logRows,
-            '</tbody>',
-            '</table>',
-            '</div>',
-            '</div>'
-        ].join('');
-
-        res.send(
-            page(
-                'Admin Panel',
-                content,
-                req.user
-            )
-        );
-
-    } catch (error) {
-
-        console.error('Admin:', error);
-
-        res.status(500).send(
-            page(
-                'Admin Fehler',
-                '<div class="card error"><h1>Admin Panel Fehler</h1><p>Das Admin Panel konnte nicht geladen werden.</p></div>',
-                req.user
-            )
-        );
-    }
-});
-
-/* ============================================================
-   ADMIN USER BAN
-   ============================================================ */
-
-app.post('/admin/user/:id/ban', requireAdmin, async function (req, res) {
-
-    try {
-
-        const id = Number(req.params.id);
-
-        const target = await findUserById(id);
-
-        if (!target) {
-            return res.status(404).send('Benutzer nicht gefunden');
-        }
-
-        if (
-            String(target.email).toLowerCase() === OWNER_EMAIL
-        ) {
-            return res.status(403).send('Owner kann nicht gesperrt werden');
-        }
-
-        await dbRun(
-            `
-            UPDATE users
-            SET banned = 1,
-                updated_at = ?
-            WHERE id = ?
-            `,
-            [now(), id]
-        );
-
-        await logAction(
-            req.user.id,
-            'USER_BAN',
-            'Benutzer #' + id + ' gesperrt'
-        );
-
-        res.redirect('/admin');
-
-    } catch (error) {
-
-        console.error(error);
-        res.status(500).send('Fehler');
-    }
-});
-
-app.post('/admin/user/:id/unban', requireAdmin, async function (req, res) {
-
-    try {
-
-        const id = Number(req.params.id);
-
-        await dbRun(
-            `
-            UPDATE users
-            SET banned = 0,
-                updated_at = ?
-            WHERE id = ?
-            `,
-            [now(), id]
-        );
-
-        await logAction(
-            req.user.id,
-            'USER_UNBAN',
-            'Benutzer #' + id + ' entsperrt'
-        );
-
-        res.redirect('/admin');
-
-    } catch (error) {
-
-        console.error(error);
-        res.status(500).send('Fehler');
-    }
-});
-
-/* ============================================================
-   ADMIN SERVER STOP
-   ============================================================ */
-
-app.post('/admin/server/:id/stop', requireAdmin, async function (req, res) {
-
-    try {
-
-        const id = Number(req.params.id);
-
-        await dbRun(
-            `
-            UPDATE servers
-            SET status = 'offline',
-                updated_at = ?
-            WHERE id = ?
-            `,
-            [now(), id]
-        );
-
-        await logAction(
-            req.user.id,
-            'ADMIN_SERVER_STOP',
-            'Server #' + id + ' gestoppt'
-        );
-
-        res.redirect('/admin');
-
-    } catch (error) {
-
-        console.error(error);
-        res.status(500).send('Fehler');
-    }
-});
-
-/* ============================================================
-   ADMIN SERVER LOCK
-   ============================================================ */
-
-app.post('/admin/server/:id/lock', requireAdmin, async function (req, res) {
-
-    try {
-
-        const id = Number(req.params.id);
-
-        await dbRun(
-            `
-            UPDATE servers
-            SET locked = 1,
-                status = 'offline',
-                updated_at = ?
-            WHERE id = ?
-            `,
-            [now(), id]
-        );
-
-        await logAction(
-            req.user.id,
-            'ADMIN_SERVER_LOCK',
-            'Server #' + id + ' gesperrt'
-        );
-
-        res.redirect('/admin');
-
-    } catch (error) {
-
-        console.error(error);
-        res.status(500).send('Fehler');
-    }
-});
-
-/* ============================================================
-   ADMIN SERVER DELETE
-   ============================================================ */
-
-app.post('/admin/server/:id/delete', requireAdmin, async function (req, res) {
-
-    try {
-
-        const id = Number(req.params.id);
-
-        await dbRun(
-            `
-            DELETE FROM servers
-            WHERE id = ?
-            `,
-            [id]
-        );
-
-        await logAction(
-            req.user.id,
-            'ADMIN_SERVER_DELETE',
-            'Server #' + id + ' gelöscht'
-        );
-
-        res.redirect('/admin');
-
-    } catch (error) {
-
-        console.error(error);
-        res.status(500).send('Fehler');
-    }
-});
-
-/* ============================================================
-   ADMIN WARTUNG
-   ============================================================ */
-
-app.post('/admin/maintenance/on', requireAdmin, async function (req, res) {
-
-    try {
-
-        await dbRun(
-            `
-            UPDATE settings
-            SET value = '1'
-            WHERE key = 'maintenance'
-            `
-        );
-
-        await dbRun(
-            `
-            UPDATE servers
-            SET maintenance = 1,
-                status = 'offline',
-                updated_at = ?
-            `,
-            [now()]
-        );
-
-        await logAction(
-            req.user.id,
-            'GLOBAL_MAINTENANCE_ON',
-            'Globale Wartung aktiviert'
-        );
-
-        res.redirect('/admin');
-
-    } catch (error) {
-
-        console.error(error);
-        res.status(500).send('Fehler');
-    }
-});
-
-app.post('/admin/maintenance/off', requireAdmin, async function (req, res) {
-
-    try {
-
-        await dbRun(
-            `
-            UPDATE settings
-            SET value = '0'
-            WHERE key = 'maintenance'
-            `
-        );
-
-        await dbRun(
-            `
-            UPDATE servers
-            SET maintenance = 0,
-                updated_at = ?
-            `,
-            [now()]
-        );
-
-        await logAction(
-            req.user.id,
-            'GLOBAL_MAINTENANCE_OFF',
-            'Globale Wartung deaktiviert'
-        );
-
-        res.redirect('/admin');
-
-    } catch (error) {
-
-        console.error(error);
-        res.status(500).send('Fehler');
-    }
-});
-
-/* ============================================================
-   ALLE SERVER HERUNTERFAHREN
-   ============================================================ */
-
-app.post('/admin/shutdown', requireAdmin, async function (req, res) {
-
-    try {
-
-        await dbRun(
-            `
-            UPDATE servers
-            SET status = 'offline',
-                updated_at = ?
-            `,
-            [now()]
-        );
-
-        await logAction(
-            req.user.id,
-            'GLOBAL_SHUTDOWN',
-            'Alle Server heruntergefahren'
-        );
-
-        res.redirect('/admin');
-
-    } catch (error) {
-
-        console.error(error);
-        res.status(500).send('Fehler');
-    }
-});
-
-/* ============================================================
-   HEALTH CHECK
-   ============================================================ */
-
-app.get('/health', function (req, res) {
-
-    res.status(200).json({
-        ok: true,
-        service: 'Florian / WeisserHai Minecraft Hosting',
-        node: process.version,
-        time: now()
-    });
-});
-
-/* ============================================================
-   404
-   ============================================================ */
-
-app.use(function (req, res) {
-
-    res.status(404).send(
-        page(
-            '404',
-            [
-                '<div class="card">',
-                '<h1>404</h1>',
-                '<p>Diese Seite wurde nicht gefunden.</p>',
-                '<a class="btn" href="/">Zur Startseite</a>',
-                '</div>'
-            ].join('')
-        )
-    );
-});
-
-/* ============================================================
-   ERROR HANDLER
-   ============================================================ */
-
-app.use(function (error, req, res, next) {
-
-    console.error('Express Error:', error);
-
-    if (res.headersSent) {
-        return next(error);
-    }
-
-    res.status(500).send(
-        page(
-            'Serverfehler',
-            [
-                '<div class="card error">',
-                '<h1>Interner Serverfehler</h1>',
-                '<p>Die Anfrage konnte nicht verarbeitet werden.</p>',
-                '<a class="btn" href="/">Zur Startseite</a>',
-                '</div>'
-            ].join('')
-        )
-    );
-});
-
-/* ============================================================
-   START
-   ============================================================ */
-
-const server = app.listen(
-    PORT,
-    '0.0.0.0',
-    function () {
-
-        console.log('');
-        console.log('==============================================');
-        console.log(' Florian / WeisserHai Minecraft Hosting');
-        console.log('==============================================');
-        console.log('Webseite läuft.');
-        console.log('Port:', PORT);
-        console.log('Node:', process.version);
-        console.log('Owner:', OWNER_EMAIL);
-        console.log('Datenbank:', DB_FILE);
-        console.log('==============================================');
-        console.log('');
+        res.redirect(`/servers/${server.id}`);
     }
 );
 
-/* ============================================================
-   SAUBERES HERUNTERFAHREN
-   ============================================================ */
+app.post(
+    '/servers/:serverId/stop',
+    requireLogin,
+    (req, res) => {
 
-function shutdown(signal) {
+        const server = getOwnedServer(req);
 
-    console.log(
-        'Empfangenes Signal:',
-        signal
-    );
+        if (!server) {
+            return res.status(404).send('Server nicht gefunden');
+        }
 
-    server.close(function () {
+        server.status = 'offline';
 
-        db.close(function () {
+        saveServers(getServers());
 
-            console.log(
-                'Server und Datenbank geschlossen.'
+        res.redirect(`/servers/${server.id}`);
+    }
+);
+
+app.post(
+    '/servers/:serverId/restart',
+    requireLogin,
+    (req, res) => {
+
+        const server = getOwnedServer(req);
+
+        if (!server) {
+            return res.status(404).send('Server nicht gefunden');
+        }
+
+        if (server.locked) {
+            return res.status(403).send('Server gesperrt');
+        }
+
+        server.status = 'restarting';
+
+        saveServers(getServers());
+
+        setTimeout(() => {
+            const servers = getServers();
+
+            const current = servers.find(
+                s => s.id === server.id
             );
 
-            process.exit(0);
-        });
-    });
+            if (current && !current.locked) {
+                current.status = 'online';
+                saveServers(servers);
+            }
+        }, 1500);
+
+        res.redirect(`/servers/${server.id}`);
+    }
+);
+
+app.post(
+    '/servers/:serverId/rename',
+    requireLogin,
+    (req, res) => {
+
+        const server = getOwnedServer(req);
+
+        if (!server) {
+            return res.status(404).send('Server nicht gefunden');
+        }
+
+        const name = safeServerName(req.body.name);
+
+        if (!name) {
+            return res.status(400).send('Ungültiger Name');
+        }
+
+        server.name = name;
+
+        saveServers(getServers());
+
+        res.redirect(`/servers/${server.id}`);
+    }
+);
+
+app.post(
+    '/servers/:serverId/file',
+    requireLogin,
+    (req, res) => {
+
+        const server = getOwnedServer(req);
+
+        if (!server) {
+            return res.status(404).send('Server nicht gefunden');
+        }
+
+        const filename = String(
+            req.body.filename || ''
+        )
+        .trim()
+        .replace(/\.\./g, '')
+        .replace(/^\/+/, '')
+        .slice(0, 150);
+
+        const content = String(
+            req.body.content || ''
+        ).slice(0, 1000000);
+
+        if (!filename) {
+            return res.status(400).send(
+                'Dateiname fehlt'
+            );
+        }
+
+        if (!server.files) {
+            server.files = {};
+        }
+
+        server.files[filename] = content;
+
+        saveServers(getServers());
+
+        res.redirect(`/servers/${server.id}`);
+    }
+);
+
+app.post(
+    '/servers/:serverId/file/delete',
+    requireLogin,
+    (req, res) => {
+
+        const server = getOwnedServer(req);
+
+        if (!server) {
+            return res.status(404).send('Server nicht gefunden');
+        }
+
+        const filename = String(
+            req.body.filename || ''
+        );
+
+        if (server.files) {
+            delete server.files[filename];
+        }
+
+        saveServers(getServers());
+
+        res.redirect(`/servers/${server.id}`);
+    }
+);
+
+/* =========================================================
+   ORDERS
+========================================================= */
+
+app.get('/orders', requireLogin, (req, res) => {
+    const user = currentUser(req);
+
+    const orders = getOrders().filter(
+        order => order.userId === user.id
+    );
+
+    res.send(page(
+        'Bestellungen',
+        `
+        <div class="box">
+            <h1>🛒 Meine Bestellungen</h1>
+
+            <p class="coins">
+                💰 ${Number(user.coins || 0)} Coins
+            </p>
+
+            <form method="POST" action="/orders/create">
+
+                <label>Produkt</label>
+
+                <select name="product">
+                    <option value="server-upgrade">
+                        Server Upgrade - 100 Coins
+                    </option>
+
+                    <option value="premium-server">
+                        Premium Server - 250 Coins
+                    </option>
+
+                    <option value="plugin-install">
+                        Plugin Installation - 50 Coins
+                    </option>
+                </select>
+
+                <button type="submit">
+                    Bestellung erstellen
+                </button>
+
+            </form>
+        </div>
+
+        <div class="box">
+            <h2>Bestellverlauf</h2>
+
+            ${
+                orders.length
+                ? `
+                <table>
+                    <tr>
+                        <th>Produkt</th>
+                        <th>Preis</th>
+                        <th>Status</th>
+                        <th>Datum</th>
+                    </tr>
+
+                    ${
+                        orders.map(order => `
+                        <tr>
+                            <td>
+                                ${escapeHTML(order.product)}
+                            </td>
+
+                            <td>
+                                ${order.price} Coins
+                            </td>
+
+                            <td>
+                                ${escapeHTML(order.status)}
+                            </td>
+
+                            <td>
+                                ${escapeHTML(order.createdAt)}
+                            </td>
+                        </tr>
+                        `).join('')
+                    }
+
+                </table>
+                `
+                : '<p>Keine Bestellungen.</p>'
+            }
+        </div>
+        `,
+        user
+    ));
+});
+
+function productPrice(product) {
+    const prices = {
+        'server-upgrade': 100,
+        'premium-server': 250,
+        'plugin-install': 50
+    };
+
+    return prices[product] || 0;
 }
 
-process.on('SIGTERM', function () {
-    shutdown('SIGTERM');
-});
+app.post('/orders/create', requireLogin, (req, res) => {
+    const user = currentUser(req);
 
-process.on('SIGINT', function () {
-    shutdown('SIGINT');
-});
-
-process.on('uncaughtException', function (error) {
-
-    console.error(
-        'UNCAUGHT EXCEPTION:',
-        error
+    const product = String(
+        req.body.product || ''
     );
+
+    const price = productPrice(product);
+
+    if (!price) {
+        return res.status(400).send('Ungültiges Produkt');
+    }
+
+    const users = getUsers();
+
+    const userIndex = users.findIndex(
+        u => u.id === user.id
+    );
+
+    if (users[userIndex].coins < price) {
+        return res.status(400).send(page(
+            'Nicht genug Coins',
+            `
+            <div class="error">
+                Du hast nicht genug Coins.
+            </div>
+
+            <a class="btn" href="/orders">
+                Zurück
+            </a>
+            `,
+            user
+        ));
+    }
+
+    users[userIndex].coins -= price;
+
+    saveUsers(users);
+
+    const orders = getOrders();
+
+    orders.push({
+        id: id('order'),
+        userId: user.id,
+        product,
+        price,
+        status: 'wartend',
+        createdAt: now()
+    });
+
+    saveOrders(orders);
+
+    res.redirect('/orders');
 });
 
-process.on('unhandledRejection', function (error) {
+/* =========================================================
+   COIN CODES
+========================================================= */
 
-    console.error(
-        'UNHANDLED REJECTION:',
-        error
+app.get('/redeem', requireLogin, (req, res) => {
+    const user = currentUser(req);
+
+    res.send(page(
+        'Coins einlösen',
+        `
+        <div class="box">
+
+            <h1>🎁 Code einlösen</h1>
+
+            <p class="coins">
+                Deine Coins:
+                ${Number(user.coins || 0)}
+            </p>
+
+            <form method="POST" action="/redeem">
+
+                <label>Code</label>
+
+                <input
+                    name="code"
+                    placeholder="NORTH-XXXX"
+                    required
+                >
+
+                <button type="submit">
+                    Einlösen
+                </button>
+
+            </form>
+
+        </div>
+        `,
+        user
+    ));
+});
+
+app.post('/redeem', requireLogin, (req, res) => {
+    const user = currentUser(req);
+
+    const input = String(
+        req.body.code || ''
+    )
+    .trim()
+    .toUpperCase();
+
+    const codes = getCodes();
+
+    const code = codes.find(
+        c =>
+            String(c.code).toUpperCase() === input &&
+            !c.used
     );
+
+    if (!code) {
+        return res.status(400).send(page(
+            'Ungültiger Code',
+            `
+            <div class="error">
+                Der Code ist ungültig oder wurde bereits benutzt.
+            </div>
+
+            <a class="btn" href="/redeem">
+                Zurück
+            </a>
+            `,
+            user
+        ));
+    }
+
+    const users = getUsers();
+
+    const index = users.findIndex(
+        u => u.id === user.id
+    );
+
+    users[index].coins =
+        Number(users[index].coins || 0) +
+        Number(code.coins || 0);
+
+    code.used = true;
+    code.usedBy = user.id;
+    code.usedAt = now();
+
+    saveUsers(users);
+    saveCodes(codes);
+
+    res.send(page(
+        'Code eingelöst',
+        `
+        <div class="success">
+            🎉 ${Number(code.coins || 0)} Coins wurden gutgeschrieben.
+        </div>
+
+        <a class="btn" href="/dashboard">
+            Dashboard
+        </a>
+        `,
+        users[index]
+    ));
+});
+
+/* =========================================================
+   APPLICATIONS
+========================================================= */
+
+app.get('/applications', requireLogin, (req, res) => {
+    const user = currentUser(req);
+
+    const applications =
+        getApplications().filter(
+            a => a.userId === user.id
+        );
+
+    res.send(page(
+        'Bewerbungen',
+        `
+        <div class="box">
+
+            <h1>📝 Team-Bewerbung</h1>
+
+            <form
+                method="POST"
+                action="/applications"
+            >
+
+                <label>Bereich</label>
+
+                <select name="type">
+                    <option value="Moderator">
+                        Moderator
+                    </option>
+
+                    <option value="Developer">
+                        Developer
+                    </option>
+                </select>
+
+                <label>Warum möchtest du ins Team?</label>
+
+                <textarea
+                    name="reason"
+                    required
+                ></textarea>
+
+                <label>Erfahrung</label>
+
+                <textarea
+                    name="experience"
+                    required
+                ></textarea>
+
+                <button type="submit">
+                    Bewerbung absenden
+                </button>
+
+            </form>
+
+        </div>
+
+        <div class="box">
+
+            <h2>Meine Bewerbungen</h2>
+
+            ${
+                applications.length
+                ? applications.map(
+                    application => `
+                    <div class="card">
+
+                        <h3>
+                            ${escapeHTML(application.type)}
+                        </h3>
+
+                        <p>
+                            Status:
+                            <span class="status">
+                                ${escapeHTML(application.status)}
+                            </span>
+                        </p>
+
+                        <p>
+                            ${escapeHTML(application.createdAt)}
+                        </p>
+
+                    </div>
+                    `
+                ).join('')
+                : '<p>Noch keine Bewerbungen.</p>'
+            }
+
+        </div>
+        `,
+        user
+    ));
+});
+
+app.post('/applications', requireLogin, (req, res) => {
+    const user = currentUser(req);
+
+    const type = String(
+        req.body.type || ''
+    );
+
+    if (
+        type !== 'Moderator' &&
+        type !== 'Developer'
+    ) {
+        return res.status(400).send(
+            'Ungültiger Bereich'
+        );
+    }
+
+    const applications = getApplications();
+
+    applications.push({
+        id: id('application'),
+        userId: user.id,
+        name: user.name,
+        email: user.email,
+        type,
+        reason: String(
+            req.body.reason || ''
+        ).slice(0, 5000),
+        experience: String(
+            req.body.experience || ''
+        ).slice(0, 5000),
+        status: 'offen',
+        createdAt: now()
+    });
+
+    saveApplications(applications);
+
+    res.redirect('/applications');
+});
+
+/* =========================================================
+   ADMIN PANEL
+========================================================= */
+
+app.get('/admin', requireOwner, (req, res) => {
+    const user = currentUser(req);
+
+    const users = getUsers();
+    const servers = getServers();
+    const orders = getOrders();
+    const applications = getApplications();
+    const codes = getCodes();
+
+    res.send(page(
+        'Owner Admin',
+        `
+        <div class="hero">
+            <h1>👑 Owner Admin Panel</h1>
+
+            <p>
+                Eingeloggt als
+                <strong>
+                    ${escapeHTML(user.email)}
+                </strong>
+            </p>
+
+            <p>
+                Benutzer: ${users.length}
+                • Server: ${servers.length}
+                • Bestellungen: ${orders.length}
+                • Bewerbungen: ${applications.length}
+            </p>
+        </div>
+
+        <div class="box">
+
+            <h2>💰 Coins vergeben</h2>
+
+            <form method="POST" action="/admin/coins">
+
+                <label>Benutzer-ID</label>
+
+                <input
+                    name="userId"
+                    required
+                >
+
+                <label>Coins</label>
+
+                <input
+                    type="number"
+                    name="amount"
+                    min="1"
+                    required
+                >
+
+                <button type="submit">
+                    Coins geben
+                </button>
+
+            </form>
+
+        </div>
+
+        <div class="box">
+
+            <h2>🎁 Coin-Code erstellen</h2>
+
+            <form method="POST" action="/admin/codes">
+
+                <label>Code</label>
+
+                <input
+                    name="code"
+                    placeholder="NORTH-100"
+                    required
+                >
+
+                <label>Coins</label>
+
+                <input
+                    type="number"
+                    name="coins"
+                    min="1"
+                    required
+                >
+
+                <button type="submit">
+                    Code erstellen
+                </button>
+
+            </form>
+
+        </div>
+
+        <div class="box">
+
+            <h2>👥 Benutzer</h2>
+
+            <table>
+
+                <tr>
+                    <th>Name</th>
+                    <th>E-Mail</th>
+                    <th>Coins</th>
+                    <th>Status</th>
+                    <th>Aktion</th>
+                </tr>
+
+                ${
+                    users.map(target => `
+                    <tr>
+
+                        <td>
+                            ${escapeHTML(target.name)}
+                        </td>
+
+                        <td>
+                            ${escapeHTML(target.email)}
+                        </td>
+
+                        <td>
+                            ${Number(target.coins || 0)}
+                        </td>
+
+                        <td>
+                            ${
+                                target.banned
+                                ? '🚫 Gesperrt'
+                                : '✅ Aktiv'
+                            }
+                        </td>
+
+                        <td>
+
+                            ${
+                                isOwner(target)
+                                ? '<strong>OWNER</strong>'
+                                : `
+                                <form
+                                    method="POST"
+                                    action="/admin/users/${target.id}/ban"
+                                    style="display:inline"
+                                >
+                                    <button
+                                        class="btn-red"
+                                        type="submit"
+                                    >
+                                        ${
+                                            target.banned
+                                            ? 'Entsperren'
+                                            : 'Sperren'
+                                        }
+                                    </button>
+                                </form>
+                                `
+                            }
+
+                        </td>
+
+                    </tr>
+                    `).join('')
+                }
+
+            </table>
+
+        </div>
+
+        <div class="box">
+
+            <h2>🖥️ Alle Server</h2>
+
+            ${
+                servers.length
+                ? servers.map(server => `
+                    <div class="card">
+
+                        <h3>
+                            ${escapeHTML(server.name)}
+                        </h3>
+
+                        <p>
+                            Besitzer:
+                            ${escapeHTML(
+                                server.ownerId
+                            )}
+                        </p>
+
+                        <p>
+                            Status:
+                            ${escapeHTML(
+                                server.status
+                            )}
+                        </p>
+
+                        <p>
+                            ${
+                                server.locked
+                                ? '🔒 Gesperrt'
+                                : '🔓 Freigegeben'
+                            }
+                        </p>
+
+                        <form
+                            method="POST"
+                            action="/admin/servers/${server.id}/toggle-lock"
+                            style="display:inline"
+                        >
+                            <button type="submit">
+                                ${
+                                    server.locked
+                                    ? 'Entsperren'
+                                    : 'Sperren'
+                                }
+                            </button>
+                        </form>
+
+                        <form
+                            method="POST"
+                            action="/admin/servers/${server.id}/shutdown"
+                            style="display:inline"
+                        >
+                            <button
+                                class="btn-red"
+                                type="submit"
+                            >
+                                Herunterfahren
+                            </button>
+                        </form>
+
+                        <form
+                            method="POST"
+                            action="/admin/servers/${server.id}/delete"
+                            style="display:inline"
+                            onsubmit="return confirm('Server wirklich löschen?')"
+                        >
+                            <button
+                                class="btn-red"
+                                type="submit"
+                            >
+                                Löschen
+                            </button>
+                        </form>
+
+                    </div>
+                `).join('')
+                : '<p>Keine Server.</p>'
+            }
+
+        </div>
+
+        <div class="box">
+
+            <h2>🛒 Bestellungen</h2>
+
+            ${
+                orders.length
+                ? orders.map(order => `
+                    <div class="card">
+
+                        <h3>
+                            ${escapeHTML(order.product)}
+                        </h3>
+
+                        <p>
+                            Preis:
+                            ${order.price} Coins
+                        </p>
+
+                        <p>
+                            Status:
+                            ${escapeHTML(order.status)}
+                        </p>
+
+                        ${
+                            order.status === 'wartend'
+                            ? `
+                            <form
+                                method="POST"
+                                action="/admin/orders/${order.id}/accept"
+                                style="display:inline"
+                            >
+                                <button
+                                    class="btn-green"
+                                    type="submit"
+                                >
+                                    Annehmen
+                                </button>
+                            </form>
+
+                            <form
+                                method="POST"
+                                action="/admin/orders/${order.id}/reject"
+                                style="display:inline"
+                            >
+                                <button
+                                    class="btn-red"
+                                    type="submit"
+                                >
+                                    Ablehnen + Coins zurück
+                                </button>
+                            </form>
+                            `
+                            : ''
+                        }
+
+                    </div>
+                `).join('')
+                : '<p>Keine Bestellungen.</p>'
+            }
+
+        </div>
+
+        <div class="box">
+
+            <h2>📝 Bewerbungen</h2>
+
+            ${
+                applications.length
+                ? applications.map(application => `
+                    <div class="card">
+
+                        <h3>
+                            ${escapeHTML(
+                                application.type
+                            )}
+                        </h3>
+
+                        <p>
+                            ${escapeHTML(
+                                application.name
+                            )}
+                            —
+                            ${escapeHTML(
+                                application.email
+                            )}
+                        </p>
+
+                        <p>
+                            <strong>Grund:</strong><br>
+                            ${escapeHTML(
+                                application.reason
+                            )}
+                        </p>
+
+                        <p>
+                            <strong>Erfahrung:</strong><br>
+                            ${escapeHTML(
+                                application.experience
+                            )}
+                        </p>
+
+                        <p>
+                            Status:
+                            ${escapeHTML(
+                                application.status
+                            )}
+                        </p>
+
+                        ${
+                            application.status === 'offen'
+                            ? `
+                            <form
+                                method="POST"
+                                action="/admin/applications/${application.id}/accept"
+                                style="display:inline"
+                            >
+                                <button
+                                    class="btn-green"
+                                    type="submit"
+                                >
+                                    Annehmen
+                                </button>
+                            </form>
+
+                            <form
+                                method="POST"
+                                action="/admin/applications/${application.id}/reject"
+                                style="display:inline"
+                            >
+                                <button
+                                    class="btn-red"
+                                    type="submit"
+                                >
+                                    Ablehnen
+                                </button>
+                            </form>
+                            `
+                            : ''
+                        }
+
+                    </div>
+                `).join('')
+                : '<p>Keine Bewerbungen.</p>'
+            }
+
+        </div>
+
+        <div class="box">
+
+            <h2>🎁 Codes</h2>
+
+            ${
+                codes.length
+                ? `
+                <table>
+                    <tr>
+                        <th>Code</th>
+                        <th>Coins</th>
+                        <th>Status</th>
+                    </tr>
+
+                    ${
+                        codes.map(code => `
+                        <tr>
+                            <td>
+                                ${escapeHTML(code.code)}
+                            </td>
+
+                            <td>
+                                ${Number(code.coins)}
+                            </td>
+
+                            <td>
+                                ${
+                                    code.used
+                                    ? '❌ Verwendet'
+                                    : '✅ Aktiv'
+                                }
+                            </td>
+                        </tr>
+                        `).join('')
+                    }
+
+                </table>
+                `
+                : '<p>Keine Codes.</p>'
+            }
+
+        </div>
+        `,
+        user
+    ));
+});
+
+/* =========================================================
+   ADMIN COINS
+========================================================= */
+
+app.post('/admin/coins', requireOwner, (req, res) => {
+    const userId = String(
+        req.body.userId || ''
+    );
+
+    const amount = Number(
+        req.body.amount
+    );
+
+    if (
+        !userId ||
+        !Number.isFinite(amount) ||
+        amount <= 0
+    ) {
+        return res.status(400).send(
+            'Ungültige Daten'
+        );
+    }
+
+    const users = getUsers();
+
+    const index = users.findIndex(
+        u => u.id === userId
+    );
+
+    if (index === -1) {
+        return res.status(404).send(
+            'Benutzer nicht gefunden'
+        );
+    }
+
+    users[index].coins =
+        Number(users[index].coins || 0) +
+        Math.floor(amount);
+
+    saveUsers(users);
+
+    res.redirect('/admin');
+});
+
+/* =========================================================
+   ADMIN CODES
+========================================================= */
+
+app.post('/admin/codes', requireOwner, (req, res) => {
+    const codeValue = String(
+        req.body.code || ''
+    )
+    .trim()
+    .toUpperCase();
+
+    const coins = Number(
+        req.body.coins
+    );
+
+    if (
+        !codeValue ||
+        !Number.isFinite(coins) ||
+        coins <= 0
+    ) {
+        return res.status(400).send(
+            'Ungültige Daten'
+        );
+    }
+
+    const codes = getCodes();
+
+    if (
+        codes.some(
+            c =>
+                String(c.code).toUpperCase() ===
+                codeValue
+        )
+    ) {
+        return res.status(409).send(
+            'Code existiert bereits'
+        );
+    }
+
+    codes.push({
+        id: id('code'),
+        code: codeValue,
+        coins: Math.floor(coins),
+        used: false,
+        createdAt: now()
+    });
+
+    saveCodes(codes);
+
+    res.redirect('/admin');
+});
+
+/* =========================================================
+   ADMIN USER BAN
+========================================================= */
+
+app.post(
+    '/admin/users/:userId/ban',
+    requireOwner,
+    (req, res) => {
+
+        const users = getUsers();
+
+        const index = users.findIndex(
+            u => u.id === req.params.userId
+        );
+
+        if (index === -1) {
+            return res.status(404).send(
+                'Benutzer nicht gefunden'
+            );
+        }
+
+        if (isOwner(users[index])) {
+            return res.status(403).send(
+                'Der Owner kann nicht gesperrt werden.'
+            );
+        }
+
+        users[index].banned =
+            !users[index].banned;
+
+        saveUsers(users);
+
+        res.redirect('/admin');
+    }
+);
+
+/* =========================================================
+   ADMIN SERVER LOCK
+========================================================= */
+
+app.post(
+    '/admin/servers/:serverId/toggle-lock',
+    requireOwner,
+    (req, res) => {
+
+        const servers = getServers();
+
+        const index = servers.findIndex(
+            s => s.id === req.params.serverId
+        );
+
+        if (index === -1) {
+            return res.status(404).send(
+                'Server nicht gefunden'
+            );
+        }
+
+        servers[index].locked =
+            !servers[index].locked;
+
+        if (servers[index].locked) {
+            servers[index].status = 'offline';
+        }
+
+        saveServers(servers);
+
+        res.redirect('/admin');
+    }
+);
+
+/* =========================================================
+   ADMIN SERVER SHUTDOWN
+========================================================= */
+
+app.post(
+    '/admin/servers/:serverId/shutdown',
+    requireOwner,
+    (req, res) => {
+
+        const servers = getServers();
+
+        const index = servers.findIndex(
+            s => s.id === req.params.serverId
+        );
+
+        if (index === -1) {
+            return res.status(404).send(
+                'Server nicht gefunden'
+            );
+        }
+
+        servers[index].status = 'offline';
+
+        saveServers(servers);
+
+        res.redirect('/admin');
+    }
+);
+
+/* =========================================================
+   ADMIN SERVER DELETE
+========================================================= */
+
+app.post(
+    '/admin/servers/:serverId/delete',
+    requireOwner,
+    (req, res) => {
+
+        let servers = getServers();
+
+        const exists = servers.some(
+            s => s.id === req.params.serverId
+        );
+
+        if (!exists) {
+            return res.status(404).send(
+                'Server nicht gefunden'
+            );
+        }
+
+        servers = servers.filter(
+            s => s.id !== req.params.serverId
+        );
+
+        saveServers(servers);
+
+        res.redirect('/admin');
+    }
+);
+
+/* =========================================================
+   ADMIN ORDERS ACCEPT
+========================================================= */
+
+app.post(
+    '/admin/orders/:orderId/accept',
+    requireOwner,
+    (req, res) => {
+
+        const orders = getOrders();
+
+        const index = orders.findIndex(
+            o => o.id === req.params.orderId
+        );
+
+        if (index === -1) {
+            return res.status(404).send(
+                'Bestellung nicht gefunden'
+            );
+        }
+
+        if (orders[index].status !== 'wartend') {
+            return res.redirect('/admin');
+        }
+
+        orders[index].status = 'angenommen';
+        orders[index].processedAt = now();
+
+        saveOrders(orders);
+
+        res.redirect('/admin');
+    }
+);
+
+/* =========================================================
+   ADMIN ORDERS REJECT + REFUND
+========================================================= */
+
+app.post(
+    '/admin/orders/:orderId/reject',
+    requireOwner,
+    (req, res) => {
+
+        const orders = getOrders();
+
+        const index = orders.findIndex(
+            o => o.id === req.params.orderId
+        );
+
+        if (index === -1) {
+            return res.status(404).send(
+                'Bestellung nicht gefunden'
+            );
+        }
+
+        const order = orders[index];
+
+        if (order.status !== 'wartend') {
+            return res.redirect('/admin');
+        }
+
+        order.status = 'abgelehnt';
+        order.refunded = true;
+        order.refundedAt = now();
+
+        const users = getUsers();
+
+        const userIndex = users.findIndex(
+            u => u.id === order.userId
+        );
+
+        if (userIndex !== -1) {
+            users[userIndex].coins =
+                Number(users[userIndex].coins || 0) +
+                Number(order.price || 0);
+
+            saveUsers(users);
+        }
+
+        saveOrders(orders);
+
+        res.redirect('/admin');
+    }
+);
+
+/* =========================================================
+   ADMIN APPLICATION ACCEPT
+========================================================= */
+
+app.post(
+    '/admin/applications/:applicationId/accept',
+    requireOwner,
+    (req, res) => {
+
+        const applications =
+            getApplications();
+
+        const index =
+            applications.findIndex(
+                a =>
+                    a.id ===
+                    req.params.applicationId
+            );
+
+        if (index === -1) {
+            return res.status(404).send(
+                'Bewerbung nicht gefunden'
+            );
+        }
+
+        applications[index].status =
+            'angenommen';
+
+        applications[index].processedAt =
+            now();
+
+        saveApplications(applications);
+
+        res.redirect('/admin');
+    }
+);
+
+/* =========================================================
+   ADMIN APPLICATION REJECT
+========================================================= */
+
+app.post(
+    '/admin/applications/:applicationId/reject',
+    requireOwner,
+    (req, res) => {
+
+        const applications =
+            getApplications();
+
+        const index =
+            applications.findIndex(
+                a =>
+                    a.id ===
+                    req.params.applicationId
+            );
+
+        if (index === -1) {
+            return res.status(404).send(
+                'Bewerbung nicht gefunden'
+            );
+        }
+
+        applications[index].status =
+            'abgelehnt';
+
+        applications[index].processedAt =
+            now();
+
+        saveApplications(applications);
+
+        res.redirect('/admin');
+    }
+);
+
+/* =========================================================
+   ERROR HANDLER
+========================================================= */
+
+app.use((err, req, res, next) => {
+    console.error(
+        'SERVER FEHLER:',
+        err
+    );
+
+    if (res.headersSent) {
+        return next(err);
+    }
+
+    res.status(500).send(page(
+        'Serverfehler',
+        `
+        <div class="error">
+            <h1>❌ Serverfehler</h1>
+            <p>
+                Bei der Verarbeitung ist ein Fehler aufgetreten.
+            </p>
+        </div>
+
+        <a class="btn" href="/">
+            Startseite
+        </a>
+        `
+    ));
+});
+
+/* =========================================================
+   START
+========================================================= */
+
+app.listen(PORT, () => {
+    console.log('');
+    console.log('==========================================');
+    console.log('⛏️ Minecraft Hosting gestartet');
+    console.log('==========================================');
+    console.log(`🌐 Port: ${PORT}`);
+    console.log(`👑 Owner: ${OWNER_EMAIL}`);
+
+    if (mailer) {
+        console.log('📧 Gmail: eingerichtet');
+    } else {
+        console.log(
+            '⚠️ Gmail: NICHT eingerichtet'
+        );
+    }
+
+    console.log('==========================================');
 });
