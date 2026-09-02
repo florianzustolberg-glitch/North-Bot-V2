@@ -11,87 +11,82 @@ const path = require('path');
 const app = express();
 
 const PORT = Number(process.env.PORT || 3000);
-const OWNER_EMAIL = (
-    process.env.OWNER_EMAIL ||
-    'florianzustolberg@gmail.com'
-).toLowerCase();
 
-const SESSION_SECRET =
-    process.env.SESSION_SECRET ||
-    'CHANGE_ME_TO_A_LONG_RANDOM_SECRET';
+const OWNER_EMAIL = String(
+    process.env.OWNER_EMAIL || 'florianzustolberg@gmail.com'
+).trim().toLowerCase();
+
+const SESSION_SECRET = String(
+    process.env.SESSION_SECRET || 'CHANGE_THIS_SESSION_SECRET'
+);
+
+const GMAIL_USER = String(
+    process.env.GMAIL_USER || ''
+).trim();
+
+const GMAIL_APP_PASSWORD = String(
+    process.env.GMAIL_APP_PASSWORD || ''
+).replace(/\s/g, '');
+
+const BASE_URL = String(
+    process.env.BASE_URL || `http://localhost:${PORT}`
+).replace(/\/$/, '');
 
 const DATA_DIR = path.join(__dirname, 'data');
 
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
 const SERVERS_FILE = path.join(DATA_DIR, 'servers.json');
-const ORDERS_FILE = path.join(DATA_DIR, 'server-orders.json');
+const APPLICATIONS_FILE = path.join(DATA_DIR, 'applications.json');
 
-if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+fs.mkdirSync(DATA_DIR, { recursive: true });
 
-function createFile(file, defaultValue) {
+function ensureFile(file) {
     if (!fs.existsSync(file)) {
-        fs.writeFileSync(
-            file,
-            JSON.stringify(defaultValue, null, 2),
-            'utf8'
-        );
+        fs.writeFileSync(file, '[]', 'utf8');
     }
 }
 
-createFile(USERS_FILE, []);
-createFile(SERVERS_FILE, []);
-createFile(ORDERS_FILE, []);
+ensureFile(USERS_FILE);
+ensureFile(ORDERS_FILE);
+ensureFile(SERVERS_FILE);
+ensureFile(APPLICATIONS_FILE);
 
-function readJSON(file) {
+function read(file) {
     try {
-        const content = fs.readFileSync(file, 'utf8');
-
-        if (!content.trim()) {
-            return [];
-        }
-
-        return JSON.parse(content);
+        const data = fs.readFileSync(file, 'utf8');
+        return data.trim() ? JSON.parse(data) : [];
     } catch (error) {
-        console.error('JSON-Fehler:', file, error.message);
+        console.error(`JSON Fehler ${file}:`, error.message);
         return [];
     }
 }
 
-function writeJSON(file, data) {
-    const temp = file + '.tmp';
+function write(file, data) {
+    const tmp = `${file}.tmp`;
 
     fs.writeFileSync(
-        temp,
+        tmp,
         JSON.stringify(data, null, 2),
         'utf8'
     );
 
-    fs.renameSync(temp, file);
+    fs.renameSync(tmp, file);
 }
 
-function makeId(prefix) {
-    return (
-        prefix +
-        '_' +
-        Date.now().toString(36) +
-        '_' +
-        crypto.randomBytes(6).toString('hex')
-    );
+function id(prefix) {
+    return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(5).toString('hex')}`;
 }
 
-function makeToken() {
+function token() {
     return crypto.randomBytes(32).toString('hex');
 }
 
-function email(value) {
-    return String(value || '')
-        .trim()
-        .toLowerCase();
+function cleanEmail(value) {
+    return String(value || '').trim().toLowerCase();
 }
 
-function escape(value) {
+function esc(value) {
     return String(value ?? '')
         .replaceAll('&', '&amp;')
         .replaceAll('<', '&lt;')
@@ -101,64 +96,87 @@ function escape(value) {
 }
 
 function getUsers() {
-    return readJSON(USERS_FILE);
-}
-
-function saveUsers(users) {
-    writeJSON(USERS_FILE, users);
-}
-
-function getServers() {
-    return readJSON(SERVERS_FILE);
-}
-
-function saveServers(servers) {
-    writeJSON(SERVERS_FILE, servers);
+    return read(USERS_FILE);
 }
 
 function getOrders() {
-    return readJSON(ORDERS_FILE);
+    return read(ORDERS_FILE);
 }
 
-function saveOrders(orders) {
-    writeJSON(ORDERS_FILE, orders);
+function getServers() {
+    return read(SERVERS_FILE);
 }
 
-function findUserByEmail(userEmail) {
-    return getUsers().find(
-        user => email(user.email) === email(userEmail)
-    );
+function getApplications() {
+    return read(APPLICATIONS_FILE);
 }
 
-function findUserById(userId) {
-    return getUsers().find(
-        user => user.id === userId
-    );
-}
-
-function getCurrentUser(req) {
+function currentUser(req) {
     if (!req.session.userId) {
         return null;
     }
 
-    return findUserById(req.session.userId);
+    return getUsers().find(
+        user => user.id === req.session.userId
+    ) || null;
 }
 
-function isOwner(user) {
-    return (
-        user &&
-        email(user.email) === OWNER_EMAIL
-    );
+function owner(user) {
+    return !!user &&
+        cleanEmail(user.email) === OWNER_EMAIL;
 }
 
-function isAdmin(user) {
-    return (
-        user &&
-        (
-            isOwner(user) ||
-            user.role === 'admin'
-        )
-    );
+function admin(user) {
+    return !!user &&
+        (owner(user) || user.role === 'admin');
+}
+
+function auth(req, res, next) {
+    const user = currentUser(req);
+
+    if (!user) {
+        return res.redirect('/login');
+    }
+
+    if (user.banned) {
+        req.session.destroy(() => {});
+
+        return res.status(403).send(
+            layout(
+                'Konto gesperrt',
+                `
+                <div class="error">
+                    🚫 Dein Konto wurde gesperrt.
+                </div>
+                `
+            )
+        );
+    }
+
+    next();
+}
+
+function adminAuth(req, res, next) {
+    const user = currentUser(req);
+
+    if (!user) {
+        return res.redirect('/login');
+    }
+
+    if (!admin(user)) {
+        return res.status(403).send(
+            layout(
+                'Kein Zugriff',
+                `
+                <div class="error">
+                    🚫 Kein Zugriff auf das Admin-Panel.
+                </div>
+                `
+            )
+        );
+    }
+
+    next();
 }
 
 /* =========================================================
@@ -176,7 +194,7 @@ app.use(express.json({
 
 app.use(session({
     secret: SESSION_SECRET,
-    resave: false,
+    resave: true,
     saveUninitialized: false,
     rolling: true,
     cookie: {
@@ -188,119 +206,108 @@ app.use(session({
 }));
 
 /* =========================================================
-   MAIL
+   GMAIL
 ========================================================= */
 
-let transporter = null;
+let mailer = null;
 
-if (
-    process.env.GMAIL_USER &&
-    process.env.GMAIL_APP_PASSWORD
-) {
-    transporter = nodemailer.createTransport({
+if (GMAIL_USER && GMAIL_APP_PASSWORD) {
+    mailer = nodemailer.createTransport({
         service: 'gmail',
         auth: {
-            user: process.env.GMAIL_USER,
-            pass: process.env.GMAIL_APP_PASSWORD
-        }
+            user: GMAIL_USER,
+            pass: GMAIL_APP_PASSWORD
+        },
+        logger: true,
+        debug: true
     });
+} else {
+    console.error('================================');
+    console.error('GMAIL NICHT KONFIGURIERT');
+    console.error('GMAIL_USER vorhanden:', !!GMAIL_USER);
+    console.error('GMAIL_APP_PASSWORD vorhanden:', !!GMAIL_APP_PASSWORD);
+    console.error('================================');
 }
 
-async function sendMail(to, subject, html) {
-    if (!transporter) {
-        console.log(
-            'Gmail ist nicht konfiguriert.'
-        );
-
+async function verifyMail() {
+    if (!mailer) {
         return false;
     }
 
     try {
-        await transporter.sendMail({
-            from:
-                `"Minecraft Hosting" <${process.env.GMAIL_USER}>`,
+        await mailer.verify();
+
+        console.log('✅ Gmail SMTP funktioniert.');
+        console.log(`📧 Absender: ${GMAIL_USER}`);
+
+        return true;
+    } catch (error) {
+        console.error('================================');
+        console.error('❌ GMAIL SMTP FEHLER');
+        console.error('Name:', error.name);
+        console.error('Message:', error.message);
+        console.error('Code:', error.code);
+        console.error('SMTP Code:', error.responseCode);
+        console.error('Response:', error.response || 'keine');
+        console.error('Command:', error.command || 'keiner');
+        console.error('================================');
+
+        return false;
+    }
+}
+
+async function sendMail(to, subject, html) {
+    console.log('--------------------------------');
+    console.log('📧 E-Mail wird gesendet');
+    console.log('An:', to);
+    console.log('Betreff:', subject);
+
+    if (!mailer) {
+        console.error('❌ Gmail ist nicht eingerichtet.');
+        return false;
+    }
+
+    try {
+        const result = await mailer.sendMail({
+            from: `"Minecraft Hosting" <${GMAIL_USER}>`,
             to,
             subject,
             html
         });
 
+        console.log('✅ E-Mail gesendet');
+        console.log('Message ID:', result.messageId);
+        console.log('Response:', result.response);
+
         return true;
     } catch (error) {
-        console.error(
-            'E-Mail Fehler:',
-            error.message
-        );
+        console.error('================================');
+        console.error('❌ E-MAIL FEHLER');
+        console.error('Name:', error.name);
+        console.error('Message:', error.message);
+        console.error('Code:', error.code);
+        console.error('SMTP Code:', error.responseCode);
+        console.error('Response:', error.response || 'keine');
+        console.error('Command:', error.command || 'keiner');
+        console.error('================================');
 
         return false;
     }
-}
-
-/* =========================================================
-   AUTH MIDDLEWARE
-========================================================= */
-
-function requireLogin(req, res, next) {
-    const user = getCurrentUser(req);
-
-    if (!user) {
-        return res.redirect('/login');
-    }
-
-    if (user.banned) {
-        req.session.destroy(() => {});
-
-        return res.status(403).send(
-            page(
-                'Konto gesperrt',
-                `
-                <div class="error">
-                    🚫 Dein Konto wurde gesperrt.
-                </div>
-                `
-            )
-        );
-    }
-
-    next();
-}
-
-function requireAdmin(req, res, next) {
-    const user = getCurrentUser(req);
-
-    if (!user) {
-        return res.redirect('/login');
-    }
-
-    if (!isAdmin(user)) {
-        return res.status(403).send(
-            page(
-                'Kein Zugriff',
-                `
-                <div class="error">
-                    🚫 Du hast keinen Zugriff auf diesen Bereich.
-                </div>
-                `
-            )
-        );
-    }
-
-    next();
 }
 
 /* =========================================================
    HTML
 ========================================================= */
 
-function page(title, body, user = null) {
+function layout(title, body, user = null) {
     return `
 <!DOCTYPE html>
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport"
-      content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 
-<title>${escape(title)} - Minecraft Hosting</title>
+<title>${esc(title)} - Minecraft Hosting</title>
 
 <style>
 
@@ -310,22 +317,20 @@ function page(title, body, user = null) {
 
 body {
     margin: 0;
-    font-family: Arial, sans-serif;
     background: #090d12;
-    color: #fff;
+    color: #f5f7fa;
+    font-family: Arial, sans-serif;
 }
 
 nav {
     background: #111821;
-    border-bottom: 1px solid #293441;
+    border-bottom: 1px solid #293542;
     padding: 15px 25px;
-
     display: flex;
     justify-content: space-between;
     align-items: center;
-
-    gap: 15px;
     flex-wrap: wrap;
+    gap: 12px;
 }
 
 .logo {
@@ -333,91 +338,87 @@ nav {
     font-weight: bold;
 }
 
-.navlinks {
+.nav {
     display: flex;
-    flex-wrap: wrap;
     gap: 8px;
+    flex-wrap: wrap;
 }
 
-.navlinks a {
+.nav a {
     color: white;
     text-decoration: none;
     padding: 9px 12px;
-    background: #1a2430;
     border-radius: 8px;
+    background: #1b2632;
 }
 
-.navlinks a:hover {
-    background: #293746;
+.nav a:hover {
+    background: #2b3947;
 }
 
 main {
-    width: min(1200px, 94%);
+    width: min(1150px, 94%);
     margin: 35px auto;
 }
 
+.hero,
+.card,
+.box {
+    background: #111821;
+    border: 1px solid #293542;
+    border-radius: 15px;
+    padding: 22px;
+    margin-bottom: 18px;
+}
+
 .hero {
-    background: #111a24;
-    border: 1px solid #293746;
-    border-radius: 18px;
     padding: 40px;
-    margin-bottom: 20px;
 }
 
 .hero h1 {
-    font-size: 40px;
     margin-top: 0;
+    font-size: 40px;
 }
 
 .grid {
     display: grid;
-    grid-template-columns:
-        repeat(auto-fit, minmax(250px, 1fr));
+    grid-template-columns: repeat(
+        auto-fit,
+        minmax(240px, 1fr)
+    );
     gap: 18px;
-}
-
-.card,
-.box {
-    background: #111821;
-    border: 1px solid #293441;
-    border-radius: 14px;
-    padding: 20px;
-    margin-bottom: 18px;
-}
-
-.card h2,
-.box h2 {
-    margin-top: 0;
 }
 
 input,
 select,
 textarea {
+    display: block;
     width: 100%;
-    background: #080d12;
+    background: #080c11;
+    border: 1px solid #354454;
     color: white;
-    border: 1px solid #344251;
     border-radius: 8px;
     padding: 12px;
-    margin-top: 6px;
+    margin-top: 7px;
     margin-bottom: 15px;
 }
 
 textarea {
     min-height: 130px;
+    resize: vertical;
 }
 
 button,
 .btn {
     display: inline-block;
-    background: #287cff;
-    color: white;
     border: 0;
     border-radius: 8px;
+    background: #287cff;
+    color: white;
     padding: 11px 15px;
+    text-decoration: none;
     cursor: pointer;
     font-weight: bold;
-    text-decoration: none;
 }
 
 button:hover,
@@ -426,75 +427,70 @@ button:hover,
 }
 
 .green {
-    background: #20834d;
+    background: #23834e;
 }
 
 .red {
-    background: #c73d3d;
+    background: #bd3d3d;
 }
 
 .gray {
-    background: #3a4653;
+    background: #3c4753;
 }
 
 .status {
     display: inline-block;
-    border-radius: 999px;
     padding: 6px 10px;
-    background: #354251;
+    border-radius: 999px;
+    background: #374350;
 }
 
-.status.waiting {
-    background: #765f22;
+.waiting {
+    background: #756022;
 }
 
-.status.accepted {
-    background: #217546;
+.accepted {
+    background: #23794b;
 }
 
-.status.rejected {
-    background: #783333;
+.rejected {
+    background: #793838;
 }
 
-.status.online {
-    background: #217546;
+.online {
+    background: #23794b;
 }
 
-.status.offline {
-    background: #673232;
+.offline {
+    background: #673535;
 }
 
 .error {
-    background: #481f23;
-    border: 1px solid #853b43;
-    border-radius: 10px;
     padding: 15px;
+    border-radius: 9px;
+    background: #421e23;
+    border: 1px solid #813840;
     margin-bottom: 15px;
 }
 
 .success {
-    background: #173e2a;
-    border: 1px solid #2a7950;
-    border-radius: 10px;
     padding: 15px;
+    border-radius: 9px;
+    background: #173d29;
+    border: 1px solid #2b7750;
     margin-bottom: 15px;
 }
 
 .warning {
-    background: #4a3918;
-    border: 1px solid #80682a;
-    border-radius: 10px;
     padding: 15px;
+    border-radius: 9px;
+    background: #4a3919;
+    border: 1px solid #80692d;
     margin-bottom: 15px;
 }
 
-.coins {
-    color: #ffd65a;
-    font-weight: bold;
-}
-
 .small {
-    color: #aeb8c2;
+    color: #9da9b5;
     font-size: 14px;
 }
 
@@ -505,15 +501,15 @@ table {
 
 th,
 td {
-    padding: 10px;
-    border-bottom: 1px solid #2a3541;
     text-align: left;
+    padding: 10px;
+    border-bottom: 1px solid #2b3743;
 }
 
 footer {
-    color: #78838f;
     text-align: center;
     padding: 40px;
+    color: #78838e;
 }
 
 </style>
@@ -527,7 +523,7 @@ footer {
 ⛏️ Minecraft Hosting
 </div>
 
-<div class="navlinks">
+<div class="nav">
 
 <a href="/">Home</a>
 
@@ -535,13 +531,13 @@ ${
     user
     ? `
         <a href="/dashboard">Dashboard</a>
-        <a href="/servers">Server</a>
         <a href="/orders">Bestellungen</a>
-        <a href="/applications">Bewerbung</a>
+        <a href="/servers">Server</a>
+        <a href="/applications">Bewerbungen</a>
 
         ${
-            isAdmin(user)
-            ? `<a href="/admin">Admin</a>`
+            admin(user)
+            ? '<a href="/admin">👑 Admin</a>'
             : ''
         }
 
@@ -578,10 +574,10 @@ Minecraft Hosting
 
 app.get('/', (req, res) => {
 
-    const user = getCurrentUser(req);
+    const user = currentUser(req);
 
     res.send(
-        page(
+        layout(
             'Home',
             `
             <div class="hero">
@@ -589,8 +585,9 @@ app.get('/', (req, res) => {
                 <h1>⛏️ Minecraft Hosting</h1>
 
                 <p>
-                    Kostenlosen Minecraft-Server beantragen
-                    und nach Freigabe verwalten.
+                    Kostenlos Minecraft-Server beantragen.
+                    Jeder Server wird vor der Freischaltung
+                    von einem Admin oder Owner geprüft.
                 </p>
 
                 ${
@@ -600,7 +597,7 @@ app.get('/', (req, res) => {
                         class="btn"
                         href="/dashboard"
                     >
-                        Dashboard öffnen
+                        Dashboard
                     </a>
                     `
                     : `
@@ -620,23 +617,23 @@ app.get('/', (req, res) => {
                 <div class="card">
                     <h2>🆓 Kostenlos</h2>
                     <p>
-                        Server-Bestellungen kosten keine Coins.
+                        Die Server-Bestellung kostet keine Coins.
                     </p>
                 </div>
 
                 <div class="card">
                     <h2>👑 Freigabe</h2>
                     <p>
-                        Jeder Server muss zuerst von
-                        einem Admin angenommen werden.
+                        Ein Admin oder Owner muss die Bestellung
+                        zuerst annehmen.
                     </p>
                 </div>
 
                 <div class="card">
-                    <h2>📧 Passwort Reset</h2>
+                    <h2>🔐 Sicherer Login</h2>
                     <p>
-                        Passwort vergessen?
-                        Einfach per E-Mail zurücksetzen.
+                        Registrierung, Login und
+                        Passwort-Reset per E-Mail.
                     </p>
                 </div>
 
@@ -653,22 +650,19 @@ app.get('/', (req, res) => {
 
 app.get('/register', (req, res) => {
 
-    if (getCurrentUser(req)) {
+    if (currentUser(req)) {
         return res.redirect('/dashboard');
     }
 
     res.send(
-        page(
+        layout(
             'Registrieren',
             `
             <div class="box">
 
                 <h1>📝 Registrierung</h1>
 
-                <form
-                    method="POST"
-                    action="/register"
-                >
+                <form method="POST" action="/register">
 
                     <label>Name</label>
 
@@ -695,7 +689,7 @@ app.get('/register', (req, res) => {
                         required
                     >
 
-                    <button type="submit">
+                    <button>
                         Konto erstellen
                     </button>
 
@@ -703,9 +697,7 @@ app.get('/register', (req, res) => {
 
                 <p>
                     Bereits registriert?
-                    <a href="/login">
-                        Jetzt anmelden
-                    </a>
+                    <a href="/login">Login</a>
                 </p>
 
             </div>
@@ -717,11 +709,10 @@ app.get('/register', (req, res) => {
 app.post('/register', async (req, res) => {
 
     const name =
-        String(req.body.name || '')
-            .trim();
+        String(req.body.name || '').trim();
 
     const userEmail =
-        email(req.body.email);
+        cleanEmail(req.body.email);
 
     const password =
         String(req.body.password || '');
@@ -732,41 +723,13 @@ app.post('/register', async (req, res) => {
         password.length < 8
     ) {
         return res.status(400).send(
-            page(
+            layout(
                 'Fehler',
                 `
                 <div class="error">
-                    Bitte alle Felder korrekt ausfüllen.
-                    Das Passwort muss mindestens
-                    8 Zeichen haben.
+                    Name, E-Mail und ein Passwort
+                    mit mindestens 8 Zeichen sind erforderlich.
                 </div>
-
-                <a
-                    class="btn"
-                    href="/register"
-                >
-                    Zurück
-                </a>
-                `
-            )
-        );
-    }
-
-    if (findUserByEmail(userEmail)) {
-        return res.status(409).send(
-            page(
-                'Fehler',
-                `
-                <div class="error">
-                    Diese E-Mail ist bereits registriert.
-                </div>
-
-                <a
-                    class="btn"
-                    href="/login"
-                >
-                    Zum Login
-                </a>
                 `
             )
         );
@@ -774,29 +737,48 @@ app.post('/register', async (req, res) => {
 
     const users = getUsers();
 
-    const passwordHash =
-        await bcrypt.hash(
-            password,
-            12
+    if (
+        users.some(
+            user =>
+                cleanEmail(user.email) === userEmail
+        )
+    ) {
+        return res.status(409).send(
+            layout(
+                'Fehler',
+                `
+                <div class="error">
+                    Diese E-Mail ist bereits registriert.
+                </div>
+
+                <a class="btn" href="/login">
+                    Zum Login
+                </a>
+                `
+            )
         );
+    }
+
+    const passwordHash =
+        await bcrypt.hash(password, 12);
 
     const newUser = {
-        id: makeId('user'),
+        id: id('user'),
         name,
         email: userEmail,
         passwordHash,
-        coins: 0,
         role:
             userEmail === OWNER_EMAIL
             ? 'owner'
             : 'user',
+        coins: 0,
         banned: false,
         createdAt: new Date().toISOString()
     };
 
     users.push(newUser);
 
-    saveUsers(users);
+    write(USERS_FILE, users);
 
     req.session.userId =
         newUser.id;
@@ -810,28 +792,26 @@ app.post('/register', async (req, res) => {
 
 app.get('/login', (req, res) => {
 
-    if (getCurrentUser(req)) {
+    if (currentUser(req)) {
         return res.redirect('/dashboard');
     }
 
     res.send(
-        page(
+        layout(
             'Login',
             `
             <div class="box">
 
                 <h1>🔐 Anmeldung</h1>
 
-                <form
-                    method="POST"
-                    action="/login"
-                >
+                <form method="POST" action="/login">
 
                     <label>E-Mail</label>
 
                     <input
                         type="email"
                         name="email"
+                        autocomplete="email"
                         required
                     >
 
@@ -840,10 +820,11 @@ app.get('/login', (req, res) => {
                     <input
                         type="password"
                         name="password"
+                        autocomplete="current-password"
                         required
                     >
 
-                    <button type="submit">
+                    <button>
                         Anmelden
                     </button>
 
@@ -871,27 +852,27 @@ app.get('/login', (req, res) => {
 app.post('/login', async (req, res) => {
 
     const userEmail =
-        email(req.body.email);
+        cleanEmail(req.body.email);
 
     const password =
         String(req.body.password || '');
 
     const user =
-        findUserByEmail(userEmail);
+        getUsers().find(
+            u =>
+                cleanEmail(u.email) === userEmail
+        );
 
     if (!user) {
         return res.status(401).send(
-            page(
+            layout(
                 'Login',
                 `
                 <div class="error">
                     E-Mail oder Passwort falsch.
                 </div>
 
-                <a
-                    class="btn"
-                    href="/login"
-                >
+                <a class="btn" href="/login">
                     Zurück
                 </a>
                 `
@@ -901,36 +882,33 @@ app.post('/login', async (req, res) => {
 
     if (user.banned) {
         return res.status(403).send(
-            page(
+            layout(
                 'Gesperrt',
                 `
                 <div class="error">
-                    🚫 Dein Konto ist gesperrt.
+                    🚫 Dieses Konto wurde gesperrt.
                 </div>
                 `
             )
         );
     }
 
-    const valid =
+    const correct =
         await bcrypt.compare(
             password,
             user.passwordHash
         );
 
-    if (!valid) {
+    if (!correct) {
         return res.status(401).send(
-            page(
+            layout(
                 'Login',
                 `
                 <div class="error">
                     E-Mail oder Passwort falsch.
                 </div>
 
-                <a
-                    class="btn"
-                    href="/login"
-                >
+                <a class="btn" href="/login">
                     Zurück
                 </a>
                 `
@@ -938,10 +916,36 @@ app.post('/login', async (req, res) => {
         );
     }
 
+    /*
+     * Session wird nach erfolgreichem Login
+     * gespeichert und bleibt bis zu 30 Tage aktiv.
+     */
+
     req.session.userId =
         user.id;
 
-    res.redirect('/dashboard');
+    req.session.save(error => {
+
+        if (error) {
+            console.error(
+                'Session-Speicherfehler:',
+                error
+            );
+
+            return res.status(500).send(
+                layout(
+                    'Fehler',
+                    `
+                    <div class="error">
+                        Login konnte nicht gespeichert werden.
+                    </div>
+                    `
+                )
+            );
+        }
+
+        res.redirect('/dashboard');
+    });
 });
 
 /* =========================================================
@@ -950,10 +954,19 @@ app.post('/login', async (req, res) => {
 
 app.get('/logout', (req, res) => {
 
-    req.session.destroy(() => {
+    req.session.destroy(error => {
+
+        if (error) {
+            console.error(
+                'Logout Fehler:',
+                error
+            );
+        }
+
+        res.clearCookie('connect.sid');
+
         res.redirect('/');
     });
-
 });
 
 /* =========================================================
@@ -963,17 +976,15 @@ app.get('/logout', (req, res) => {
 app.get('/forgot-password', (req, res) => {
 
     res.send(
-        page(
-            'Passwort vergessen',
+        layout(
+            'Passwort zurücksetzen',
             `
             <div class="box">
 
                 <h1>🔄 Passwort zurücksetzen</h1>
 
                 <p>
-                    Gib deine E-Mail-Adresse ein.
-                    Wenn ein Konto existiert,
-                    senden wir einen Reset-Link.
+                    Gib die E-Mail-Adresse deines Kontos ein.
                 </p>
 
                 <form
@@ -989,8 +1000,8 @@ app.get('/forgot-password', (req, res) => {
                         required
                     >
 
-                    <button type="submit">
-                        Reset-Link senden
+                    <button>
+                        Reset-Mail senden
                     </button>
 
                 </form>
@@ -1004,7 +1015,7 @@ app.get('/forgot-password', (req, res) => {
 app.post('/forgot-password', async (req, res) => {
 
     const userEmail =
-        email(req.body.email);
+        cleanEmail(req.body.email);
 
     const users =
         getUsers();
@@ -1012,39 +1023,39 @@ app.post('/forgot-password', async (req, res) => {
     const index =
         users.findIndex(
             user =>
-                email(user.email) ===
+                cleanEmail(user.email) ===
                 userEmail
         );
 
+    /*
+     * Aus Sicherheitsgründen wird nach außen
+     * immer dieselbe Meldung angezeigt.
+     */
+
     if (index !== -1) {
 
-        const token =
-            makeToken();
+        const resetToken =
+            token();
 
         users[index].resetToken =
-            token;
+            resetToken;
 
         users[index].resetExpires =
-            Date.now() +
-            30 * 60 * 1000;
+            Date.now() + 30 * 60 * 1000;
 
-        saveUsers(users);
-
-        const baseURL =
-            process.env.BASE_URL ||
-            `http://localhost:${PORT}`;
+        write(USERS_FILE, users);
 
         const resetURL =
-            `${baseURL}/reset-password/${token}`;
+            `${BASE_URL}/reset-password/${resetToken}`;
 
         await sendMail(
             users[index].email,
-            'Minecraft Hosting – Passwort zurücksetzen',
+            'Passwort zurücksetzen – Minecraft Hosting',
             `
-            <h2>Passwort zurücksetzen</h2>
+            <h2>🔐 Passwort zurücksetzen</h2>
 
             <p>
-                Hallo ${escape(users[index].name)}!
+                Hallo ${esc(users[index].name)}!
             </p>
 
             <p>
@@ -1052,31 +1063,43 @@ app.post('/forgot-password', async (req, res) => {
             </p>
 
             <p>
-                <a href="${resetURL}">
+                <a
+                    href="${esc(resetURL)}"
+                    style="
+                        display:inline-block;
+                        padding:12px 18px;
+                        background:#287cff;
+                        color:white;
+                        text-decoration:none;
+                        border-radius:8px;
+                    "
+                >
                     Passwort zurücksetzen
                 </a>
             </p>
 
             <p>
-                Dieser Link ist 30 Minuten gültig.
+                Der Link ist 30 Minuten gültig.
+            </p>
+
+            <p>
+                Wenn du den Reset nicht angefordert hast,
+                kannst du diese E-Mail ignorieren.
             </p>
             `
         );
     }
 
     res.send(
-        page(
-            'Reset',
+        layout(
+            'Reset angefordert',
             `
             <div class="success">
-                Falls die E-Mail registriert ist,
-                wurde ein Reset-Link verschickt.
+                Falls zu dieser E-Mail ein Konto existiert,
+                wurde eine Reset-Mail versendet.
             </div>
 
-            <a
-                class="btn"
-                href="/login"
-            >
+            <a class="btn" href="/login">
                 Zum Login
             </a>
             `
@@ -1084,582 +1107,537 @@ app.post('/forgot-password', async (req, res) => {
     );
 });
 
-app.get(
-    '/reset-password/:token',
-    (req, res) => {
+app.get('/reset-password/:token', (req, res) => {
 
-        const token =
-            String(req.params.token || '');
+    const resetToken =
+        String(req.params.token || '');
 
-        const user =
-            getUsers().find(
-                u =>
-                    u.resetToken === token &&
-                    Number(u.resetExpires || 0) >
-                    Date.now()
-            );
-
-        if (!user) {
-            return res.status(400).send(
-                page(
-                    'Reset ungültig',
-                    `
-                    <div class="error">
-                        Dieser Reset-Link ist ungültig
-                        oder abgelaufen.
-                    </div>
-
-                    <a
-                        class="btn"
-                        href="/forgot-password"
-                    >
-                        Neuen Link anfordern
-                    </a>
-                    `
-                )
-            );
-        }
-
-        res.send(
-            page(
-                'Neues Passwort',
-                `
-                <div class="box">
-
-                    <h1>🔑 Neues Passwort</h1>
-
-                    <form
-                        method="POST"
-                        action="/reset-password/${escape(token)}"
-                    >
-
-                        <label>
-                            Neues Passwort
-                        </label>
-
-                        <input
-                            type="password"
-                            name="password"
-                            minlength="8"
-                            required
-                        >
-
-                        <label>
-                            Passwort wiederholen
-                        </label>
-
-                        <input
-                            type="password"
-                            name="password2"
-                            minlength="8"
-                            required
-                        >
-
-                        <button type="submit">
-                            Passwort ändern
-                        </button>
-
-                    </form>
-
-                </div>
-                `
-            )
+    const user =
+        getUsers().find(
+            u =>
+                u.resetToken === resetToken &&
+                Number(u.resetExpires || 0) > Date.now()
         );
-    }
-);
 
-app.post(
-    '/reset-password/:token',
-    async (req, res) => {
-
-        const token =
-            String(req.params.token || '');
-
-        const password =
-            String(req.body.password || '');
-
-        const password2 =
-            String(req.body.password2 || '');
-
-        if (
-            password.length < 8 ||
-            password !== password2
-        ) {
-            return res.status(400).send(
-                page(
-                    'Fehler',
-                    `
-                    <div class="error">
-                        Die Passwörter müssen identisch
-                        sein und mindestens 8 Zeichen haben.
-                    </div>
-
-                    <a
-                        class="btn"
-                        href="javascript:history.back()"
-                    >
-                        Zurück
-                    </a>
-                    `
-                )
-            );
-        }
-
-        const users =
-            getUsers();
-
-        const index =
-            users.findIndex(
-                u =>
-                    u.resetToken === token &&
-                    Number(u.resetExpires || 0) >
-                    Date.now()
-            );
-
-        if (index === -1) {
-            return res.status(400).send(
-                page(
-                    'Fehler',
-                    `
-                    <div class="error">
-                        Der Reset-Link ist ungültig
-                        oder abgelaufen.
-                    </div>
-                    `
-                )
-            );
-        }
-
-        users[index].passwordHash =
-            await bcrypt.hash(
-                password,
-                12
-            );
-
-        delete users[index].resetToken;
-        delete users[index].resetExpires;
-
-        saveUsers(users);
-
-        res.send(
-            page(
-                'Erfolgreich',
+    if (!user) {
+        return res.status(400).send(
+            layout(
+                'Ungültiger Link',
                 `
-                <div class="success">
-                    ✅ Dein Passwort wurde geändert.
+                <div class="error">
+                    ❌ Der Reset-Link ist ungültig
+                    oder abgelaufen.
                 </div>
 
-                <a
-                    class="btn"
-                    href="/login"
-                >
-                    Jetzt anmelden
+                <a class="btn" href="/forgot-password">
+                    Neuen Reset-Link anfordern
                 </a>
                 `
             )
         );
     }
-);
+
+    res.send(
+        layout(
+            'Neues Passwort',
+            `
+            <div class="box">
+
+                <h1>🔑 Neues Passwort</h1>
+
+                <form
+                    method="POST"
+                    action="/reset-password/${esc(resetToken)}"
+                >
+
+                    <label>Neues Passwort</label>
+
+                    <input
+                        type="password"
+                        name="password"
+                        minlength="8"
+                        required
+                    >
+
+                    <label>
+                        Neues Passwort wiederholen
+                    </label>
+
+                    <input
+                        type="password"
+                        name="password2"
+                        minlength="8"
+                        required
+                    >
+
+                    <button>
+                        Passwort ändern
+                    </button>
+
+                </form>
+
+            </div>
+            `
+        )
+    );
+});
+
+app.post('/reset-password/:token', async (req, res) => {
+
+    const resetToken =
+        String(req.params.token || '');
+
+    const password =
+        String(req.body.password || '');
+
+    const password2 =
+        String(req.body.password2 || '');
+
+    if (
+        password.length < 8 ||
+        password !== password2
+    ) {
+        return res.status(400).send(
+            layout(
+                'Fehler',
+                `
+                <div class="error">
+                    Die Passwörter müssen identisch sein
+                    und mindestens 8 Zeichen haben.
+                </div>
+
+                <a
+                    class="btn"
+                    href="/reset-password/${esc(resetToken)}"
+                >
+                    Zurück
+                </a>
+                `
+            )
+        );
+    }
+
+    const users =
+        getUsers();
+
+    const index =
+        users.findIndex(
+            u =>
+                u.resetToken === resetToken &&
+                Number(u.resetExpires || 0) > Date.now()
+        );
+
+    if (index === -1) {
+        return res.status(400).send(
+            layout(
+                'Fehler',
+                `
+                <div class="error">
+                    Der Reset-Link ist ungültig
+                    oder abgelaufen.
+                </div>
+                `
+            )
+        );
+    }
+
+    users[index].passwordHash =
+        await bcrypt.hash(password, 12);
+
+    delete users[index].resetToken;
+    delete users[index].resetExpires;
+
+    write(USERS_FILE, users);
+
+    res.send(
+        layout(
+            'Passwort geändert',
+            `
+            <div class="success">
+                ✅ Dein Passwort wurde erfolgreich geändert.
+            </div>
+
+            <a class="btn" href="/login">
+                Jetzt anmelden
+            </a>
+            `
+        )
+    );
+});
 
 /* =========================================================
    DASHBOARD
 ========================================================= */
 
-app.get(
-    '/dashboard',
-    requireLogin,
-    (req, res) => {
+app.get('/dashboard', auth, (req, res) => {
 
-        const user =
-            getCurrentUser(req);
+    const user =
+        currentUser(req);
 
-        const orders =
-            getOrders().filter(
-                order =>
-                    order.userId === user.id
-            );
+    const orders =
+        getOrders().filter(
+            o => o.userId === user.id
+        );
 
-        const servers =
-            getServers().filter(
-                server =>
-                    server.ownerId === user.id
-            );
+    const servers =
+        getServers().filter(
+            s => s.ownerId === user.id
+        );
 
-        res.send(
-            page(
-                'Dashboard',
-                `
-                <div class="hero">
+    res.send(
+        layout(
+            'Dashboard',
+            `
+            <div class="hero">
 
-                    <h1>
-                        👋 Hallo
-                        ${escape(user.name)}
-                    </h1>
+                <h1>
+                    👋 Hallo ${esc(user.name)}
+                </h1>
+
+                <p>
+                    Deine E-Mail:
+                    ${esc(user.email)}
+                </p>
+
+            </div>
+
+            <div class="grid">
+
+                <div class="card">
+
+                    <h2>🆓 Server bestellen</h2>
 
                     <p>
-                        Willkommen im Minecraft Hosting.
+                        Kostenlosen Minecraft-Server
+                        beantragen.
                     </p>
 
-                </div>
-
-                <div class="grid">
-
-                    <div class="card">
-
-                        <h2>🆓 Server beantragen</h2>
-
-                        <p>
-                            Beantrage kostenlos einen
-                            Minecraft-Server.
-                        </p>
-
-                        <a
-                            class="btn"
-                            href="/orders"
-                        >
-                            Server bestellen
-                        </a>
-
-                    </div>
-
-                    <div class="card">
-
-                        <h2>🖥️ Meine Server</h2>
-
-                        <p>
-                            ${servers.length} Server
-                        </p>
-
-                        <a
-                            class="btn"
-                            href="/servers"
-                        >
-                            Server anzeigen
-                        </a>
-
-                    </div>
-
-                    <div class="card">
-
-                        <h2>📋 Bestellungen</h2>
-
-                        <p>
-                            ${orders.length} Bestellungen
-                        </p>
-
-                        <a
-                            class="btn"
-                            href="/orders"
-                        >
-                            Status anzeigen
-                        </a>
-
-                    </div>
+                    <a
+                        class="btn"
+                        href="/orders"
+                    >
+                        Bestellung
+                    </a>
 
                 </div>
-                `,
-                user
-            )
-        );
-    }
-);
+
+                <div class="card">
+
+                    <h2>📋 Bestellungen</h2>
+
+                    <p>
+                        ${orders.length}
+                        Bestellung(en)
+                    </p>
+
+                    <a
+                        class="btn"
+                        href="/orders"
+                    >
+                        Anzeigen
+                    </a>
+
+                </div>
+
+                <div class="card">
+
+                    <h2>🖥️ Server</h2>
+
+                    <p>
+                        ${servers.length}
+                        Server
+                    </p>
+
+                    <a
+                        class="btn"
+                        href="/servers"
+                    >
+                        Anzeigen
+                    </a>
+
+                </div>
+
+                <div class="card">
+
+                    <h2>📝 Bewerbungen</h2>
+
+                    <p>
+                        Moderator oder Developer
+                    </p>
+
+                    <a
+                        class="btn"
+                        href="/applications"
+                    >
+                        Bewerbung
+                    </a>
+
+                </div>
+
+            </div>
+            `,
+            user
+        )
+    );
+});
 
 /* =========================================================
    SERVER ORDER
 ========================================================= */
 
-app.get(
-    '/orders',
-    requireLogin,
-    (req, res) => {
+app.get('/orders', auth, (req, res) => {
 
-        const user =
-            getCurrentUser(req);
+    const user =
+        currentUser(req);
 
-        const orders =
-            getOrders().filter(
-                order =>
-                    order.userId === user.id
-            );
+    const orders =
+        getOrders().filter(
+            o => o.userId === user.id
+        );
 
-        res.send(
-            page(
-                'Server-Bestellungen',
-                `
-                <div class="box">
+    res.send(
+        layout(
+            'Bestellungen',
+            `
+            <div class="box">
 
-                    <h1>
-                        🆓 Minecraft-Server bestellen
-                    </h1>
+                <h1>🆓 Minecraft-Server bestellen</h1>
 
-                    <div class="success">
-                        Die Server-Bestellung ist
-                        kostenlos.
-                        Der Server wird erst nach
-                        einer Freigabe durch einen
-                        Admin/Owner erstellt.
-                    </div>
-
-                    <form
-                        method="POST"
-                        action="/orders/server"
-                    >
-
-                        <label>
-                            Servername
-                        </label>
-
-                        <input
-                            name="serverName"
-                            maxlength="40"
-                            placeholder="Mein Server"
-                            required
-                        >
-
-                        <label>
-                            Minecraft-Version
-                        </label>
-
-                        <select name="version">
-
-                            <option value="1.21.8">
-                                1.21.8
-                            </option>
-
-                            <option value="1.21.7">
-                                1.21.7
-                            </option>
-
-                            <option value="1.21.6">
-                                1.21.6
-                            </option>
-
-                            <option value="1.20.6">
-                                1.20.6
-                            </option>
-
-                        </select>
-
-                        <label>
-                            Grund / Beschreibung
-                        </label>
-
-                        <textarea
-                            name="reason"
-                            maxlength="3000"
-                            placeholder="Was möchtest du mit dem Server machen?"
-                        ></textarea>
-
-                        <button type="submit">
-                            🆓 Server kostenlos bestellen
-                        </button>
-
-                    </form>
-
+                <div class="success">
+                    Die Bestellung ist kostenlos.
+                    Ein Admin oder Owner muss sie
+                    vor der Server-Erstellung annehmen.
                 </div>
 
-                <div class="box">
+                <form
+                    method="POST"
+                    action="/orders"
+                >
 
-                    <h2>
-                        📋 Meine Bestellungen
-                    </h2>
+                    <label>Servername</label>
 
-                    ${
-                        orders.length
-                        ? orders.map(order => `
+                    <input
+                        name="serverName"
+                        maxlength="40"
+                        required
+                    >
 
-                            <div class="card">
+                    <label>Minecraft-Version</label>
 
-                                <h3>
-                                    ⛏️
-                                    ${escape(order.serverName)}
-                                </h3>
+                    <select name="version">
 
-                                <p>
-                                    Version:
-                                    ${escape(order.version)}
-                                </p>
+                        <option value="1.21.8">
+                            1.21.8
+                        </option>
 
-                                <p>
-                                    Status:
+                        <option value="1.21.7">
+                            1.21.7
+                        </option>
 
-                                    <span class="status ${
-                                        order.status === 'wartend'
-                                        ? 'waiting'
-                                        : order.status === 'angenommen'
-                                        ? 'accepted'
-                                        : 'rejected'
-                                    }">
-                                        ${escape(order.status)}
-                                    </span>
-                                </p>
+                        <option value="1.21.6">
+                            1.21.6
+                        </option>
 
-                                <p class="small">
-                                    Bestellung:
-                                    ${escape(order.createdAt)}
-                                </p>
+                        <option value="1.20.6">
+                            1.20.6
+                        </option>
 
-                                ${
-                                    order.status === 'abgelehnt'
-                                    ? `
-                                    <div class="error">
-                                        ❌ Deine Bestellung wurde abgelehnt.
-                                    </div>
-                                    `
-                                    : ''
-                                }
+                    </select>
 
-                                ${
-                                    order.status === 'angenommen'
-                                    ? `
-                                    <div class="success">
-                                        ✅ Deine Bestellung wurde angenommen.
-                                        Dein Server wurde freigeschaltet.
-                                    </div>
-                                    `
-                                    : ''
-                                }
+                    <label>Beschreibung</label>
 
-                            </div>
+                    <textarea
+                        name="reason"
+                        maxlength="3000"
+                        placeholder="Beschreibe deinen Server..."
+                    ></textarea>
 
-                        `).join('')
-                        : `
-                        <p>
-                            Du hast noch keine Bestellung.
-                        </p>
-                        `
-                    }
+                    <button>
+                        🆓 Bestellung absenden
+                    </button>
 
+                </form>
+
+            </div>
+
+            <div class="box">
+
+                <h2>📋 Meine Bestellungen</h2>
+
+                ${
+                    orders.length
+                    ? orders.map(order => `
+                        <div class="card">
+
+                            <h3>
+                                ⛏️
+                                ${esc(order.serverName)}
+                            </h3>
+
+                            <p>
+                                Version:
+                                ${esc(order.version)}
+                            </p>
+
+                            <p>
+                                Status:
+
+                                <span class="status ${
+                                    order.status === 'wartend'
+                                    ? 'waiting'
+                                    : order.status === 'angenommen'
+                                    ? 'accepted'
+                                    : 'rejected'
+                                }">
+                                    ${esc(order.status)}
+                                </span>
+                            </p>
+
+                            <p class="small">
+                                Erstellt:
+                                ${esc(order.createdAt)}
+                            </p>
+
+                            ${
+                                order.status === 'angenommen'
+                                ? `
+                                <div class="success">
+                                    ✅ Angenommen.
+                                    ${
+                                        order.serverId
+                                        ? `
+                                        <a href="/servers/${esc(order.serverId)}">
+                                            Server öffnen
+                                        </a>
+                                        `
+                                        : ''
+                                    }
+                                </div>
+                                `
+                                : ''
+                            }
+
+                            ${
+                                order.status === 'abgelehnt'
+                                ? `
+                                <div class="error">
+                                    ❌ Diese Bestellung wurde abgelehnt.
+                                    Es wurden keine Coins abgezogen.
+                                </div>
+                                `
+                                : ''
+                            }
+
+                        </div>
+                    `).join('')
+                    : `
+                    <p>
+                        Keine Bestellungen vorhanden.
+                    </p>
+                    `
+                }
+
+            </div>
+            `,
+            user
+        )
+    );
+});
+
+app.post('/orders', auth, (req, res) => {
+
+    const user =
+        currentUser(req);
+
+    const serverName =
+        String(req.body.serverName || '')
+            .trim()
+            .replace(/[^\wäöüÄÖÜß ._-]/g, '')
+            .slice(0, 40);
+
+    const version =
+        String(
+            req.body.version || '1.21.8'
+        );
+
+    const reason =
+        String(
+            req.body.reason || ''
+        ).slice(0, 3000);
+
+    if (!serverName) {
+        return res.status(400).send(
+            layout(
+                'Fehler',
+                `
+                <div class="error">
+                    Servername fehlt.
                 </div>
                 `,
                 user
             )
         );
     }
-);
 
-app.post(
-    '/orders/server',
-    requireLogin,
-    (req, res) => {
+    const orders =
+        getOrders();
 
-        const user =
-            getCurrentUser(req);
+    orders.push({
+        id: id('order'),
+        userId: user.id,
+        userName: user.name,
+        userEmail: user.email,
+        serverName,
+        version,
+        reason,
+        status: 'wartend',
+        serverId: null,
+        createdAt: new Date().toISOString(),
+        processedAt: null,
+        processedBy: null
+    });
 
-        const serverName =
-            String(
-                req.body.serverName || ''
-            )
-            .trim()
-            .replace(/[^\wäöüÄÖÜß ._-]/g, '')
-            .slice(0, 40);
+    write(ORDERS_FILE, orders);
 
-        const version =
-            String(
-                req.body.version || '1.21.8'
-            );
-
-        const reason =
-            String(
-                req.body.reason || ''
-            )
-            .slice(0, 3000);
-
-        if (!serverName) {
-            return res.status(400).send(
-                page(
-                    'Fehler',
-                    `
-                    <div class="error">
-                        Bitte einen Servernamen eingeben.
-                    </div>
-                    `,
-                    user
-                )
-            );
-        }
-
-        /*
-         * Keine Coins werden abgezogen.
-         * Server wird erst nach Admin-Freigabe erstellt.
-         */
-
-        const orders =
-            getOrders();
-
-        orders.push({
-            id: makeId('order'),
-            userId: user.id,
-            userName: user.name,
-            userEmail: user.email,
-
-            serverName,
-            version,
-            reason,
-
-            status: 'wartend',
-
-            createdAt:
-                new Date().toISOString(),
-
-            processedAt: null,
-            processedBy: null
-        });
-
-        saveOrders(orders);
-
-        res.redirect('/orders');
-    }
-);
+    res.redirect('/orders');
+});
 
 /* =========================================================
-   SERVER LIST
+   SERVERS
 ========================================================= */
 
-app.get(
-    '/servers',
-    requireLogin,
-    (req, res) => {
+app.get('/servers', auth, (req, res) => {
 
-        const user =
-            getCurrentUser(req);
+    const user =
+        currentUser(req);
 
-        const servers =
-            getServers().filter(
-                server =>
-                    server.ownerId === user.id
-            );
+    const servers =
+        getServers().filter(
+            server =>
+                server.ownerId === user.id
+        );
 
-        res.send(
-            page(
-                'Meine Server',
-                `
-                <div class="box">
+    res.send(
+        layout(
+            'Meine Server',
+            `
+            <div class="box">
 
-                    <h1>🖥️ Meine Server</h1>
-
-                    <p>
-                        Server können erst nach
-                        einer angenommenen Bestellung
-                        hier erscheinen.
-                    </p>
-
-                </div>
+                <h1>🖥️ Meine Server</h1>
 
                 ${
                     servers.length
                     ? servers.map(server => `
-
                         <div class="card">
 
                             <h2>
                                 ⛏️
-                                ${escape(server.name)}
+                                ${esc(server.name)}
                             </h2>
 
                             <p>
                                 Version:
-                                ${escape(server.version)}
+                                ${esc(server.version)}
                             </p>
 
                             <p>
@@ -1670,7 +1648,7 @@ app.get(
                                     ? 'online'
                                     : 'offline'
                                 }">
-                                    ${escape(server.status)}
+                                    ${esc(server.status)}
                                 </span>
                             </p>
 
@@ -1678,7 +1656,7 @@ app.get(
                                 server.locked
                                 ? `
                                 <div class="error">
-                                    🔒 Dieser Server wurde gesperrt.
+                                    🔒 Server wurde gesperrt.
                                 </div>
                                 `
                                 : ''
@@ -1686,105 +1664,100 @@ app.get(
 
                             <a
                                 class="btn"
-                                href="/servers/${server.id}"
+                                href="/servers/${esc(server.id)}"
                             >
                                 Verwalten
                             </a>
 
                         </div>
-
                     `).join('')
                     : `
-                    <div class="box">
-                        <p>
-                            Noch keine freigeschalteten Server.
-                        </p>
-                    </div>
+                    <p>
+                        Du hast noch keinen freigeschalteten Server.
+                    </p>
+
+                    <a
+                        class="btn"
+                        href="/orders"
+                    >
+                        Server bestellen
+                    </a>
                     `
                 }
+
+            </div>
+            `,
+            user
+        )
+    );
+});
+
+app.get('/servers/:id', auth, (req, res) => {
+
+    const user =
+        currentUser(req);
+
+    const server =
+        getServers().find(
+            s =>
+                s.id === req.params.id &&
+                s.ownerId === user.id
+        );
+
+    if (!server) {
+        return res.status(404).send(
+            layout(
+                'Nicht gefunden',
+                `
+                <div class="error">
+                    Server nicht gefunden.
+                </div>
                 `,
                 user
             )
         );
     }
-);
 
-/* =========================================================
-   SERVER MANAGEMENT
-========================================================= */
+    res.send(
+        layout(
+            server.name,
+            `
+            <div class="box">
 
-app.get(
-    '/servers/:serverId',
-    requireLogin,
-    (req, res) => {
+                <h1>
+                    ⛏️ ${esc(server.name)}
+                </h1>
 
-        const user =
-            getCurrentUser(req);
+                <p>
+                    Version:
+                    ${esc(server.version)}
+                </p>
 
-        const server =
-            getServers().find(
-                s =>
-                    s.id === req.params.serverId &&
-                    s.ownerId === user.id
-            );
+                <p>
+                    Status:
+                    <span class="status ${
+                        server.status === 'online'
+                        ? 'online'
+                        : 'offline'
+                    }">
+                        ${esc(server.status)}
+                    </span>
+                </p>
 
-        if (!server) {
-            return res.status(404).send(
-                page(
-                    'Nicht gefunden',
-                    `
+                ${
+                    server.locked
+                    ? `
                     <div class="error">
-                        Server nicht gefunden.
+                        🔒 Dieser Server wurde gesperrt.
                     </div>
-                    `,
-                    user
-                )
-            );
-        }
-
-        res.send(
-            page(
-                server.name,
-                `
-                <div class="box">
-
-                    <h1>
-                        ⛏️
-                        ${escape(server.name)}
-                    </h1>
-
-                    ${
-                        server.locked
-                        ? `
-                        <div class="error">
-                            🔒 Dieser Server wurde vom
-                            Admin/Owner gesperrt.
-                        </div>
-                        `
-                        : ''
-                    }
-
-                    <p>
-                        Status:
-
-                        <span class="status ${
-                            server.status === 'online'
-                            ? 'online'
-                            : 'offline'
-                        }">
-                            ${escape(server.status)}
-                        </span>
-                    </p>
-
+                    `
+                    : `
                     <form
                         method="POST"
                         action="/servers/${server.id}/start"
                         style="display:inline"
                     >
-                        <button
-                            class="green"
-                            type="submit"
-                        >
+                        <button class="green">
                             ▶ Start
                         </button>
                     </form>
@@ -1794,10 +1767,7 @@ app.get(
                         action="/servers/${server.id}/stop"
                         style="display:inline"
                     >
-                        <button
-                            class="red"
-                            type="submit"
-                        >
+                        <button class="red">
                             ■ Stop
                         </button>
                     </form>
@@ -1807,330 +1777,514 @@ app.get(
                         action="/servers/${server.id}/restart"
                         style="display:inline"
                     >
-                        <button type="submit">
+                        <button>
                             🔄 Neustart
                         </button>
                     </form>
+                    `
+                }
 
-                </div>
-                `,
-                user
-            )
-        );
-    }
-);
+            </div>
+            `,
+            user
+        )
+    );
+});
 
-function ownedServer(req) {
+function getOwnedServer(req) {
 
     const user =
-        getCurrentUser(req);
+        currentUser(req);
 
     return getServers().find(
         server =>
-            server.id === req.params.serverId &&
+            server.id === req.params.id &&
             server.ownerId === user.id
     );
 }
 
-app.post(
-    '/servers/:serverId/start',
-    requireLogin,
-    (req, res) => {
+app.post('/servers/:id/start', auth, (req, res) => {
 
-        const server =
-            ownedServer(req);
+    const server =
+        getOwnedServer(req);
 
-        if (!server) {
-            return res.status(404).send(
-                'Server nicht gefunden'
-            );
-        }
-
-        if (server.locked) {
-            return res.status(403).send(
-                'Server gesperrt'
-            );
-        }
-
-        server.status = 'online';
-
-        saveServers(getServers());
-
-        res.redirect(
-            `/servers/${server.id}`
+    if (!server) {
+        return res.status(404).send(
+            'Server nicht gefunden'
         );
     }
-);
 
-app.post(
-    '/servers/:serverId/stop',
-    requireLogin,
-    (req, res) => {
-
-        const server =
-            ownedServer(req);
-
-        if (!server) {
-            return res.status(404).send(
-                'Server nicht gefunden'
-            );
-        }
-
-        server.status = 'offline';
-
-        saveServers(getServers());
-
-        res.redirect(
-            `/servers/${server.id}`
+    if (server.locked) {
+        return res.status(403).send(
+            'Server ist gesperrt'
         );
     }
-);
 
-app.post(
-    '/servers/:serverId/restart',
-    requireLogin,
-    (req, res) => {
+    const servers =
+        getServers();
 
-        const server =
-            ownedServer(req);
+    const index =
+        servers.findIndex(
+            s => s.id === server.id
+        );
 
-        if (!server) {
-            return res.status(404).send(
-                'Server nicht gefunden'
-            );
-        }
+    servers[index].status =
+        'online';
 
-        if (server.locked) {
-            return res.status(403).send(
-                'Server gesperrt'
-            );
-        }
+    write(SERVERS_FILE, servers);
 
-        server.status = 'restarting';
+    res.redirect(`/servers/${server.id}`);
+});
 
-        saveServers(getServers());
+app.post('/servers/:id/stop', auth, (req, res) => {
 
-        setTimeout(() => {
+    const server =
+        getOwnedServer(req);
 
-            const servers =
-                getServers();
-
-            const current =
-                servers.find(
-                    s =>
-                        s.id === server.id
-                );
-
-            if (
-                current &&
-                !current.locked
-            ) {
-                current.status =
-                    'online';
-
-                saveServers(servers);
-            }
-
-        }, 1500);
-
-        res.redirect(
-            `/servers/${server.id}`
+    if (!server) {
+        return res.status(404).send(
+            'Server nicht gefunden'
         );
     }
-);
+
+    const servers =
+        getServers();
+
+    const index =
+        servers.findIndex(
+            s => s.id === server.id
+        );
+
+    servers[index].status =
+        'offline';
+
+    write(SERVERS_FILE, servers);
+
+    res.redirect(`/servers/${server.id}`);
+});
+
+app.post('/servers/:id/restart', auth, (req, res) => {
+
+    const server =
+        getOwnedServer(req);
+
+    if (!server) {
+        return res.status(404).send(
+            'Server nicht gefunden'
+        );
+    }
+
+    if (server.locked) {
+        return res.status(403).send(
+            'Server ist gesperrt'
+        );
+    }
+
+    const servers =
+        getServers();
+
+    const index =
+        servers.findIndex(
+            s => s.id === server.id
+        );
+
+    servers[index].status =
+        'restarting';
+
+    write(SERVERS_FILE, servers);
+
+    setTimeout(() => {
+
+        const updated =
+            getServers();
+
+        const current =
+            updated.find(
+                s => s.id === server.id
+            );
+
+        if (current && !current.locked) {
+            current.status =
+                'online';
+
+            write(
+                SERVERS_FILE,
+                updated
+            );
+        }
+
+    }, 1500);
+
+    res.redirect(`/servers/${server.id}`);
+});
+
+/* =========================================================
+   APPLICATIONS
+========================================================= */
+
+app.get('/applications', auth, (req, res) => {
+
+    const user =
+        currentUser(req);
+
+    const applications =
+        getApplications().filter(
+            a => a.userId === user.id
+        );
+
+    res.send(
+        layout(
+            'Bewerbungen',
+            `
+            <div class="box">
+
+                <h1>📝 Team-Bewerbung</h1>
+
+                <form
+                    method="POST"
+                    action="/applications"
+                >
+
+                    <label>
+                        Bewerbung für
+                    </label>
+
+                    <select name="type">
+
+                        <option value="moderator">
+                            Moderator
+                        </option>
+
+                        <option value="developer">
+                            Developer
+                        </option>
+
+                    </select>
+
+                    <label>
+                        Warum möchtest du ins Team?
+                    </label>
+
+                    <textarea
+                        name="text"
+                        maxlength="5000"
+                        required
+                    ></textarea>
+
+                    <button>
+                        Bewerbung absenden
+                    </button>
+
+                </form>
+
+            </div>
+
+            <div class="box">
+
+                <h2>Meine Bewerbungen</h2>
+
+                ${
+                    applications.length
+                    ? applications.map(a => `
+                        <div class="card">
+
+                            <h3>
+                                ${esc(a.type)}
+                            </h3>
+
+                            <p>
+                                Status:
+                                <span class="status">
+                                    ${esc(a.status)}
+                                </span>
+                            </p>
+
+                            <p>
+                                ${esc(a.text)}
+                            </p>
+
+                        </div>
+                    `).join('')
+                    : '<p>Noch keine Bewerbung.</p>'
+                }
+
+            </div>
+            `,
+            user
+        )
+    );
+});
+
+app.post('/applications', auth, (req, res) => {
+
+    const user =
+        currentUser(req);
+
+    const type =
+        req.body.type === 'developer'
+        ? 'developer'
+        : 'moderator';
+
+    const text =
+        String(
+            req.body.text || ''
+        ).slice(0, 5000);
+
+    if (!text.trim()) {
+        return res.status(400).send(
+            'Bewerbung darf nicht leer sein.'
+        );
+    }
+
+    const applications =
+        getApplications();
+
+    applications.push({
+        id: id('application'),
+        userId: user.id,
+        userName: user.name,
+        userEmail: user.email,
+        type,
+        text,
+        status: 'offen',
+        createdAt: new Date().toISOString(),
+        processedBy: null,
+        processedAt: null
+    });
+
+    write(
+        APPLICATIONS_FILE,
+        applications
+    );
+
+    res.redirect('/applications');
+});
 
 /* =========================================================
    ADMIN PANEL
 ========================================================= */
 
-app.get(
-    '/admin',
-    requireAdmin,
-    (req, res) => {
+app.get('/admin', adminAuth, (req, res) => {
 
-        const user =
-            getCurrentUser(req);
+    const user =
+        currentUser(req);
 
-        const users =
-            getUsers();
+    const users =
+        getUsers();
 
-        const orders =
-            getOrders();
+    const orders =
+        getOrders();
 
-        const servers =
-            getServers();
+    const servers =
+        getServers();
 
-        res.send(
-            page(
-                'Admin Panel',
-                `
-                <div class="hero">
+    const applications =
+        getApplications();
 
-                    <h1>
-                        👑 Admin Panel
-                    </h1>
+    res.send(
+        layout(
+            'Admin Panel',
+            `
+            <div class="hero">
 
-                    <p>
-                        Angemeldet als:
-                        ${escape(user.email)}
-                    </p>
+                <h1>👑 Admin Panel</h1>
 
+                <p>
+                    Angemeldet als:
+                    ${esc(user.email)}
+                </p>
+
+            </div>
+
+            <div class="grid">
+
+                <div class="card">
+                    <h2>👥 Benutzer</h2>
+                    <h1>${users.length}</h1>
                 </div>
 
-                <div class="grid">
-
-                    <div class="card">
-                        <h2>👥 Benutzer</h2>
-                        <p>
-                            ${users.length}
-                        </p>
-                    </div>
-
-                    <div class="card">
-                        <h2>🖥️ Server</h2>
-                        <p>
-                            ${servers.length}
-                        </p>
-                    </div>
-
-                    <div class="card">
-                        <h2>📋 Bestellungen</h2>
-                        <p>
-                            ${orders.length}
-                        </p>
-                    </div>
-
+                <div class="card">
+                    <h2>📋 Bestellungen</h2>
+                    <h1>${orders.length}</h1>
                 </div>
 
-                <div class="box">
+                <div class="card">
+                    <h2>🖥️ Server</h2>
+                    <h1>${servers.length}</h1>
+                </div>
 
-                    <h2>
-                        📋 Server-Bestellungen
-                    </h2>
+                <div class="card">
+                    <h2>📝 Bewerbungen</h2>
+                    <h1>${applications.length}</h1>
+                </div>
+
+            </div>
+
+            <div class="box">
+
+                <h2>📋 Server-Bestellungen</h2>
+
+                ${
+                    orders.length
+                    ? orders.map(order => `
+
+                        <div class="card">
+
+                            <h3>
+                                ⛏️
+                                ${esc(order.serverName)}
+                            </h3>
+
+                            <p>
+                                Benutzer:
+                                ${esc(order.userName)}
+                            </p>
+
+                            <p>
+                                E-Mail:
+                                ${esc(order.userEmail)}
+                            </p>
+
+                            <p>
+                                Version:
+                                ${esc(order.version)}
+                            </p>
+
+                            <p>
+                                Status:
+                                ${esc(order.status)}
+                            </p>
+
+                            ${
+                                order.status === 'wartend'
+                                ? `
+
+                                <form
+                                    method="POST"
+                                    action="/admin/orders/${order.id}/accept"
+                                    style="display:inline"
+                                >
+                                    <button class="green">
+                                        ✅ Annehmen
+                                    </button>
+                                </form>
+
+                                <form
+                                    method="POST"
+                                    action="/admin/orders/${order.id}/reject"
+                                    style="display:inline"
+                                >
+                                    <button class="red">
+                                        ❌ Ablehnen
+                                    </button>
+                                </form>
+
+                                `
+                                : ''
+                            }
+
+                        </div>
+
+                    `).join('')
+                    : '<p>Keine Bestellungen.</p>'
+                }
+
+            </div>
+
+            <div class="box">
+
+                <h2>📝 Bewerbungen</h2>
+
+                ${
+                    applications.length
+                    ? applications.map(application => `
+
+                        <div class="card">
+
+                            <h3>
+                                ${esc(application.type)}
+                            </h3>
+
+                            <p>
+                                ${esc(application.userName)}
+                                –
+                                ${esc(application.userEmail)}
+                            </p>
+
+                            <p>
+                                ${esc(application.text)}
+                            </p>
+
+                            <p>
+                                Status:
+                                ${esc(application.status)}
+                            </p>
+
+                            ${
+                                application.status === 'offen'
+                                ? `
+
+                                <form
+                                    method="POST"
+                                    action="/admin/applications/${application.id}/accept"
+                                    style="display:inline"
+                                >
+                                    <button class="green">
+                                        ✅ Annehmen
+                                    </button>
+                                </form>
+
+                                <form
+                                    method="POST"
+                                    action="/admin/applications/${application.id}/reject"
+                                    style="display:inline"
+                                >
+                                    <button class="red">
+                                        ❌ Ablehnen
+                                    </button>
+                                </form>
+
+                                `
+                                : ''
+                            }
+
+                        </div>
+
+                    `).join('')
+                    : '<p>Keine Bewerbungen.</p>'
+                }
+
+            </div>
+
+            <div class="box">
+
+                <h2>👥 Benutzerverwaltung</h2>
+
+                <table>
+
+                    <tr>
+                        <th>Name</th>
+                        <th>E-Mail</th>
+                        <th>Rolle</th>
+                        <th>Status</th>
+                        <th>Aktion</th>
+                    </tr>
 
                     ${
-                        orders.length
-                        ? orders.map(order => `
-
-                            <div class="card">
-
-                                <h3>
-                                    ⛏️
-                                    ${escape(order.serverName)}
-                                </h3>
-
-                                <p>
-                                    Benutzer:
-                                    ${escape(order.userName)}
-                                </p>
-
-                                <p>
-                                    E-Mail:
-                                    ${escape(order.userEmail)}
-                                </p>
-
-                                <p>
-                                    Version:
-                                    ${escape(order.version)}
-                                </p>
-
-                                <p>
-                                    Grund:
-                                    <br>
-                                    ${escape(order.reason)}
-                                </p>
-
-                                <p>
-                                    Status:
-
-                                    <span class="status ${
-                                        order.status === 'wartend'
-                                        ? 'waiting'
-                                        : order.status === 'angenommen'
-                                        ? 'accepted'
-                                        : 'rejected'
-                                    }">
-                                        ${escape(order.status)}
-                                    </span>
-                                </p>
-
-                                ${
-                                    order.status === 'wartend'
-                                    ? `
-
-                                    <form
-                                        method="POST"
-                                        action="/admin/orders/${order.id}/accept"
-                                        style="display:inline"
-                                    >
-                                        <button
-                                            class="green"
-                                            type="submit"
-                                        >
-                                            ✅ Annehmen
-                                        </button>
-                                    </form>
-
-                                    <form
-                                        method="POST"
-                                        action="/admin/orders/${order.id}/reject"
-                                        style="display:inline"
-                                    >
-                                        <button
-                                            class="red"
-                                            type="submit"
-                                        >
-                                            ❌ Ablehnen
-                                        </button>
-                                    </form>
-
-                                    `
-                                    : ''
-                                }
-
-                            </div>
-
-                        `).join('')
-                        : `
-                        <p>
-                            Keine Bestellungen.
-                        </p>
-                        `
-                    }
-
-                </div>
-
-                <div class="box">
-
-                    <h2>
-                        👥 Benutzerverwaltung
-                    </h2>
-
-                    <table>
-
-                        <tr>
-                            <th>Name</th>
-                            <th>E-Mail</th>
-                            <th>Rolle</th>
-                            <th>Status</th>
-                            <th>Aktion</th>
-                        </tr>
-
-                        ${
-                            users.map(target => `
+                        users.map(target => `
 
                             <tr>
 
                                 <td>
-                                    ${escape(target.name)}
+                                    ${esc(target.name)}
                                 </td>
 
                                 <td>
-                                    ${escape(target.email)}
+                                    ${esc(target.email)}
                                 </td>
 
                                 <td>
-                                    ${escape(target.role)}
+                                    ${esc(target.role)}
                                 </td>
 
                                 <td>
@@ -2143,138 +2297,127 @@ app.get(
 
                                 <td>
 
-                                ${
-                                    isOwner(target)
-                                    ? '<strong>OWNER</strong>'
-                                    : `
-                                    <form
-                                        method="POST"
-                                        action="/admin/users/${target.id}/ban"
-                                    >
-                                        <button
-                                            class="red"
-                                            type="submit"
+                                    ${
+                                        owner(target)
+                                        ? '<strong>OWNER</strong>'
+                                        : `
+                                        <form
+                                            method="POST"
+                                            action="/admin/users/${target.id}/ban"
                                         >
-                                            ${
-                                                target.banned
-                                                ? 'Entsperren'
-                                                : 'Sperren'
-                                            }
-                                        </button>
-                                    </form>
-                                    `
-                                }
+                                            <button class="red">
+                                                ${
+                                                    target.banned
+                                                    ? 'Entsperren'
+                                                    : 'Sperren'
+                                                }
+                                            </button>
+                                        </form>
+                                        `
+                                    }
 
                                 </td>
 
                             </tr>
 
-                            `).join('')
-                        }
-
-                    </table>
-
-                </div>
-
-                <div class="box">
-
-                    <h2>
-                        🖥️ Serververwaltung
-                    </h2>
-
-                    ${
-                        servers.length
-                        ? servers.map(server => `
-
-                            <div class="card">
-
-                                <h3>
-                                    ${escape(server.name)}
-                                </h3>
-
-                                <p>
-                                    Status:
-                                    ${escape(server.status)}
-                                </p>
-
-                                <p>
-                                    ${
-                                        server.locked
-                                        ? '🔒 Gesperrt'
-                                        : '🔓 Freigegeben'
-                                    }
-                                </p>
-
-                                <form
-                                    method="POST"
-                                    action="/admin/servers/${server.id}/toggle-lock"
-                                    style="display:inline"
-                                >
-                                    <button type="submit">
-                                        ${
-                                            server.locked
-                                            ? '🔓 Entsperren'
-                                            : '🔒 Sperren'
-                                        }
-                                    </button>
-                                </form>
-
-                                <form
-                                    method="POST"
-                                    action="/admin/servers/${server.id}/shutdown"
-                                    style="display:inline"
-                                >
-                                    <button
-                                        class="red"
-                                        type="submit"
-                                    >
-                                        ⛔ Herunterfahren
-                                    </button>
-                                </form>
-
-                                <form
-                                    method="POST"
-                                    action="/admin/servers/${server.id}/delete"
-                                    style="display:inline"
-                                    onsubmit="return confirm('Server wirklich löschen?')"
-                                >
-                                    <button
-                                        class="red"
-                                        type="submit"
-                                    >
-                                        🗑️ Löschen
-                                    </button>
-                                </form>
-
-                            </div>
-
                         `).join('')
-                        : `
-                        <p>
-                            Keine Server vorhanden.
-                        </p>
-                        `
                     }
 
-                </div>
-                `,
-                user
-            )
-        );
-    }
-);
+                </table>
+
+            </div>
+
+            <div class="box">
+
+                <h2>🖥️ Serververwaltung</h2>
+
+                ${
+                    servers.length
+                    ? servers.map(server => `
+
+                        <div class="card">
+
+                            <h3>
+                                ${esc(server.name)}
+                            </h3>
+
+                            <p>
+                                Besitzer:
+                                ${esc(server.ownerEmail || '')}
+                            </p>
+
+                            <p>
+                                Status:
+                                ${esc(server.status)}
+                            </p>
+
+                            <p>
+                                ${
+                                    server.locked
+                                    ? '🔒 Gesperrt'
+                                    : '🔓 Freigegeben'
+                                }
+                            </p>
+
+                            <form
+                                method="POST"
+                                action="/admin/servers/${server.id}/lock"
+                                style="display:inline"
+                            >
+                                <button>
+                                    ${
+                                        server.locked
+                                        ? '🔓 Entsperren'
+                                        : '🔒 Sperren'
+                                    }
+                                </button>
+                            </form>
+
+                            <form
+                                method="POST"
+                                action="/admin/servers/${server.id}/shutdown"
+                                style="display:inline"
+                            >
+                                <button class="red">
+                                    ⛔ Herunterfahren
+                                </button>
+                            </form>
+
+                            <form
+                                method="POST"
+                                action="/admin/servers/${server.id}/delete"
+                                style="display:inline"
+                                onsubmit="return confirm('Server wirklich löschen?')"
+                            >
+                                <button class="red">
+                                    🗑️ Löschen
+                                </button>
+                            </form>
+
+                        </div>
+
+                    `).join('')
+                    : '<p>Keine Server vorhanden.</p>'
+                }
+
+            </div>
+            `,
+            user
+        )
+    );
+});
 
 /* =========================================================
    ADMIN ORDER ACCEPT
 ========================================================= */
 
 app.post(
-    '/admin/orders/:orderId/accept',
-    requireAdmin,
+    '/admin/orders/:id/accept',
+    adminAuth,
     async (req, res) => {
 
-        const admin =
-            getCurrentUser(req);
+        const adminUser =
+            currentUser(req);
 
         const orders =
             getOrders();
@@ -2282,8 +2425,7 @@ app.post(
         const index =
             orders.findIndex(
                 order =>
-                    order.id ===
-                    req.params.orderId
+                    order.id === req.params.id
             );
 
         if (index === -1) {
@@ -2303,68 +2445,62 @@ app.post(
             getServers();
 
         const server = {
-            id: makeId('server'),
-
-            ownerId:
-                order.userId,
-
-            name:
-                order.serverName,
-
-            version:
-                order.version,
-
-            status:
-                'offline',
-
-            locked:
-                false,
-
-            createdAt:
-                new Date().toISOString(),
-
-            approvedAt:
-                new Date().toISOString(),
-
-            approvedBy:
-                admin.email
+            id: id('server'),
+            ownerId: order.userId,
+            ownerEmail: order.userEmail,
+            name: order.serverName,
+            version: order.version,
+            status: 'offline',
+            locked: false,
+            createdAt: new Date().toISOString(),
+            approvedAt: new Date().toISOString(),
+            approvedBy: adminUser.email
         };
 
         servers.push(server);
 
-        saveServers(servers);
+        write(
+            SERVERS_FILE,
+            servers
+        );
 
         order.status =
             'angenommen';
 
-        order.processedAt =
-            new Date().toISOString();
-
-        order.processedBy =
-            admin.email;
-
         order.serverId =
             server.id;
 
-        saveOrders(orders);
+        order.processedBy =
+            adminUser.email;
+
+        order.processedAt =
+            new Date().toISOString();
+
+        write(
+            ORDERS_FILE,
+            orders
+        );
 
         await sendMail(
             order.userEmail,
-            'Minecraft-Server angenommen',
+            'Deine Minecraft-Server-Bestellung wurde angenommen',
             `
-            <h2>✅ Server angenommen</h2>
+            <h2>✅ Bestellung angenommen</h2>
 
             <p>
-                Deine Server-Bestellung
-                <strong>
-                    ${escape(order.serverName)}
-                </strong>
+                Deine Bestellung
+                <strong>${esc(order.serverName)}</strong>
                 wurde angenommen.
             </p>
 
             <p>
-                Du kannst deinen Server jetzt
-                im Dashboard verwalten.
+                Dein Server ist jetzt im Dashboard verfügbar.
+            </p>
+
+            <p>
+                <a href="${esc(BASE_URL)}/servers/${esc(server.id)}">
+                    Server öffnen
+                </a>
             </p>
             `
         );
@@ -2378,12 +2514,12 @@ app.post(
 ========================================================= */
 
 app.post(
-    '/admin/orders/:orderId/reject',
-    requireAdmin,
+    '/admin/orders/:id/reject',
+    adminAuth,
     async (req, res) => {
 
-        const admin =
-            getCurrentUser(req);
+        const adminUser =
+            currentUser(req);
 
         const orders =
             getOrders();
@@ -2391,8 +2527,7 @@ app.post(
         const index =
             orders.findIndex(
                 order =>
-                    order.id ===
-                    req.params.orderId
+                    order.id === req.params.id
             );
 
         if (index === -1) {
@@ -2409,41 +2544,39 @@ app.post(
         }
 
         /*
-         * Wichtig:
-         * Server-Bestellungen sind kostenlos.
-         * Deshalb gibt es beim Ablehnen
-         * keinen Coin-Abzug und keine
-         * Coin-Rückerstattung.
+         * Server sind kostenlos.
+         * Deshalb werden keine Coins abgezogen.
          */
 
         order.status =
             'abgelehnt';
 
+        order.processedBy =
+            adminUser.email;
+
         order.processedAt =
             new Date().toISOString();
 
-        order.processedBy =
-            admin.email;
-
-        saveOrders(orders);
+        write(
+            ORDERS_FILE,
+            orders
+        );
 
         await sendMail(
             order.userEmail,
-            'Minecraft-Server abgelehnt',
+            'Deine Minecraft-Server-Bestellung wurde abgelehnt',
             `
-            <h2>❌ Server-Bestellung abgelehnt</h2>
+            <h2>❌ Bestellung abgelehnt</h2>
 
             <p>
-                Deine Bestellung für
-                <strong>
-                    ${escape(order.serverName)}
-                </strong>
+                Deine Bestellung
+                <strong>${esc(order.serverName)}</strong>
                 wurde abgelehnt.
             </p>
 
             <p>
                 Es wurden keine Coins abgezogen,
-                da die Server-Bestellung kostenlos ist.
+                da die Bestellung kostenlos war.
             </p>
             `
         );
@@ -2457,12 +2590,12 @@ app.post(
 ========================================================= */
 
 app.post(
-    '/admin/users/:userId/ban',
-    requireAdmin,
+    '/admin/users/:id/ban',
+    adminAuth,
     (req, res) => {
 
-        const admin =
-            getCurrentUser(req);
+        const actingUser =
+            currentUser(req);
 
         const users =
             getUsers();
@@ -2470,8 +2603,7 @@ app.post(
         const index =
             users.findIndex(
                 user =>
-                    user.id ===
-                    req.params.userId
+                    user.id === req.params.id
             );
 
         if (index === -1) {
@@ -2480,30 +2612,153 @@ app.post(
             );
         }
 
-        if (isOwner(users[index])) {
+        const target =
+            users[index];
+
+        if (owner(target)) {
             return res.status(403).send(
-                'Owner kann nicht gesperrt werden.'
+                'Der Owner kann nicht gesperrt werden.'
             );
         }
 
-        /*
-         * Normale Admins dürfen keine
-         * anderen Admins sperren.
-         */
-
         if (
-            users[index].role === 'admin' &&
-            !isOwner(admin)
+            target.role === 'admin' &&
+            !owner(actingUser)
         ) {
             return res.status(403).send(
                 'Nur der Owner kann Admins verwalten.'
             );
         }
 
-        users[index].banned =
-            !users[index].banned;
+        target.banned =
+            !target.banned;
 
-        saveUsers(users);
+        write(
+            USERS_FILE,
+            users
+        );
+
+        res.redirect('/admin');
+    }
+);
+
+/* =========================================================
+   ADMIN APPLICATION ACCEPT
+========================================================= */
+
+app.post(
+    '/admin/applications/:id/accept',
+    adminAuth,
+    async (req, res) => {
+
+        const adminUser =
+            currentUser(req);
+
+        const applications =
+            getApplications();
+
+        const index =
+            applications.findIndex(
+                a =>
+                    a.id === req.params.id
+            );
+
+        if (index === -1) {
+            return res.status(404).send(
+                'Bewerbung nicht gefunden'
+            );
+        }
+
+        applications[index].status =
+            'angenommen';
+
+        applications[index].processedBy =
+            adminUser.email;
+
+        applications[index].processedAt =
+            new Date().toISOString();
+
+        write(
+            APPLICATIONS_FILE,
+            applications
+        );
+
+        await sendMail(
+            applications[index].userEmail,
+            'Deine Teambewerbung wurde angenommen',
+            `
+            <h2>✅ Bewerbung angenommen</h2>
+
+            <p>
+                Deine Bewerbung als
+                <strong>
+                    ${esc(applications[index].type)}
+                </strong>
+                wurde angenommen.
+            </p>
+            `
+        );
+
+        res.redirect('/admin');
+    }
+);
+
+/* =========================================================
+   ADMIN APPLICATION REJECT
+========================================================= */
+
+app.post(
+    '/admin/applications/:id/reject',
+    adminAuth,
+    async (req, res) => {
+
+        const adminUser =
+            currentUser(req);
+
+        const applications =
+            getApplications();
+
+        const index =
+            applications.findIndex(
+                a =>
+                    a.id === req.params.id
+            );
+
+        if (index === -1) {
+            return res.status(404).send(
+                'Bewerbung nicht gefunden'
+            );
+        }
+
+        applications[index].status =
+            'abgelehnt';
+
+        applications[index].processedBy =
+            adminUser.email;
+
+        applications[index].processedAt =
+            new Date().toISOString();
+
+        write(
+            APPLICATIONS_FILE,
+            applications
+        );
+
+        await sendMail(
+            applications[index].userEmail,
+            'Deine Teambewerbung wurde abgelehnt',
+            `
+            <h2>❌ Bewerbung abgelehnt</h2>
+
+            <p>
+                Deine Bewerbung als
+                <strong>
+                    ${esc(applications[index].type)}
+                </strong>
+                wurde leider abgelehnt.
+            </p>
+            `
+        );
 
         res.redirect('/admin');
     }
@@ -2514,8 +2769,8 @@ app.post(
 ========================================================= */
 
 app.post(
-    '/admin/servers/:serverId/toggle-lock',
-    requireAdmin,
+    '/admin/servers/:id/lock',
+    adminAuth,
     (req, res) => {
 
         const servers =
@@ -2524,8 +2779,7 @@ app.post(
         const index =
             servers.findIndex(
                 server =>
-                    server.id ===
-                    req.params.serverId
+                    server.id === req.params.id
             );
 
         if (index === -1) {
@@ -2542,7 +2796,10 @@ app.post(
                 'offline';
         }
 
-        saveServers(servers);
+        write(
+            SERVERS_FILE,
+            servers
+        );
 
         res.redirect('/admin');
     }
@@ -2553,8 +2810,8 @@ app.post(
 ========================================================= */
 
 app.post(
-    '/admin/servers/:serverId/shutdown',
-    requireAdmin,
+    '/admin/servers/:id/shutdown',
+    adminAuth,
     (req, res) => {
 
         const servers =
@@ -2563,8 +2820,7 @@ app.post(
         const index =
             servers.findIndex(
                 server =>
-                    server.id ===
-                    req.params.serverId
+                    server.id === req.params.id
             );
 
         if (index === -1) {
@@ -2576,7 +2832,10 @@ app.post(
         servers[index].status =
             'offline';
 
-        saveServers(servers);
+        write(
+            SERVERS_FILE,
+            servers
+        );
 
         res.redirect('/admin');
     }
@@ -2587,18 +2846,17 @@ app.post(
 ========================================================= */
 
 app.post(
-    '/admin/servers/:serverId/delete',
-    requireAdmin,
+    '/admin/servers/:id/delete',
+    adminAuth,
     (req, res) => {
 
-        let servers =
+        const servers =
             getServers();
 
         const exists =
             servers.some(
                 server =>
-                    server.id ===
-                    req.params.serverId
+                    server.id === req.params.id
             );
 
         if (!exists) {
@@ -2607,73 +2865,39 @@ app.post(
             );
         }
 
-        servers =
+        const updated =
             servers.filter(
                 server =>
-                    server.id !==
-                    req.params.serverId
+                    server.id !== req.params.id
             );
 
-        saveServers(servers);
+        write(
+            SERVERS_FILE,
+            updated
+        );
 
         res.redirect('/admin');
     }
 );
 
 /* =========================================================
-   404
+   ERROR / 404
 ========================================================= */
 
 app.use((req, res) => {
 
     res.status(404).send(
-        page(
-            'Nicht gefunden',
+        layout(
+            '404',
             `
             <div class="error">
+
                 <h1>404</h1>
+
                 <p>
                     Diese Seite wurde nicht gefunden.
                 </p>
-            </div>
 
-            <a
-                class="btn"
-                href="/"
-            >
-                Zur Startseite
-            </a>
-            `
-        )
-    );
-});
-
-/* =========================================================
-   ERROR HANDLER
-========================================================= */
-
-app.use((error, req, res, next) => {
-
-    console.error(
-        'SERVER ERROR:',
-        error
-    );
-
-    if (res.headersSent) {
-        return next(error);
-    }
-
-    res.status(500).send(
-        page(
-            'Serverfehler',
-            `
-            <div class="error">
-                <h1>❌ Serverfehler</h1>
-
-                <p>
-                    Bei der Verarbeitung ist ein
-                    Fehler aufgetreten.
-                </p>
             </div>
 
             <a
@@ -2687,51 +2911,62 @@ app.use((error, req, res, next) => {
     );
 });
 
+app.use((error, req, res, next) => {
+
+    console.error('================================');
+    console.error('❌ SERVER FEHLER');
+    console.error(error);
+    console.error('================================');
+
+    if (res.headersSent) {
+        return next(error);
+    }
+
+    res.status(500).send(
+        layout(
+            'Serverfehler',
+            `
+            <div class="error">
+
+                <h1>❌ Fehler</h1>
+
+                <p>
+                    Bei der Verarbeitung ist ein Fehler
+                    aufgetreten.
+                </p>
+
+            </div>
+            `
+        )
+    );
+});
+
 /* =========================================================
    START
 ========================================================= */
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
 
     console.log('');
-    console.log(
-        '========================================'
-    );
-
-    console.log(
-        '⛏️ Minecraft Hosting läuft'
-    );
-
-    console.log(
-        '========================================'
-    );
-
-    console.log(
-        `🌐 Port: ${PORT}`
-    );
-
-    console.log(
-        `👑 Owner: ${OWNER_EMAIL}`
-    );
-
+    console.log('========================================');
+    console.log('⛏️ MINECRAFT HOSTING');
+    console.log('========================================');
+    console.log(`🌐 Port: ${PORT}`);
+    console.log(`👑 Owner: ${OWNER_EMAIL}`);
     console.log(
         `📧 Gmail: ${
-            transporter
-            ? 'Eingerichtet'
-            : 'Nicht eingerichtet'
+            mailer
+            ? 'konfiguriert'
+            : 'NICHT konfiguriert'
         }`
     );
+    console.log('🆓 Server: kostenlos');
+    console.log('👑 Freigabe: Admin / Owner');
+    console.log('🔐 Passwort-Reset: aktiviert');
+    console.log('========================================');
+    console.log('');
 
-    console.log(
-        '🆓 Server-Bestellungen: kostenlos'
-    );
-
-    console.log(
-        '👑 Server-Freigabe: Admin / Owner'
-    );
-
-    console.log(
-        '========================================'
-    );
-
+    if (mailer) {
+        await verifyMail();
+    }
 });
