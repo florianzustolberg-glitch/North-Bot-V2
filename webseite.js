@@ -1,40 +1,35 @@
-```javascript
-/**
+'use strict';
+
+/*
  * ============================================================
- * FLORIAN / WEISSERHAI MINECRAFT HOSTING
+ * Florian / WeisserHai Minecraft Hosting
+ * komplette webseite.js
  * ============================================================
  *
- * Datei: webseite.js
+ * Benötigte Pakete:
+ *
+ * npm install express express-session connect-sqlite3 sqlite3 bcryptjs
  *
  * Start:
- *   node webseite.js
  *
- * Benötigt:
- *   npm install express
+ * node webseite.js
  *
  * Environment:
- *   PORT=10000
- *   OWNER_EMAIL=florianzustolberg@gmail.com
- *   OWNER_PASSWORD=DEIN_PASSWORT
- *   SESSION_SECRET=irgendein-langer-geheimer-string
  *
- * Minecraft:
- *   Lege minecraft_server.jar in:
- *
- *   ./minecraft_server.jar
- *
- * Java muss auf dem Server installiert sein.
+ * PORT=10000
+ * SESSION_SECRET=ein-langes-geheimes-passwort
+ * OWNER_EMAIL=florianzustolberg@gmail.com
  *
  * ============================================================
  */
 
-"use strict";
-
-const express = require("express");
-const fs = require("fs");
-const path = require("path");
-const crypto = require("crypto");
-const { spawn } = require("child_process");
+const express = require('express');
+const session = require('express-session');
+const SQLiteStoreFactory = require('connect-sqlite3')(session);
+const sqlite3 = require('sqlite3').verbose();
+const bcrypt = require('bcryptjs');
+const path = require('path');
+const fs = require('fs');
 
 /* ============================================================
    KONFIGURATION
@@ -42,4427 +37,2528 @@ const { spawn } = require("child_process");
 
 const app = express();
 
-const PORT = Number(process.env.PORT) || 10000;
+const PORT = Number(process.env.PORT || 10000);
 
-const OWNER_EMAIL =
-    String(process.env.OWNER_EMAIL || "florianzustolberg@gmail.com")
-        .trim()
-        .toLowerCase();
+const OWNER_EMAIL = String(
+    process.env.OWNER_EMAIL || 'florianzustolberg@gmail.com'
+).toLowerCase().trim();
 
-const OWNER_PASSWORD =
-    String(process.env.OWNER_PASSWORD || "278263");
+const SESSION_SECRET = String(
+    process.env.SESSION_SECRET || 'CHANGE-ME-IN-RENDER'
+);
 
-const SESSION_SECRET =
-    String(
-        process.env.SESSION_SECRET ||
-        "CHANGE_THIS_SESSION_SECRET_7f92c8a4b1e9d6"
-    );
+const DATA_DIR = path.join(__dirname, 'data');
 
-const BASE_DIR = __dirname;
+if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+}
 
-const DATA_DIR = path.join(BASE_DIR, "data");
-const SERVERS_DIR = path.join(BASE_DIR, "minecraft-servers");
-
-const USERS_FILE = path.join(DATA_DIR, "users.json");
-const SERVERS_FILE = path.join(DATA_DIR, "servers.json");
-
-const MINECRAFT_JAR = path.join(BASE_DIR, "minecraft_server.jar");
+const DB_FILE = path.join(DATA_DIR, 'hosting.db');
+const SESSION_DB = path.join(DATA_DIR, 'sessions.db');
 
 /* ============================================================
    EXPRESS
    ============================================================ */
 
-app.use(express.json({ limit: "5mb" }));
-app.use(express.urlencoded({ extended: true, limit: "5mb" }));
+app.disable('x-powered-by');
 
-/* ============================================================
-   VERZEICHNISSE
-   ============================================================ */
+app.use(express.urlencoded({
+    extended: true,
+    limit: '1mb'
+}));
 
-function ensureDirectory(dir) {
-    if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+app.use(express.json({
+    limit: '1mb'
+}));
+
+app.use(session({
+    store: new SQLiteStoreFactory({
+        db: 'sessions.db',
+        dir: DATA_DIR
+    }),
+    secret: SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 1000 * 60 * 60 * 24 * 30
     }
-}
-
-ensureDirectory(DATA_DIR);
-ensureDirectory(SERVERS_DIR);
+}));
 
 /* ============================================================
-   JSON-DATEIEN
+   SQLITE
    ============================================================ */
 
-function readJson(file, fallback) {
-    try {
-        if (!fs.existsSync(file)) {
-            fs.writeFileSync(
-                file,
-                JSON.stringify(fallback, null, 2),
-                "utf8"
-            );
+const db = new sqlite3.Database(DB_FILE);
 
-            return fallback;
-        }
+db.serialize(function () {
 
-        const content = fs.readFileSync(file, "utf8").trim();
+    db.run(`
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
+            banned INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    `);
 
-        if (!content) {
-            fs.writeFileSync(
-                file,
-                JSON.stringify(fallback, null, 2),
-                "utf8"
-            );
+    db.run(`
+        CREATE TABLE IF NOT EXISTS servers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            version TEXT NOT NULL DEFAULT '1.21.1',
+            ram INTEGER NOT NULL DEFAULT 2048,
+            status TEXT NOT NULL DEFAULT 'offline',
+            locked INTEGER NOT NULL DEFAULT 0,
+            maintenance INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(owner_id) REFERENCES users(id)
+        )
+    `);
 
-            return fallback;
-        }
+    db.run(`
+        CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            action TEXT NOT NULL,
+            details TEXT,
+            created_at TEXT NOT NULL
+        )
+    `);
 
-        return JSON.parse(content);
-    } catch (error) {
-        console.error("JSON-Lesefehler:", file, error.message);
-        return fallback;
-    }
-}
+    db.run(`
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    `);
 
-function writeJson(file, data) {
-    const temporary = `${file}.tmp`;
+    db.run(`
+        INSERT OR IGNORE INTO settings (key, value)
+        VALUES ('maintenance', '0')
+    `);
 
-    fs.writeFileSync(
-        temporary,
-        JSON.stringify(data, null, 2),
-        "utf8"
-    );
+    db.run(`
+        INSERT OR IGNORE INTO settings (key, value)
+        VALUES ('registration', '1')
+    `);
 
-    fs.renameSync(temporary, file);
-}
-
-let users = readJson(USERS_FILE, []);
-let servers = readJson(SERVERS_FILE, []);
+});
 
 /* ============================================================
-   HILFSFUNKTIONEN
+   DB HELFER
    ============================================================ */
 
-function id() {
-    return crypto.randomUUID();
+function dbGet(sql, params) {
+    return new Promise(function (resolve, reject) {
+        db.get(sql, params || [], function (err, row) {
+            if (err) {
+                reject(err);
+                return;
+            }
+
+            resolve(row);
+        });
+    });
 }
 
-function hash(value) {
-    return crypto
-        .createHash("sha256")
-        .update(SESSION_SECRET + String(value))
-        .digest("hex");
+function dbAll(sql, params) {
+    return new Promise(function (resolve, reject) {
+        db.all(sql, params || [], function (err, rows) {
+            if (err) {
+                reject(err);
+                return;
+            }
+
+            resolve(rows || []);
+        });
+    });
 }
 
-function passwordHash(password) {
-    return crypto
-        .createHash("sha256")
-        .update(String(password))
-        .digest("hex");
+function dbRun(sql, params) {
+    return new Promise(function (resolve, reject) {
+        db.run(sql, params || [], function (err) {
+            if (err) {
+                reject(err);
+                return;
+            }
+
+            resolve({
+                id: this.lastID,
+                changes: this.changes
+            });
+        });
+    });
 }
 
-function createToken() {
-    return crypto.randomBytes(48).toString("hex");
-}
+/* ============================================================
+   ALLGEMEINE HELFER
+   ============================================================ */
 
 function now() {
     return new Date().toISOString();
 }
 
-function cleanName(value) {
-    return String(value || "")
+function escapeHtml(value) {
+    return String(value === undefined || value === null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function safeName(value) {
+    return String(value || '')
         .trim()
-        .replace(/[^a-zA-Z0-9ÄÖÜäöüß _-]/g, "")
-        .replace(/\s+/g, "-")
+        .replace(/[^a-zA-Z0-9äöüÄÖÜß _.-]/g, '')
         .substring(0, 40);
 }
 
-function safeServerName(value) {
-    const name = cleanName(value);
+function validEmail(value) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
+        String(value || '').toLowerCase()
+    );
+}
 
-    if (!name) {
-        return "minecraft-server";
+function validServerName(value) {
+    const name = String(value || '').trim();
+
+    if (name.length < 2) {
+        return false;
     }
 
-    return name;
+    if (name.length > 32) {
+        return false;
+    }
+
+    return /^[a-zA-Z0-9äöüÄÖÜß _.-]+$/.test(name);
 }
 
-function findUserByEmail(email) {
-    return users.find(
-        user =>
-            String(user.email).toLowerCase() ===
-            String(email).toLowerCase()
-    );
+function validVersion(value) {
+    const version = String(value || '').trim();
+
+    if (version.length < 3 || version.length > 20) {
+        return false;
+    }
+
+    return /^[0-9A-Za-z._-]+$/.test(version);
 }
 
-function findUserById(userId) {
-    return users.find(user => user.id === userId);
+function validRam(value) {
+    const ram = Number(value);
+
+    if (!Number.isInteger(ram)) {
+        return false;
+    }
+
+    return ram >= 512 && ram <= 16384;
 }
 
-function findServer(serverId) {
-    return servers.find(server => server.id === serverId);
-}
-
-function serverDirectory(server) {
-    return path.join(SERVERS_DIR, server.id);
-}
-
-function isOwner(user) {
-    return (
-        user &&
-        String(user.email).toLowerCase() === OWNER_EMAIL
-    );
+async function logAction(userId, action, details) {
+    try {
+        await dbRun(
+            `
+            INSERT INTO logs
+            (user_id, action, details, created_at)
+            VALUES (?, ?, ?, ?)
+            `,
+            [
+                userId || null,
+                action,
+                details || '',
+                now()
+            ]
+        );
+    } catch (error) {
+        console.error('Log-Fehler:', error);
+    }
 }
 
 /* ============================================================
-   COOKIE
+   USER
    ============================================================ */
 
-function parseCookies(req) {
-    const cookies = {};
-
-    const header = req.headers.cookie;
-
-    if (!header) {
-        return cookies;
-    }
-
-    for (const item of header.split(";")) {
-        const index = item.indexOf("=");
-
-        if (index === -1) continue;
-
-        const key = item.substring(0, index).trim();
-        const value = item.substring(index + 1).trim();
-
-        cookies[key] = decodeURIComponent(value);
-    }
-
-    return cookies;
-}
-
-function setAuthCookie(res, token) {
-    const signature = hash(token);
-
-    res.setHeader(
-        "Set-Cookie",
-        [
-            `north_auth=${encodeURIComponent(token)}`,
-            `north_sig=${encodeURIComponent(signature)}`,
-            "Path=/",
-            "HttpOnly",
-            "SameSite=Lax",
-            "Max-Age=2592000"
-        ].join("; ")
+async function findUserById(id) {
+    return dbGet(
+        `
+        SELECT *
+        FROM users
+        WHERE id = ?
+        `,
+        [id]
     );
 }
 
-function clearAuthCookie(res) {
-    res.setHeader(
-        "Set-Cookie",
-        [
-            "north_auth=",
-            "north_sig=",
-            "Path=/",
-            "HttpOnly",
-            "SameSite=Lax",
-            "Max-Age=0"
-        ].join("; ")
+async function findUserByEmail(email) {
+    return dbGet(
+        `
+        SELECT *
+        FROM users
+        WHERE LOWER(email) = LOWER(?)
+        `,
+        [email]
     );
+}
+
+async function isOwner(user) {
+    if (!user) {
+        return false;
+    }
+
+    return String(user.email).toLowerCase() === OWNER_EMAIL;
+}
+
+async function isAdmin(user) {
+    if (!user) {
+        return false;
+    }
+
+    if (String(user.role) === 'admin') {
+        return true;
+    }
+
+    return isOwner(user);
 }
 
 /* ============================================================
-   AUTH
+   SESSION USER
    ============================================================ */
 
-function getCurrentUser(req) {
-    const cookies = parseCookies(req);
-
-    const token = cookies.north_auth;
-    const signature = cookies.north_sig;
-
-    if (!token || !signature) {
+async function getCurrentUser(req) {
+    if (!req.session || !req.session.userId) {
         return null;
     }
 
-    if (hash(token) !== signature) {
-        return null;
-    }
-
-    const user = users.find(
-        item => item.sessionToken === token
-    );
+    const user = await findUserById(req.session.userId);
 
     if (!user) {
-        return null;
-    }
-
-    if (user.banned) {
+        req.session.destroy(function () {});
         return null;
     }
 
     return user;
 }
 
-function requireAuth(req, res, next) {
-    const user = getCurrentUser(req);
-
-    if (!user) {
-        return res.status(401).json({
-            success: false,
-            error: "Nicht eingeloggt."
-        });
-    }
-
-    req.user = user;
-    next();
-}
-
-function requireOwner(req, res, next) {
-    const user = getCurrentUser(req);
-
-    if (!user) {
-        return res.status(401).json({
-            success: false,
-            error: "Nicht eingeloggt."
-        });
-    }
-
-    if (!isOwner(user)) {
-        return res.status(403).json({
-            success: false,
-            error: "Nur der Owner darf diese Funktion benutzen."
-        });
-    }
-
-    req.user = user;
-    next();
-}
-
 /* ============================================================
-   OWNER AUTOMATISCH ANLEGEN
+   AUTH MIDDLEWARE
    ============================================================ */
 
-function ensureOwner() {
-    let owner = findUserByEmail(OWNER_EMAIL);
-
-    if (!owner) {
-        owner = {
-            id: id(),
-            username: "Florian",
-            email: OWNER_EMAIL,
-            password: passwordHash(OWNER_PASSWORD),
-            sessionToken: null,
-            coins: 999999999,
-            role: "owner",
-            banned: false,
-            createdAt: now()
-        };
-
-        users.push(owner);
-        writeJson(USERS_FILE, users);
-
-        console.log(
-            `Owner automatisch erstellt: ${OWNER_EMAIL}`
-        );
-    } else {
-        owner.role = "owner";
-        owner.banned = false;
-
-        writeJson(USERS_FILE, users);
-    }
-}
-
-ensureOwner();
-
-/* ============================================================
-   SERVER-PROZESSE
-   ============================================================ */
-
-const processes = new Map();
-
-function getProcess(serverId) {
-    return processes.get(serverId) || null;
-}
-
-function serverIsRunning(serverId) {
-    const process = getProcess(serverId);
-
-    return Boolean(
-        process &&
-        process.child &&
-        !process.child.killed &&
-        process.child.exitCode === null
-    );
-}
-
-function appendServerLog(server, text) {
-    const line =
-        `[${new Date().toLocaleString("de-DE")}] ${text}`;
-
-    server.logs = Array.isArray(server.logs)
-        ? server.logs
-        : [];
-
-    server.logs.push(line);
-
-    if (server.logs.length > 500) {
-        server.logs = server.logs.slice(-500);
-    }
-
-    writeJson(SERVERS_FILE, servers);
-}
-
-function startMinecraft(server) {
-    if (!server) {
-        throw new Error("Server nicht gefunden.");
-    }
-
-    if (server.locked) {
-        throw new Error("Dieser Server wurde gesperrt.");
-    }
-
-    if (server.maintenance) {
-        throw new Error(
-            "Der Server befindet sich im Wartungsmodus."
-        );
-    }
-
-    if (serverIsRunning(server.id)) {
-        return;
-    }
-
-    const directory = serverDirectory(server);
-
-    ensureDirectory(directory);
-
-    if (!fs.existsSync(MINECRAFT_JAR)) {
-        throw new Error(
-            "minecraft_server.jar wurde nicht gefunden. Lege die Datei neben webseite.js."
-        );
-    }
-
-    const eulaFile = path.join(directory, "eula.txt");
-
-    if (!fs.existsSync(eulaFile)) {
-        fs.writeFileSync(
-            eulaFile,
-            "eula=true\n",
-            "utf8"
-        );
-    }
-
-    const memory = server.memory || "1G";
-
-    const child = spawn(
-        "java",
-        [
-            `-Xms${memory}`,
-            `-Xmx${memory}`,
-            "-jar",
-            MINECRAFT_JAR,
-            "nogui"
-        ],
-        {
-            cwd: directory,
-            windowsHide: true
-        }
-    );
-
-    const processData = {
-        child,
-        output: []
-    };
-
-    processes.set(server.id, processData);
-
-    server.status = "running";
-    server.startedAt = now();
-
-    appendServerLog(
-        server,
-        "Minecraft-Server wurde gestartet."
-    );
-
-    child.stdout.on("data", data => {
-        const text = data.toString();
-
-        processData.output.push(text);
-
-        if (processData.output.length > 300) {
-            processData.output.shift();
-        }
-
-        appendServerLog(server, text.trim());
-    });
-
-    child.stderr.on("data", data => {
-        const text = data.toString();
-
-        processData.output.push(text);
-
-        appendServerLog(
-            server,
-            `ERROR: ${text.trim()}`
-        );
-    });
-
-    child.on("close", (code, signal) => {
-        server.status = "offline";
-        server.lastExitCode = code;
-        server.lastSignal = signal || null;
-
-        appendServerLog(
-            server,
-            `Minecraft-Prozess beendet. Code: ${code}`
-        );
-
-        processes.delete(server.id);
-    });
-
-    child.on("error", error => {
-        server.status = "offline";
-
-        appendServerLog(
-            server,
-            `Prozessfehler: ${error.message}`
-        );
-
-        processes.delete(server.id);
-    });
-
-    writeJson(SERVERS_FILE, servers);
-}
-
-function stopMinecraft(server) {
-    if (!server) {
-        throw new Error("Server nicht gefunden.");
-    }
-
-    const processData = getProcess(server.id);
-
-    if (!processData || !processData.child) {
-        server.status = "offline";
-        writeJson(SERVERS_FILE, servers);
-        return;
-    }
-
+async function requireLogin(req, res, next) {
     try {
-        processData.child.stdin.write("stop\n");
-    } catch (error) {
-        try {
-            processData.child.kill();
-        } catch {}
-    }
+        const user = await getCurrentUser(req);
 
-    server.status = "stopping";
-
-    appendServerLog(
-        server,
-        "Stop-Befehl an Minecraft gesendet."
-    );
-}
-
-function restartMinecraft(server) {
-    stopMinecraft(server);
-
-    setTimeout(() => {
-        try {
-            startMinecraft(server);
-        } catch (error) {
-            appendServerLog(
-                server,
-                `Neustart fehlgeschlagen: ${error.message}`
-            );
-        }
-    }, 3000);
-}
-
-function sendMinecraftCommand(server, command) {
-    const processData = getProcess(server.id);
-
-    if (!processData || !processData.child) {
-        throw new Error("Server läuft nicht.");
-    }
-
-    const text = String(command || "").trim();
-
-    if (!text) {
-        throw new Error("Kein Befehl angegeben.");
-    }
-
-    processData.child.stdin.write(text + "\n");
-
-    appendServerLog(
-        server,
-        `KONSOLE: ${text}`
-    );
-}
-
-/* ============================================================
-   SERVER-DATEIEN
-   ============================================================ */
-
-function safeResolveInsideServer(server, requestedPath) {
-    const root = path.resolve(serverDirectory(server));
-
-    let clean = String(requestedPath || "")
-        .replace(/\\/g, "/")
-        .replace(/^\/+/, "");
-
-    if (!clean) {
-        clean = "server.properties";
-    }
-
-    const target = path.resolve(root, clean);
-
-    if (
-        target !== root &&
-        !target.startsWith(root + path.sep)
-    ) {
-        throw new Error("Ungültiger Dateipfad.");
-    }
-
-    return target;
-}
-
-function listFilesRecursive(directory, relative = "") {
-    const result = [];
-
-    if (!fs.existsSync(directory)) {
-        return result;
-    }
-
-    const entries = fs.readdirSync(directory, {
-        withFileTypes: true
-    });
-
-    for (const entry of entries) {
-        if (
-            entry.name === "logs" &&
-            relative === ""
-        ) {
-            continue;
+        if (!user) {
+            return res.redirect('/login');
         }
 
-        const relativePath = path.join(
-            relative,
-            entry.name
-        );
-
-        const absolutePath = path.join(
-            directory,
-            entry.name
-        );
-
-        if (entry.isDirectory()) {
-            result.push({
-                type: "directory",
-                path: relativePath
-            });
-
-            result.push(
-                ...listFilesRecursive(
-                    absolutePath,
-                    relativePath
+        if (Number(user.banned) === 1) {
+            req.session.destroy(function () {});
+            return res.status(403).send(
+                page(
+                    'Konto gesperrt',
+                    '<div class="card"><h1>Konto gesperrt</h1><p>Dein Konto wurde gesperrt.</p></div>'
                 )
             );
+        }
+
+        req.user = user;
+
+        next();
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).send(
+            page(
+                'Fehler',
+                '<div class="card"><h1>Fehler</h1><p>Beim Laden ist ein Fehler aufgetreten.</p></div>'
+            )
+        );
+    }
+}
+
+async function requireAdmin(req, res, next) {
+    try {
+        const user = await getCurrentUser(req);
+
+        if (!user) {
+            return res.redirect('/login');
+        }
+
+        if (!(await isAdmin(user))) {
+            return res.status(403).send(
+                page(
+                    'Kein Zugriff',
+                    '<div class="card"><h1>Kein Zugriff</h1><p>Dieser Bereich ist nur für den Owner/Admin verfügbar.</p></div>'
+                )
+            );
+        }
+
+        req.user = user;
+
+        next();
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).send(
+            page(
+                'Fehler',
+                '<div class="card"><h1>Fehler</h1><p>Interner Fehler.</p></div>'
+            )
+        );
+    }
+}
+
+/* ============================================================
+   HTML DESIGN
+   ============================================================ */
+
+function page(title, content, user) {
+
+    const loggedIn = !!user;
+
+    const navigation = loggedIn
+        ? [
+            '<a href="/">Dashboard</a>',
+            '<a href="/servers">Meine Server</a>',
+            '<a href="/server/create">Server erstellen</a>',
+            '<a href="/account">Konto</a>',
+            (user && (user.role === 'admin' || String(user.email).toLowerCase() === OWNER_EMAIL))
+                ? '<a href="/admin">Admin</a>'
+                : '',
+            '<a href="/logout">Logout</a>'
+        ].join('')
+        : [
+            '<a href="/login">Login</a>',
+            '<a href="/register">Registrieren</a>'
+        ].join('');
+
+    return [
+        '<!DOCTYPE html>',
+        '<html lang="de">',
+        '<head>',
+        '<meta charset="UTF-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
+        '<title>',
+        escapeHtml(title),
+        ' | Florian / WeisserHai Minecraft Hosting',
+        '</title>',
+        '<style>',
+        '*{box-sizing:border-box}',
+        'body{margin:0;background:#090d14;color:#eef2f7;font-family:Arial,Helvetica,sans-serif}',
+        'a{color:inherit;text-decoration:none}',
+        '.nav{background:#101722;border-bottom:1px solid #263244;padding:16px 24px;display:flex;align-items:center;justify-content:space-between;gap:20px;position:sticky;top:0;z-index:10}',
+        '.brand{font-size:20px;font-weight:800}',
+        '.navlinks{display:flex;gap:8px;flex-wrap:wrap}',
+        '.navlinks a{padding:9px 12px;border-radius:8px;color:#cbd5e1}',
+        '.navlinks a:hover{background:#1b2534;color:white}',
+        '.container{max-width:1200px;margin:0 auto;padding:30px 18px}',
+        '.hero{padding:45px 30px;background:linear-gradient(135deg,#111827,#162236);border:1px solid #263244;border-radius:18px;margin-bottom:24px}',
+        '.hero h1{font-size:42px;margin:0 0 12px}',
+        '.hero p{color:#aeb9c9;font-size:17px;line-height:1.6}',
+        '.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:18px}',
+        '.card{background:#111722;border:1px solid #273346;border-radius:14px;padding:22px;margin-bottom:18px}',
+        '.card h2,.card h3{margin-top:0}',
+        '.muted{color:#9ca9bb}',
+        '.stat{font-size:32px;font-weight:800}',
+        '.btn{display:inline-block;border:0;border-radius:9px;padding:11px 16px;background:#2563eb;color:white;cursor:pointer;font-weight:700}',
+        '.btn:hover{background:#1d4ed8}',
+        '.btn.red{background:#dc2626}',
+        '.btn.red:hover{background:#b91c1c}',
+        '.btn.green{background:#16a34a}',
+        '.btn.gray{background:#374151}',
+        'button.btn{font-family:inherit}',
+        'form{margin:0}',
+        'label{display:block;margin:14px 0 7px;font-weight:700}',
+        'input,select{width:100%;background:#0b111b;border:1px solid #344155;border-radius:8px;color:white;padding:12px;font-size:15px;outline:none}',
+        'input:focus,select:focus{border-color:#3b82f6}',
+        '.form{max-width:520px;margin:auto}',
+        '.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}',
+        '.notice{padding:13px 15px;border-radius:9px;background:#172033;border:1px solid #2d3d56;margin-bottom:18px}',
+        '.error{background:#3a1518;border-color:#7f1d1d}',
+        '.success{background:#102d1a;border-color:#166534}',
+        '.warning{background:#33270d;border-color:#854d0e}',
+        '.server{position:relative}',
+        '.badge{display:inline-block;padding:5px 9px;border-radius:999px;font-size:12px;font-weight:800;background:#334155}',
+        '.badge.green{background:#166534}',
+        '.badge.red{background:#991b1b}',
+        '.badge.yellow{background:#854d0e}',
+        '.badge.blue{background:#1d4ed8}',
+        '.table-wrap{overflow:auto}',
+        'table{width:100%;border-collapse:collapse}',
+        'th,td{text-align:left;padding:12px;border-bottom:1px solid #273346;white-space:nowrap}',
+        'th{color:#aeb9c9}',
+        'footer{text-align:center;padding:30px;color:#718096}',
+        '.small{font-size:13px}',
+        '@media(max-width:700px){.nav{align-items:flex-start;flex-direction:column}.hero h1{font-size:30px}.container{padding:18px 12px}}',
+        '</style>',
+        '</head>',
+        '<body>',
+        '<nav class="nav">',
+        '<div class="brand">⛏️ Florian / WeisserHai Hosting</div>',
+        '<div class="navlinks">',
+        navigation,
+        '</div>',
+        '</nav>',
+        '<main class="container">',
+        content,
+        '</main>',
+        '<footer>',
+        'Florian / WeisserHai Minecraft Hosting',
+        '</footer>',
+        '</body>',
+        '</html>'
+    ].join('');
+}
+
+/* ============================================================
+   ROOT
+   ============================================================ */
+
+app.get('/', async function (req, res) {
+
+    try {
+
+        const user = await getCurrentUser(req);
+
+        if (!user) {
+
+            const content = [
+                '<section class="hero">',
+                '<h1>Dein Minecraft Hosting</h1>',
+                '<p>',
+                'Erstelle und verwalte deine Minecraft-Server über eine einfache Oberfläche.',
+                '</p>',
+                '<div class="actions">',
+                '<a class="btn" href="/register">Jetzt registrieren</a>',
+                '<a class="btn gray" href="/login">Einloggen</a>',
+                '</div>',
+                '</section>',
+
+                '<div class="grid">',
+
+                '<div class="card">',
+                '<h3>🟢 Kostenlos starten</h3>',
+                '<p class="muted">Normale Benutzer können einen kostenlosen Minecraft-Server erstellen.</p>',
+                '</div>',
+
+                '<div class="card">',
+                '<h3>⚙️ Serververwaltung</h3>',
+                '<p class="muted">Server erstellen, starten, stoppen und verwalten.</p>',
+                '</div>',
+
+                '<div class="card">',
+                '<h3>🔐 Sichere Konten</h3>',
+                '<p class="muted">Passwörter werden mit bcrypt sicher gespeichert.</p>',
+                '</div>',
+
+                '</div>'
+            ].join('');
+
+            return res.send(page('Startseite', content));
+        }
+
+        const servers = await dbAll(
+            `
+            SELECT *
+            FROM servers
+            WHERE owner_id = ?
+            ORDER BY id DESC
+            `,
+            [user.id]
+        );
+
+        const content = [
+            '<section class="hero">',
+            '<h1>Willkommen, ',
+            escapeHtml(user.username),
+            '</h1>',
+            '<p>Verwalte deine Minecraft-Server zentral über dein Dashboard.</p>',
+            '<div class="actions">',
+            '<a class="btn" href="/server/create">+ Server erstellen</a>',
+            '<a class="btn gray" href="/servers">Meine Server</a>',
+            '</div>',
+            '</section>',
+
+            '<div class="grid">',
+
+            '<div class="card">',
+            '<div class="muted">Deine Server</div>',
+            '<div class="stat">',
+            String(servers.length),
+            '</div>',
+            '</div>',
+
+            '<div class="card">',
+            '<div class="muted">Konto</div>',
+            '<div class="stat">',
+            user.role === 'admin' || String(user.email).toLowerCase() === OWNER_EMAIL
+                ? 'ADMIN'
+                : 'USER',
+            '</div>',
+            '</div>',
+
+            '<div class="card">',
+            '<div class="muted">Account seit</div>',
+            '<div class="stat small">',
+            escapeHtml(user.created_at),
+            '</div>',
+            '</div>',
+
+            '</div>'
+        ].join('');
+
+        res.send(page('Dashboard', content, user));
+
+    } catch (error) {
+
+        console.error(error);
+
+        res.status(500).send(
+            page(
+                'Fehler',
+                '<div class="card"><h1>Fehler</h1><p>Dashboard konnte nicht geladen werden.</p></div>'
+            )
+        );
+    }
+});
+
+/* ============================================================
+   REGISTER
+   ============================================================ */
+
+app.get('/register', async function (req, res) {
+
+    const user = await getCurrentUser(req);
+
+    if (user) {
+        return res.redirect('/');
+    }
+
+    const setting = await dbGet(
+        `SELECT value FROM settings WHERE key = 'registration'`
+    );
+
+    if (setting && setting.value === '0') {
+        return res.status(403).send(
+            page(
+                'Registrierung deaktiviert',
+                '<div class="card"><h1>Registrierung deaktiviert</h1><p>Neue Registrierungen sind momentan deaktiviert.</p></div>'
+            )
+        );
+    }
+
+    const content = [
+        '<div class="card form">',
+        '<h1>Registrieren</h1>',
+        '<p class="muted">Erstelle dein Hosting-Konto.</p>',
+        '<form method="POST" action="/register">',
+
+        '<label>Benutzername</label>',
+        '<input name="username" maxlength="32" required autocomplete="username">',
+
+        '<label>E-Mail</label>',
+        '<input name="email" type="email" required autocomplete="email">',
+
+        '<label>Passwort</label>',
+        '<input name="password" type="password" minlength="6" required autocomplete="new-password">',
+
+        '<label>Passwort wiederholen</label>',
+        '<input name="password2" type="password" minlength="6" required autocomplete="new-password">',
+
+        '<div class="actions">',
+        '<button class="btn" type="submit">Konto erstellen</button>',
+        '<a class="btn gray" href="/login">Ich habe bereits ein Konto</a>',
+        '</div>',
+
+        '</form>',
+        '</div>'
+    ].join('');
+
+    res.send(page('Registrierung', content));
+});
+
+app.post('/register', async function (req, res) {
+
+    try {
+
+        const username = safeName(req.body.username);
+        const email = String(req.body.email || '').toLowerCase().trim();
+        const password = String(req.body.password || '');
+        const password2 = String(req.body.password2 || '');
+
+        if (username.length < 2) {
+            return res.status(400).send(
+                page(
+                    'Fehler',
+                    '<div class="card error"><h1>Fehler</h1><p>Der Benutzername ist ungültig.</p><a class="btn" href="/register">Zurück</a></div>'
+                )
+            );
+        }
+
+        if (!validEmail(email)) {
+            return res.status(400).send(
+                page(
+                    'Fehler',
+                    '<div class="card error"><h1>Fehler</h1><p>Die E-Mail-Adresse ist ungültig.</p><a class="btn" href="/register">Zurück</a></div>'
+                )
+            );
+        }
+
+        if (password.length < 6) {
+            return res.status(400).send(
+                page(
+                    'Fehler',
+                    '<div class="card error"><h1>Fehler</h1><p>Das Passwort muss mindestens 6 Zeichen lang sein.</p><a class="btn" href="/register">Zurück</a></div>'
+                )
+            );
+        }
+
+        if (password !== password2) {
+            return res.status(400).send(
+                page(
+                    'Fehler',
+                    '<div class="card error"><h1>Fehler</h1><p>Die Passwörter stimmen nicht überein.</p><a class="btn" href="/register">Zurück</a></div>'
+                )
+            );
+        }
+
+        const existing = await findUserByEmail(email);
+
+        if (existing) {
+            return res.status(409).send(
+                page(
+                    'Konto vorhanden',
+                    '<div class="card error"><h1>Konto vorhanden</h1><p>Diese E-Mail ist bereits registriert.</p><a class="btn" href="/login">Zum Login</a></div>'
+                )
+            );
+        }
+
+        const hash = await bcrypt.hash(password, 12);
+
+        const role = email === OWNER_EMAIL ? 'admin' : 'user';
+
+        const result = await dbRun(
+            `
+            INSERT INTO users
+            (email, password, username, role, banned, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 0, ?, ?)
+            `,
+            [
+                email,
+                hash,
+                username,
+                role,
+                now(),
+                now()
+            ]
+        );
+
+        await logAction(
+            result.id,
+            'REGISTER',
+            'Neues Konto erstellt'
+        );
+
+        req.session.userId = result.id;
+
+        res.redirect('/');
+
+    } catch (error) {
+
+        console.error('Register:', error);
+
+        res.status(500).send(
+            page(
+                'Fehler',
+                '<div class="card error"><h1>Registrierung fehlgeschlagen</h1><p>Bitte versuche es erneut.</p><a class="btn" href="/register">Zurück</a></div>'
+            )
+        );
+    }
+});
+
+/* ============================================================
+   LOGIN
+   ============================================================ */
+
+app.get('/login', async function (req, res) {
+
+    const user = await getCurrentUser(req);
+
+    if (user) {
+        return res.redirect('/');
+    }
+
+    const content = [
+        '<div class="card form">',
+        '<h1>Login</h1>',
+        '<p class="muted">Melde dich mit deinem Konto an.</p>',
+        '<form method="POST" action="/login">',
+
+        '<label>E-Mail</label>',
+        '<input name="email" type="email" required autocomplete="email">',
+
+        '<label>Passwort</label>',
+        '<input name="password" type="password" required autocomplete="current-password">',
+
+        '<div class="actions">',
+        '<button class="btn" type="submit">Einloggen</button>',
+        '<a class="btn gray" href="/register">Registrieren</a>',
+        '</div>',
+
+        '</form>',
+        '</div>'
+    ].join('');
+
+    res.send(page('Login', content));
+});
+
+app.post('/login', async function (req, res) {
+
+    try {
+
+        const email = String(req.body.email || '').toLowerCase().trim();
+        const password = String(req.body.password || '');
+
+        const user = await findUserByEmail(email);
+
+        if (!user) {
+            return res.status(401).send(
+                page(
+                    'Login fehlgeschlagen',
+                    '<div class="card error"><h1>Login fehlgeschlagen</h1><p>E-Mail oder Passwort ist falsch.</p><a class="btn" href="/login">Erneut versuchen</a></div>'
+                )
+            );
+        }
+
+        if (Number(user.banned) === 1) {
+            return res.status(403).send(
+                page(
+                    'Konto gesperrt',
+                    '<div class="card error"><h1>Konto gesperrt</h1><p>Dieses Konto wurde gesperrt.</p></div>'
+                )
+            );
+        }
+
+        const correct = await bcrypt.compare(
+            password,
+            user.password
+        );
+
+        if (!correct) {
+            await logAction(
+                user.id,
+                'LOGIN_FAILED',
+                'Falsches Passwort'
+            );
+
+            return res.status(401).send(
+                page(
+                    'Login fehlgeschlagen',
+                    '<div class="card error"><h1>Login fehlgeschlagen</h1><p>E-Mail oder Passwort ist falsch.</p><a class="btn" href="/login">Erneut versuchen</a></div>'
+                )
+            );
+        }
+
+        req.session.regenerate(function (err) {
+
+            if (err) {
+                console.error(err);
+
+                return res.status(500).send(
+                    page(
+                        'Fehler',
+                        '<div class="card error"><h1>Login-Fehler</h1><p>Die Sitzung konnte nicht erstellt werden.</p></div>'
+                    )
+                );
+            }
+
+            req.session.userId = user.id;
+
+            req.session.save(async function (saveError) {
+
+                if (saveError) {
+                    console.error(saveError);
+
+                    return res.status(500).send(
+                        page(
+                            'Fehler',
+                            '<div class="card error"><h1>Login-Fehler</h1><p>Die Sitzung konnte nicht gespeichert werden.</p></div>'
+                        )
+                    );
+                }
+
+                await logAction(
+                    user.id,
+                    'LOGIN',
+                    'Erfolgreich eingeloggt'
+                );
+
+                res.redirect('/');
+            });
+        });
+
+    } catch (error) {
+
+        console.error('Login:', error);
+
+        res.status(500).send(
+            page(
+                'Fehler',
+                '<div class="card error"><h1>Fehler</h1><p>Beim Login ist ein Fehler aufgetreten.</p></div>'
+            )
+        );
+    }
+});
+
+/* ============================================================
+   LOGOUT
+   ============================================================ */
+
+app.get('/logout', async function (req, res) {
+
+    const user = await getCurrentUser(req);
+
+    if (user) {
+        await logAction(
+            user.id,
+            'LOGOUT',
+            'Ausgeloggt'
+        );
+    }
+
+    req.session.destroy(function () {
+        res.redirect('/login');
+    });
+});
+
+/* ============================================================
+   SERVER ÜBERSICHT
+   ============================================================ */
+
+app.get('/servers', requireLogin, async function (req, res) {
+
+    try {
+
+        const servers = await dbAll(
+            `
+            SELECT *
+            FROM servers
+            WHERE owner_id = ?
+            ORDER BY id DESC
+            `,
+            [req.user.id]
+        );
+
+        let cards = '';
+
+        if (servers.length === 0) {
+
+            cards = [
+                '<div class="card">',
+                '<h2>Noch kein Server</h2>',
+                '<p class="muted">Du hast noch keinen Minecraft-Server erstellt.</p>',
+                '<a class="btn" href="/server/create">Server erstellen</a>',
+                '</div>'
+            ].join('');
+
         } else {
-            let size = 0;
+
+            cards = servers.map(function (server) {
+
+                let statusClass = '';
+
+                if (server.status === 'online') {
+                    statusClass = 'green';
+                } else if (server.status === 'offline') {
+                    statusClass = 'red';
+                } else {
+                    statusClass = 'yellow';
+                }
+
+                const lockedText = Number(server.locked) === 1
+                    ? '<span class="badge red">GESPERRT</span>'
+                    : '<span class="badge green">FREI</span>';
+
+                const maintenanceText = Number(server.maintenance) === 1
+                    ? '<span class="badge yellow">WARTUNG</span>'
+                    : '';
+
+                return [
+                    '<div class="card server">',
+                    '<h2>',
+                    escapeHtml(server.name),
+                    '</h2>',
+                    '<p>',
+                    '<span class="badge ',
+                    statusClass,
+                    '">',
+                    escapeHtml(server.status.toUpperCase()),
+                    '</span> ',
+                    lockedText,
+                    ' ',
+                    maintenanceText,
+                    '</p>',
+                    '<p class="muted">',
+                    'Version: ',
+                    escapeHtml(server.version),
+                    '<br>',
+                    'RAM: ',
+                    String(server.ram),
+                    ' MB',
+                    '</p>',
+                    '<div class="actions">',
+                    '<a class="btn" href="/server/',
+                    String(server.id),
+                    '">Verwalten</a>',
+                    '</div>',
+                    '</div>'
+                ].join('');
+
+            }).join('');
+        }
+
+        const content = [
+            '<div class="actions" style="margin-bottom:18px">',
+            '<a class="btn" href="/server/create">+ Server erstellen</a>',
+            '</div>',
+            '<div class="grid">',
+            cards,
+            '</div>'
+        ].join('');
+
+        res.send(
+            page(
+                'Meine Server',
+                content,
+                req.user
+            )
+        );
+
+    } catch (error) {
+
+        console.error(error);
+
+        res.status(500).send(
+            page(
+                'Fehler',
+                '<div class="card error"><h1>Fehler</h1><p>Server konnten nicht geladen werden.</p></div>',
+                req.user
+            )
+        );
+    }
+});
+
+/* ============================================================
+   SERVER ERSTELLEN
+   ============================================================ */
+
+app.get('/server/create', requireLogin, async function (req, res) {
+
+    const owner = await isOwner(req.user);
+
+    const countRow = await dbGet(
+        `
+        SELECT COUNT(*) AS count
+        FROM servers
+        WHERE owner_id = ?
+        `,
+        [req.user.id]
+    );
+
+    const count = Number(countRow ? countRow.count : 0);
+
+    if (!owner && count >= 1) {
+
+        const content = [
+            '<div class="card warning">',
+            '<h1>Server-Limit erreicht</h1>',
+            '<p>',
+            'Normale Benutzer können aktuell einen kostenlosen Server besitzen.',
+            '</p>',
+            '<p class="muted">',
+            'Der Owner kann unbegrenzt Server erstellen.',
+            '</p>',
+            '<a class="btn" href="/servers">Zurück zu meinen Servern</a>',
+            '</div>'
+        ].join('');
+
+        return res.send(
+            page(
+                'Server-Limit',
+                content,
+                req.user
+            )
+        );
+    }
+
+    const content = [
+        '<div class="card form">',
+        '<h1>Minecraft-Server erstellen</h1>',
+        '<p class="muted">Erstelle einen neuen Server.</p>',
+
+        '<form method="POST" action="/server/create">',
+
+        '<label>Servername</label>',
+        '<input name="name" maxlength="32" required placeholder="Mein Minecraft Server">',
+
+        '<label>Minecraft-Version</label>',
+        '<input name="version" maxlength="20" value="1.21.1" required>',
+
+        '<label>RAM in MB</label>',
+        '<select name="ram">',
+        '<option value="1024">1024 MB</option>',
+        '<option value="2048" selected>2048 MB</option>',
+        '<option value="4096">4096 MB</option>',
+        '<option value="6144">6144 MB</option>',
+        '<option value="8192">8192 MB</option>',
+        '<option value="16384">16384 MB</option>',
+        '</select>',
+
+        '<div class="actions">',
+        '<button class="btn" type="submit">Server erstellen</button>',
+        '<a class="btn gray" href="/servers">Abbrechen</a>',
+        '</div>',
+
+        '</form>',
+        '</div>'
+    ].join('');
+
+    res.send(
+        page(
+            'Server erstellen',
+            content,
+            req.user
+        )
+    );
+});
+
+app.post('/server/create', requireLogin, async function (req, res) {
+
+    try {
+
+        const owner = await isOwner(req.user);
+
+        const countRow = await dbGet(
+            `
+            SELECT COUNT(*) AS count
+            FROM servers
+            WHERE owner_id = ?
+            `,
+            [req.user.id]
+        );
+
+        const count = Number(countRow ? countRow.count : 0);
+
+        if (!owner && count >= 1) {
+            return res.status(403).send(
+                page(
+                    'Limit',
+                    '<div class="card error"><h1>Server-Limit</h1><p>Du kannst maximal einen kostenlosen Server besitzen.</p><a class="btn" href="/servers">Zurück</a></div>',
+                    req.user
+                )
+            );
+        }
+
+        const name = safeName(req.body.name);
+        const version = String(req.body.version || '').trim();
+        const ram = Number(req.body.ram);
+
+        if (!validServerName(name)) {
+            return res.status(400).send(
+                page(
+                    'Fehler',
+                    '<div class="card error"><h1>Ungültiger Servername</h1><p>Verwende 2 bis 32 Zeichen.</p><a class="btn" href="/server/create">Zurück</a></div>',
+                    req.user
+                )
+            );
+        }
+
+        if (!validVersion(version)) {
+            return res.status(400).send(
+                page(
+                    'Fehler',
+                    '<div class="card error"><h1>Ungültige Version</h1><p>Die Minecraft-Version ist ungültig.</p><a class="btn" href="/server/create">Zurück</a></div>',
+                    req.user
+                )
+            );
+        }
+
+        if (!validRam(ram)) {
+            return res.status(400).send(
+                page(
+                    'Fehler',
+                    '<div class="card error"><h1>Ungültiger RAM</h1><p>Der RAM muss zwischen 512 und 16384 MB liegen.</p><a class="btn" href="/server/create">Zurück</a></div>',
+                    req.user
+                )
+            );
+        }
+
+        const result = await dbRun(
+            `
+            INSERT INTO servers
+            (owner_id, name, version, ram, status, locked, maintenance, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'offline', 0, 0, ?, ?)
+            `,
+            [
+                req.user.id,
+                name,
+                version,
+                ram,
+                now(),
+                now()
+            ]
+        );
+
+        await logAction(
+            req.user.id,
+            'SERVER_CREATE',
+            'Server #' + result.id + ' erstellt: ' + name
+        );
+
+        res.redirect('/server/' + result.id);
+
+    } catch (error) {
+
+        console.error('Server erstellen:', error);
+
+        res.status(500).send(
+            page(
+                'Fehler',
+                '<div class="card error"><h1>Server konnte nicht erstellt werden</h1><p>Bitte versuche es erneut.</p><a class="btn" href="/servers">Zurück</a></div>',
+                req.user
+            )
+        );
+    }
+});
+
+/* ============================================================
+   SERVER DETAILS
+   ============================================================ */
+
+app.get('/server/:id', requireLogin, async function (req, res) {
+
+    try {
+
+        const serverId = Number(req.params.id);
+
+        if (!Number.isInteger(serverId)) {
+            return res.status(400).send(
+                page(
+                    'Fehler',
+                    '<div class="card error"><h1>Ungültige Server-ID</h1></div>',
+                    req.user
+                )
+            );
+        }
+
+        const server = await dbGet(
+            `
+            SELECT *
+            FROM servers
+            WHERE id = ?
+            `,
+            [serverId]
+        );
+
+        if (!server) {
+            return res.status(404).send(
+                page(
+                    'Nicht gefunden',
+                    '<div class="card error"><h1>Server nicht gefunden</h1><a class="btn" href="/servers">Zurück</a></div>',
+                    req.user
+                )
+            );
+        }
+
+        const owner = await isOwner(req.user);
+
+        if (Number(server.owner_id) !== Number(req.user.id) && !owner) {
+            return res.status(403).send(
+                page(
+                    'Kein Zugriff',
+                    '<div class="card error"><h1>Kein Zugriff</h1><p>Du besitzt diesen Server nicht.</p></div>',
+                    req.user
+                )
+            );
+        }
+
+        const locked = Number(server.locked) === 1;
+        const maintenance = Number(server.maintenance) === 1;
+
+        const controls = locked
+            ? [
+                '<form method="POST" action="/server/',
+                server.id,
+                '/unlock"><button class="btn green" type="submit">Server entsperren</button></form>'
+            ].join('')
+            : [
+                '<form method="POST" action="/server/',
+                server.id,
+                '/lock"><button class="btn red" type="submit">Server sperren</button></form>'
+            ].join('');
+
+        const maintenanceButton = maintenance
+            ? [
+                '<form method="POST" action="/server/',
+                server.id,
+                '/maintenance/off"><button class="btn green" type="submit">Wartung beenden</button></form>'
+            ].join('')
+            : [
+                '<form method="POST" action="/server/',
+                server.id,
+                '/maintenance/on"><button class="btn gray" type="submit">Wartung aktivieren</button></form>'
+            ].join('');
+
+        const startButton = [
+            '<form method="POST" action="/server/',
+            server.id,
+            '/start"><button class="btn green" type="submit">▶ Starten</button></form>'
+        ].join('');
+
+        const stopButton = [
+            '<form method="POST" action="/server/',
+            server.id,
+            '/stop"><button class="btn red" type="submit">■ Stoppen</button></form>'
+        ].join('');
+
+        const restartButton = [
+            '<form method="POST" action="/server/',
+            server.id,
+            '/restart"><button class="btn" type="submit">↻ Neustarten</button></form>'
+        ].join('');
+
+        const content = [
+            '<div class="card">',
+            '<h1>',
+            escapeHtml(server.name),
+            '</h1>',
+            '<p>',
+            '<span class="badge ',
+            server.status === 'online' ? 'green' : 'red',
+            '">',
+            escapeHtml(server.status.toUpperCase()),
+            '</span> ',
+            locked
+                ? '<span class="badge red">GESPERRT</span>'
+                : '<span class="badge green">ENTSPERRT</span>',
+            ' ',
+            maintenance
+                ? '<span class="badge yellow">WARTUNG</span>'
+                : '',
+            '</p>',
+            '</div>',
+
+            '<div class="grid">',
+
+            '<div class="card">',
+            '<h3>Serverdaten</h3>',
+            '<p class="muted">Server-ID</p>',
+            '<p>',
+            String(server.id),
+            '</p>',
+            '<p class="muted">Version</p>',
+            '<p>',
+            escapeHtml(server.version),
+            '</p>',
+            '<p class="muted">RAM</p>',
+            '<p>',
+            String(server.ram),
+            ' MB',
+            '</p>',
+            '</div>',
+
+            '<div class="card">',
+            '<h3>Steuerung</h3>',
+            '<div class="actions">',
+            startButton,
+            stopButton,
+            restartButton,
+            '</div>',
+            '<div class="actions">',
+            controls,
+            maintenanceButton,
+            '</div>',
+            '</div>',
+
+            '</div>',
+
+            '<div class="card">',
+            '<h3>Server löschen</h3>',
+            '<p class="muted">Das Löschen kann nicht rückgängig gemacht werden.</p>',
+            '<form method="POST" action="/server/',
+            server.id,
+            '/delete" onsubmit="return confirm(\'Server wirklich löschen?\')">',
+            '<button class="btn red" type="submit">Server löschen</button>',
+            '</form>',
+            '</div>',
+
+            '<div class="actions">',
+            '<a class="btn gray" href="/servers">← Zurück</a>',
+            '</div>'
+        ].join('');
+
+        res.send(
+            page(
+                server.name,
+                content,
+                req.user
+            )
+        );
+
+    } catch (error) {
+
+        console.error(error);
+
+        res.status(500).send(
+            page(
+                'Fehler',
+                '<div class="card error"><h1>Fehler</h1><p>Server konnte nicht geladen werden.</p></div>',
+                req.user
+            )
+        );
+    }
+});
+
+/* ============================================================
+   SERVER AKTIONEN
+   ============================================================ */
+
+async function getServerForUser(serverId, user) {
+
+    const server = await dbGet(
+        `
+        SELECT *
+        FROM servers
+        WHERE id = ?
+        `,
+        [serverId]
+    );
+
+    if (!server) {
+        return null;
+    }
+
+    const owner = await isOwner(user);
+
+    if (
+        Number(server.owner_id) !== Number(user.id) &&
+        !owner
+    ) {
+        return null;
+    }
+
+    return server;
+}
+
+app.post('/server/:id/start', requireLogin, async function (req, res) {
+
+    try {
+
+        const server = await getServerForUser(
+            Number(req.params.id),
+            req.user
+        );
+
+        if (!server) {
+            return res.status(404).send('Server nicht gefunden');
+        }
+
+        if (Number(server.locked) === 1) {
+            return res.status(403).send('Server ist gesperrt');
+        }
+
+        if (Number(server.maintenance) === 1) {
+            return res.status(403).send('Server befindet sich in Wartung');
+        }
+
+        await dbRun(
+            `
+            UPDATE servers
+            SET status = 'online',
+                updated_at = ?
+            WHERE id = ?
+            `,
+            [now(), server.id]
+        );
+
+        await logAction(
+            req.user.id,
+            'SERVER_START',
+            'Server #' + server.id
+        );
+
+        res.redirect('/server/' + server.id);
+
+    } catch (error) {
+
+        console.error(error);
+        res.status(500).send('Fehler');
+    }
+});
+
+app.post('/server/:id/stop', requireLogin, async function (req, res) {
+
+    try {
+
+        const server = await getServerForUser(
+            Number(req.params.id),
+            req.user
+        );
+
+        if (!server) {
+            return res.status(404).send('Server nicht gefunden');
+        }
+
+        await dbRun(
+            `
+            UPDATE servers
+            SET status = 'offline',
+                updated_at = ?
+            WHERE id = ?
+            `,
+            [now(), server.id]
+        );
+
+        await logAction(
+            req.user.id,
+            'SERVER_STOP',
+            'Server #' + server.id
+        );
+
+        res.redirect('/server/' + server.id);
+
+    } catch (error) {
+
+        console.error(error);
+        res.status(500).send('Fehler');
+    }
+});
+
+app.post('/server/:id/restart', requireLogin, async function (req, res) {
+
+    try {
+
+        const server = await getServerForUser(
+            Number(req.params.id),
+            req.user
+        );
+
+        if (!server) {
+            return res.status(404).send('Server nicht gefunden');
+        }
+
+        if (Number(server.locked) === 1) {
+            return res.status(403).send('Server ist gesperrt');
+        }
+
+        if (Number(server.maintenance) === 1) {
+            return res.status(403).send('Server befindet sich in Wartung');
+        }
+
+        await dbRun(
+            `
+            UPDATE servers
+            SET status = 'restarting',
+                updated_at = ?
+            WHERE id = ?
+            `,
+            [now(), server.id]
+        );
+
+        await logAction(
+            req.user.id,
+            'SERVER_RESTART',
+            'Server #' + server.id
+        );
+
+        setTimeout(async function () {
 
             try {
-                size = fs.statSync(absolutePath).size;
-            } catch {}
 
-            result.push({
-                type: "file",
-                path: relativePath,
-                size
-            });
-        }
-    }
+                await dbRun(
+                    `
+                    UPDATE servers
+                    SET status = 'online',
+                        updated_at = ?
+                    WHERE id = ?
+                    `,
+                    [now(), server.id]
+                );
 
-    return result;
-}
-
-/* ============================================================
-   API - STATUS
-   ============================================================ */
-
-app.get("/api/status", (req, res) => {
-    const user = getCurrentUser(req);
-
-    res.json({
-        success: true,
-        loggedIn: Boolean(user),
-        user: user
-            ? {
-                id: user.id,
-                username: user.username,
-                email: user.email,
-                coins: user.coins,
-                role: user.role,
-                owner: isOwner(user)
+            } catch (error) {
+                console.error('Restart:', error);
             }
-            : null
-    });
-});
 
-/* ============================================================
-   API - REGISTRIERUNG
-   ============================================================ */
+        }, 1500);
 
-app.post("/api/register", (req, res) => {
-    try {
-        const username = String(
-            req.body.username || ""
-        ).trim();
+        res.redirect('/server/' + server.id);
 
-        const email = String(
-            req.body.email || ""
-        ).trim().toLowerCase();
-
-        const password = String(
-            req.body.password || ""
-        );
-
-        if (username.length < 3) {
-            return res.status(400).json({
-                success: false,
-                error: "Der Benutzername muss mindestens 3 Zeichen haben."
-            });
-        }
-
-        if (
-            !email.includes("@") ||
-            email.length < 5
-        ) {
-            return res.status(400).json({
-                success: false,
-                error: "Ungültige E-Mail-Adresse."
-            });
-        }
-
-        if (password.length < 4) {
-            return res.status(400).json({
-                success: false,
-                error: "Das Passwort muss mindestens 4 Zeichen haben."
-            });
-        }
-
-        if (findUserByEmail(email)) {
-            return res.status(409).json({
-                success: false,
-                error: "Diese E-Mail ist bereits registriert."
-            });
-        }
-
-        const user = {
-            id: id(),
-            username,
-            email,
-            password: passwordHash(password),
-            sessionToken: createToken(),
-            coins: 0,
-            role: "user",
-            banned: false,
-            createdAt: now()
-        };
-
-        users.push(user);
-
-        writeJson(USERS_FILE, users);
-
-        setAuthCookie(res, user.sessionToken);
-
-        res.json({
-            success: true,
-            message: "Registrierung erfolgreich.",
-            user: {
-                id: user.id,
-                username: user.username,
-                email: user.email,
-                coins: user.coins,
-                role: user.role,
-                owner: isOwner(user)
-            }
-        });
     } catch (error) {
-        console.error(error);
 
-        res.status(500).json({
-            success: false,
-            error: "Registrierung fehlgeschlagen."
-        });
+        console.error(error);
+        res.status(500).send('Fehler');
     }
 });
 
-/* ============================================================
-   API - LOGIN
-   ============================================================ */
+app.post('/server/:id/lock', requireLogin, async function (req, res) {
 
-app.post("/api/login", (req, res) => {
     try {
-        const email = String(
-            req.body.email || ""
-        ).trim().toLowerCase();
 
-        const password = String(
-            req.body.password || ""
+        const server = await getServerForUser(
+            Number(req.params.id),
+            req.user
         );
 
-        const user = findUserByEmail(email);
-
-        if (!user) {
-            return res.status(401).json({
-                success: false,
-                error: "E-Mail oder Passwort falsch."
-            });
+        if (!server) {
+            return res.status(404).send('Server nicht gefunden');
         }
 
-        if (user.banned) {
-            return res.status(403).json({
-                success: false,
-                error: "Dieses Konto wurde gesperrt."
-            });
-        }
-
-        if (
-            passwordHash(password) !==
-            user.password
-        ) {
-            return res.status(401).json({
-                success: false,
-                error: "E-Mail oder Passwort falsch."
-            });
-        }
-
-        user.sessionToken = createToken();
-
-        writeJson(USERS_FILE, users);
-
-        setAuthCookie(
-            res,
-            user.sessionToken
+        await dbRun(
+            `
+            UPDATE servers
+            SET locked = 1,
+                status = 'offline',
+                updated_at = ?
+            WHERE id = ?
+            `,
+            [now(), server.id]
         );
 
-        res.json({
-            success: true,
-            message: "Login erfolgreich.",
-            user: {
-                id: user.id,
-                username: user.username,
-                email: user.email,
-                coins: user.coins,
-                role: user.role,
-                owner: isOwner(user)
-            }
-        });
+        await logAction(
+            req.user.id,
+            'SERVER_LOCK',
+            'Server #' + server.id
+        );
+
+        res.redirect('/server/' + server.id);
+
     } catch (error) {
-        console.error(error);
 
-        res.status(500).json({
-            success: false,
-            error: "Login fehlgeschlagen."
-        });
+        console.error(error);
+        res.status(500).send('Fehler');
+    }
+});
+
+app.post('/server/:id/unlock', requireLogin, async function (req, res) {
+
+    try {
+
+        const server = await getServerForUser(
+            Number(req.params.id),
+            req.user
+        );
+
+        if (!server) {
+            return res.status(404).send('Server nicht gefunden');
+        }
+
+        await dbRun(
+            `
+            UPDATE servers
+            SET locked = 0,
+                updated_at = ?
+            WHERE id = ?
+            `,
+            [now(), server.id]
+        );
+
+        await logAction(
+            req.user.id,
+            'SERVER_UNLOCK',
+            'Server #' + server.id
+        );
+
+        res.redirect('/server/' + server.id);
+
+    } catch (error) {
+
+        console.error(error);
+        res.status(500).send('Fehler');
+    }
+});
+
+app.post('/server/:id/maintenance/on', requireLogin, async function (req, res) {
+
+    try {
+
+        const server = await getServerForUser(
+            Number(req.params.id),
+            req.user
+        );
+
+        if (!server) {
+            return res.status(404).send('Server nicht gefunden');
+        }
+
+        await dbRun(
+            `
+            UPDATE servers
+            SET maintenance = 1,
+                status = 'offline',
+                updated_at = ?
+            WHERE id = ?
+            `,
+            [now(), server.id]
+        );
+
+        await logAction(
+            req.user.id,
+            'SERVER_MAINTENANCE_ON',
+            'Server #' + server.id
+        );
+
+        res.redirect('/server/' + server.id);
+
+    } catch (error) {
+
+        console.error(error);
+        res.status(500).send('Fehler');
+    }
+});
+
+app.post('/server/:id/maintenance/off', requireLogin, async function (req, res) {
+
+    try {
+
+        const server = await getServerForUser(
+            Number(req.params.id),
+            req.user
+        );
+
+        if (!server) {
+            return res.status(404).send('Server nicht gefunden');
+        }
+
+        await dbRun(
+            `
+            UPDATE servers
+            SET maintenance = 0,
+                updated_at = ?
+            WHERE id = ?
+            `,
+            [now(), server.id]
+        );
+
+        await logAction(
+            req.user.id,
+            'SERVER_MAINTENANCE_OFF',
+            'Server #' + server.id
+        );
+
+        res.redirect('/server/' + server.id);
+
+    } catch (error) {
+
+        console.error(error);
+        res.status(500).send('Fehler');
+    }
+});
+
+app.post('/server/:id/delete', requireLogin, async function (req, res) {
+
+    try {
+
+        const server = await getServerForUser(
+            Number(req.params.id),
+            req.user
+        );
+
+        if (!server) {
+            return res.status(404).send('Server nicht gefunden');
+        }
+
+        await dbRun(
+            `
+            DELETE FROM servers
+            WHERE id = ?
+            `,
+            [server.id]
+        );
+
+        await logAction(
+            req.user.id,
+            'SERVER_DELETE',
+            'Server #' + server.id + ' gelöscht'
+        );
+
+        res.redirect('/servers');
+
+    } catch (error) {
+
+        console.error(error);
+        res.status(500).send('Fehler');
     }
 });
 
 /* ============================================================
-   API - LOGOUT
+   ACCOUNT
    ============================================================ */
 
-app.post("/api/logout", requireAuth, (req, res) => {
-    req.user.sessionToken = null;
+app.get('/account', requireLogin, async function (req, res) {
 
-    writeJson(USERS_FILE, users);
+    const content = [
+        '<div class="card">',
+        '<h1>Mein Konto</h1>',
+        '<p><strong>Benutzername:</strong> ',
+        escapeHtml(req.user.username),
+        '</p>',
+        '<p><strong>E-Mail:</strong> ',
+        escapeHtml(req.user.email),
+        '</p>',
+        '<p><strong>Rolle:</strong> ',
+        escapeHtml(req.user.role),
+        '</p>',
+        '<p><strong>Registriert:</strong> ',
+        escapeHtml(req.user.created_at),
+        '</p>',
+        '</div>',
 
-    clearAuthCookie(res);
+        '<div class="card form">',
+        '<h2>Passwort ändern</h2>',
+        '<form method="POST" action="/account/password">',
 
-    res.json({
-        success: true
-    });
-});
+        '<label>Aktuelles Passwort</label>',
+        '<input type="password" name="oldPassword" required>',
 
-/* ============================================================
-   API - PROFIL
-   ============================================================ */
+        '<label>Neues Passwort</label>',
+        '<input type="password" name="newPassword" minlength="6" required>',
 
-app.get("/api/me", requireAuth, (req, res) => {
-    res.json({
-        success: true,
-        user: {
-            id: req.user.id,
-            username: req.user.username,
-            email: req.user.email,
-            coins: req.user.coins,
-            role: req.user.role,
-            owner: isOwner(req.user),
-            createdAt: req.user.createdAt
-        }
-    });
-});
+        '<label>Neues Passwort wiederholen</label>',
+        '<input type="password" name="newPassword2" minlength="6" required>',
 
-/* ============================================================
-   API - SERVER LISTE
-   ============================================================ */
+        '<div class="actions">',
+        '<button class="btn" type="submit">Passwort ändern</button>',
+        '</div>',
 
-app.get("/api/servers", requireAuth, (req, res) => {
-    const visibleServers = servers.filter(
-        server =>
-            isOwner(req.user) ||
-            server.ownerId === req.user.id
+        '</form>',
+        '</div>'
+    ].join('');
+
+    res.send(
+        page(
+            'Konto',
+            content,
+            req.user
+        )
     );
-
-    res.json({
-        success: true,
-        servers: visibleServers.map(server => ({
-            id: server.id,
-            name: server.name,
-            status: server.status,
-            ownerId: server.ownerId,
-            memory: server.memory,
-            locked: server.locked,
-            maintenance: server.maintenance,
-            createdAt: server.createdAt,
-            startedAt: server.startedAt || null
-        }))
-    });
 });
 
-/* ============================================================
-   API - SERVER ERSTELLEN
-   ============================================================ */
+app.post('/account/password', requireLogin, async function (req, res) {
 
-app.post("/api/servers", requireAuth, (req, res) => {
     try {
-        if (req.user.banned) {
-            return res.status(403).json({
-                success: false,
-                error: "Konto gesperrt."
-            });
+
+        const oldPassword = String(
+            req.body.oldPassword || ''
+        );
+
+        const newPassword = String(
+            req.body.newPassword || ''
+        );
+
+        const newPassword2 = String(
+            req.body.newPassword2 || ''
+        );
+
+        const correct = await bcrypt.compare(
+            oldPassword,
+            req.user.password
+        );
+
+        if (!correct) {
+            return res.status(400).send(
+                page(
+                    'Fehler',
+                    '<div class="card error"><h1>Falsches Passwort</h1><p>Das aktuelle Passwort ist falsch.</p><a class="btn" href="/account">Zurück</a></div>',
+                    req.user
+                )
+            );
         }
 
-        const name = safeServerName(
-            req.body.name
-        );
-
-        const memory = String(
-            req.body.memory || "1G"
-        ).trim();
-
-        if (!/^\d+(M|G)$/i.test(memory)) {
-            return res.status(400).json({
-                success: false,
-                error: "Ungültiger RAM-Wert. Beispiel: 1G oder 2048M."
-            });
+        if (newPassword.length < 6) {
+            return res.status(400).send(
+                page(
+                    'Fehler',
+                    '<div class="card error"><h1>Fehler</h1><p>Das neue Passwort muss mindestens 6 Zeichen lang sein.</p><a class="btn" href="/account">Zurück</a></div>',
+                    req.user
+                )
+            );
         }
 
-        const server = {
-            id: id(),
-            name,
-            ownerId: req.user.id,
-            memory,
-            status: "offline",
-            locked: false,
-            maintenance: false,
-            createdAt: now(),
-            startedAt: null,
-            logs: []
-        };
+        if (newPassword !== newPassword2) {
+            return res.status(400).send(
+                page(
+                    'Fehler',
+                    '<div class="card error"><h1>Fehler</h1><p>Die neuen Passwörter stimmen nicht überein.</p><a class="btn" href="/account">Zurück</a></div>',
+                    req.user
+                )
+            );
+        }
 
-        servers.push(server);
-
-        ensureDirectory(
-            serverDirectory(server)
+        const hash = await bcrypt.hash(
+            newPassword,
+            12
         );
 
-        fs.writeFileSync(
-            path.join(
-                serverDirectory(server),
-                "eula.txt"
-            ),
-            "eula=true\n",
-            "utf8"
-        );
-
-        fs.writeFileSync(
-            path.join(
-                serverDirectory(server),
-                "server.properties"
-            ),
+        await dbRun(
+            `
+            UPDATE users
+            SET password = ?,
+                updated_at = ?
+            WHERE id = ?
+            `,
             [
-                "motd=Florian Minecraft Hosting",
-                "server-port=25565",
-                "online-mode=true",
-                "difficulty=normal",
-                "gamemode=survival",
-                "max-players=20"
-            ].join("\n") + "\n",
-            "utf8"
+                hash,
+                now(),
+                req.user.id
+            ]
         );
 
-        appendServerLog(
-            server,
-            `Server "${name}" wurde erstellt.`
+        await logAction(
+            req.user.id,
+            'PASSWORD_CHANGE',
+            'Passwort geändert'
         );
 
-        res.json({
-            success: true,
-            server
-        });
+        res.send(
+            page(
+                'Passwort geändert',
+                '<div class="card success"><h1>Passwort geändert</h1><p>Dein Passwort wurde erfolgreich geändert.</p><a class="btn" href="/account">Zum Konto</a></div>',
+                req.user
+            )
+        );
+
     } catch (error) {
+
         console.error(error);
 
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
+        res.status(500).send(
+            page(
+                'Fehler',
+                '<div class="card error"><h1>Fehler</h1><p>Passwort konnte nicht geändert werden.</p></div>',
+                req.user
+            )
+        );
     }
 });
 
 /* ============================================================
-   API - SERVER DETAILS
+   ADMIN PANEL
    ============================================================ */
 
-app.get(
-    "/api/servers/:id",
-    requireAuth,
-    (req, res) => {
-        const server = findServer(
-            req.params.id
+app.get('/admin', requireAdmin, async function (req, res) {
+
+    try {
+
+        const users = await dbAll(
+            `
+            SELECT id, email, username, role, banned, created_at
+            FROM users
+            ORDER BY id DESC
+            `
         );
 
-        if (!server) {
-            return res.status(404).json({
-                success: false,
-                error: "Server nicht gefunden."
-            });
-        }
-
-        if (
-            !isOwner(req.user) &&
-            server.ownerId !== req.user.id
-        ) {
-            return res.status(403).json({
-                success: false,
-                error: "Keine Berechtigung."
-            });
-        }
-
-        res.json({
-            success: true,
-            server: {
-                ...server,
-                running: serverIsRunning(
-                    server.id
-                )
-            }
-        });
-    }
-);
-
-/* ============================================================
-   API - SERVER START
-   ============================================================ */
-
-app.post(
-    "/api/servers/:id/start",
-    requireAuth,
-    (req, res) => {
-        try {
-            const server = findServer(
-                req.params.id
-            );
-
-            if (!server) {
-                return res.status(404).json({
-                    success: false,
-                    error: "Server nicht gefunden."
-                });
-            }
-
-            if (
-                !isOwner(req.user) &&
-                server.ownerId !== req.user.id
-            ) {
-                return res.status(403).json({
-                    success: false,
-                    error: "Keine Berechtigung."
-                });
-            }
-
-            startMinecraft(server);
-
-            res.json({
-                success: true,
-                message: "Server wird gestartet."
-            });
-        } catch (error) {
-            res.status(400).json({
-                success: false,
-                error: error.message
-            });
-        }
-    }
-);
-
-/* ============================================================
-   API - SERVER STOP
-   ============================================================ */
-
-app.post(
-    "/api/servers/:id/stop",
-    requireAuth,
-    (req, res) => {
-        try {
-            const server = findServer(
-                req.params.id
-            );
-
-            if (!server) {
-                return res.status(404).json({
-                    success: false,
-                    error: "Server nicht gefunden."
-                });
-            }
-
-            if (
-                !isOwner(req.user) &&
-                server.ownerId !== req.user.id
-            ) {
-                return res.status(403).json({
-                    success: false,
-                    error: "Keine Berechtigung."
-                });
-            }
-
-            stopMinecraft(server);
-
-            res.json({
-                success: true,
-                message: "Server wird heruntergefahren."
-            });
-        } catch (error) {
-            res.status(400).json({
-                success: false,
-                error: error.message
-            });
-        }
-    }
-);
-
-/* ============================================================
-   API - SERVER RESTART
-   ============================================================ */
-
-app.post(
-    "/api/servers/:id/restart",
-    requireAuth,
-    (req, res) => {
-        try {
-            const server = findServer(
-                req.params.id
-            );
-
-            if (!server) {
-                return res.status(404).json({
-                    success: false,
-                    error: "Server nicht gefunden."
-                });
-            }
-
-            if (
-                !isOwner(req.user) &&
-                server.ownerId !== req.user.id
-            ) {
-                return res.status(403).json({
-                    success: false,
-                    error: "Keine Berechtigung."
-                });
-            }
-
-            restartMinecraft(server);
-
-            res.json({
-                success: true,
-                message: "Server wird neu gestartet."
-            });
-        } catch (error) {
-            res.status(400).json({
-                success: false,
-                error: error.message
-            });
-        }
-    }
-);
-
-/* ============================================================
-   API - KONSOLE
-   ============================================================ */
-
-app.post(
-    "/api/servers/:id/console",
-    requireAuth,
-    (req, res) => {
-        try {
-            const server = findServer(
-                req.params.id
-            );
-
-            if (!server) {
-                return res.status(404).json({
-                    success: false,
-                    error: "Server nicht gefunden."
-                });
-            }
-
-            if (
-                !isOwner(req.user) &&
-                server.ownerId !== req.user.id
-            ) {
-                return res.status(403).json({
-                    success: false,
-                    error: "Keine Berechtigung."
-                });
-            }
-
-            sendMinecraftCommand(
-                server,
-                req.body.command
-            );
-
-            res.json({
-                success: true
-            });
-        } catch (error) {
-            res.status(400).json({
-                success: false,
-                error: error.message
-            });
-        }
-    }
-);
-
-/* ============================================================
-   API - LOGS
-   ============================================================ */
-
-app.get(
-    "/api/servers/:id/logs",
-    requireAuth,
-    (req, res) => {
-        const server = findServer(
-            req.params.id
+        const servers = await dbAll(
+            `
+            SELECT
+                servers.*,
+                users.email AS owner_email,
+                users.username AS owner_username
+            FROM servers
+            LEFT JOIN users
+                ON users.id = servers.owner_id
+            ORDER BY servers.id DESC
+            `
         );
 
-        if (!server) {
-            return res.status(404).json({
-                success: false,
-                error: "Server nicht gefunden."
-            });
-        }
+        const logs = await dbAll(
+            `
+            SELECT
+                logs.*,
+                users.email AS user_email
+            FROM logs
+            LEFT JOIN users
+                ON users.id = logs.user_id
+            ORDER BY logs.id DESC
+            LIMIT 100
+            `
+        );
 
-        if (
-            !isOwner(req.user) &&
-            server.ownerId !== req.user.id
-        ) {
-            return res.status(403).json({
-                success: false,
-                error: "Keine Berechtigung."
-            });
-        }
+        const userRows = users.map(function (user) {
 
-        res.json({
-            success: true,
-            logs: server.logs || []
-        });
-    }
-);
+            const banned = Number(user.banned) === 1;
 
-/* ============================================================
-   API - DATEIEN AUFLISTEN
-   ============================================================ */
+            const banButton = banned
+                ? [
+                    '<form method="POST" action="/admin/user/',
+                    user.id,
+                    '/unban">',
+                    '<button class="btn green" type="submit">Entsperren</button>',
+                    '</form>'
+                ].join('')
+                : [
+                    '<form method="POST" action="/admin/user/',
+                    user.id,
+                    '/ban">',
+                    '<button class="btn red" type="submit">Sperren</button>',
+                    '</form>'
+                ].join('');
 
-app.get(
-    "/api/servers/:id/files",
-    requireAuth,
-    (req, res) => {
-        try {
-            const server = findServer(
-                req.params.id
-            );
+            return [
+                '<tr>',
+                '<td>',
+                String(user.id),
+                '</td>',
+                '<td>',
+                escapeHtml(user.username),
+                '</td>',
+                '<td>',
+                escapeHtml(user.email),
+                '</td>',
+                '<td>',
+                escapeHtml(user.role),
+                '</td>',
+                '<td>',
+                banned
+                    ? '<span class="badge red">GESPERRT</span>'
+                    : '<span class="badge green">AKTIV</span>',
+                '</td>',
+                '<td>',
+                '<div class="actions">',
+                banButton,
+                '</div>',
+                '</td>',
+                '</tr>'
+            ].join('');
 
-            if (!server) {
-                return res.status(404).json({
-                    success: false,
-                    error: "Server nicht gefunden."
-                });
-            }
+        }).join('');
 
-            if (
-                !isOwner(req.user) &&
-                server.ownerId !== req.user.id
-            ) {
-                return res.status(403).json({
-                    success: false,
-                    error: "Keine Berechtigung."
-                });
-            }
+        const serverRows = servers.map(function (server) {
 
-            const directory =
-                serverDirectory(server);
+            return [
+                '<tr>',
+                '<td>',
+                String(server.id),
+                '</td>',
+                '<td>',
+                escapeHtml(server.name),
+                '</td>',
+                '<td>',
+                escapeHtml(server.owner_username || '-'),
+                '</td>',
+                '<td>',
+                escapeHtml(server.owner_email || '-'),
+                '</td>',
+                '<td>',
+                '<span class="badge ',
+                server.status === 'online' ? 'green' : 'red',
+                '">',
+                escapeHtml(server.status),
+                '</span>',
+                '</td>',
+                '<td>',
+                '<div class="actions">',
+                '<form method="POST" action="/admin/server/',
+                server.id,
+                '/stop">',
+                '<button class="btn red" type="submit">Stoppen</button>',
+                '</form>',
+                '<form method="POST" action="/admin/server/',
+                server.id,
+                '/lock">',
+                '<button class="btn gray" type="submit">Sperren</button>',
+                '</form>',
+                '<form method="POST" action="/admin/server/',
+                server.id,
+                '/delete" onsubmit="return confirm(\'Server wirklich löschen?\')">',
+                '<button class="btn red" type="submit">Löschen</button>',
+                '</form>',
+                '</div>',
+                '</td>',
+                '</tr>'
+            ].join('');
 
-            ensureDirectory(directory);
+        }).join('');
 
-            res.json({
-                success: true,
-                files: listFilesRecursive(
-                    directory
-                )
-            });
-        } catch (error) {
-            res.status(400).json({
-                success: false,
-                error: error.message
-            });
-        }
-    }
-);
+        const logRows = logs.map(function (log) {
 
-/* ============================================================
-   API - DATEI LESEN
-   ============================================================ */
+            return [
+                '<tr>',
+                '<td>',
+                String(log.id),
+                '</td>',
+                '<td>',
+                escapeHtml(log.user_email || 'System'),
+                '</td>',
+                '<td>',
+                escapeHtml(log.action),
+                '</td>',
+                '<td>',
+                escapeHtml(log.details || ''),
+                '</td>',
+                '<td>',
+                escapeHtml(log.created_at),
+                '</td>',
+                '</tr>'
+            ].join('');
 
-app.get(
-    "/api/servers/:id/file",
-    requireAuth,
-    (req, res) => {
-        try {
-            const server = findServer(
-                req.params.id
-            );
+        }).join('');
 
-            if (!server) {
-                return res.status(404).json({
-                    success: false,
-                    error: "Server nicht gefunden."
-                });
-            }
+        const content = [
+            '<section class="hero">',
+            '<h1>Admin Panel</h1>',
+            '<p>Owner-/Administratorverwaltung für das Hosting.</p>',
+            '</section>',
 
-            if (
-                !isOwner(req.user) &&
-                server.ownerId !== req.user.id
-            ) {
-                return res.status(403).json({
-                    success: false,
-                    error: "Keine Berechtigung."
-                });
-            }
+            '<div class="grid">',
 
-            const target =
-                safeResolveInsideServer(
-                    server,
-                    req.query.path
-                );
+            '<div class="card">',
+            '<div class="muted">Benutzer</div>',
+            '<div class="stat">',
+            String(users.length),
+            '</div>',
+            '</div>',
 
-            if (!fs.existsSync(target)) {
-                return res.status(404).json({
-                    success: false,
-                    error: "Datei nicht gefunden."
-                });
-            }
+            '<div class="card">',
+            '<div class="muted">Server</div>',
+            '<div class="stat">',
+            String(servers.length),
+            '</div>',
+            '</div>',
 
-            if (
-                !fs.statSync(target).isFile()
-            ) {
-                return res.status(400).json({
-                    success: false,
-                    error: "Das ist keine Datei."
-                });
-            }
+            '<div class="card">',
+            '<div class="muted">Owner</div>',
+            '<div class="small">',
+            escapeHtml(OWNER_EMAIL),
+            '</div>',
+            '</div>',
 
-            const content =
-                fs.readFileSync(
-                    target,
-                    "utf8"
-                );
+            '</div>',
 
-            res.json({
-                success: true,
-                path: req.query.path,
-                content
-            });
-        } catch (error) {
-            res.status(400).json({
-                success: false,
-                error: error.message
-            });
-        }
-    }
-);
+            '<div class="card">',
+            '<h2>Globale Einstellungen</h2>',
+            '<div class="actions">',
+            '<form method="POST" action="/admin/maintenance/on">',
+            '<button class="btn gray" type="submit">Alle Server Wartung</button>',
+            '</form>',
+            '<form method="POST" action="/admin/shutdown">',
+            '<button class="btn red" type="submit">Alle Server stoppen</button>',
+            '</form>',
+            '<form method="POST" action="/admin/maintenance/off">',
+            '<button class="btn green" type="submit">Wartung beenden</button>',
+            '</form>',
+            '</div>',
+            '</div>',
 
-/* ============================================================
-   API - DATEI SCHREIBEN
-   ============================================================ */
+            '<div class="card">',
+            '<h2>Benutzer</h2>',
+            '<div class="table-wrap">',
+            '<table>',
+            '<thead><tr>',
+            '<th>ID</th>',
+            '<th>Name</th>',
+            '<th>E-Mail</th>',
+            '<th>Rolle</th>',
+            '<th>Status</th>',
+            '<th>Aktion</th>',
+            '</tr></thead>',
+            '<tbody>',
+            userRows,
+            '</tbody>',
+            '</table>',
+            '</div>',
+            '</div>',
 
-app.put(
-    "/api/servers/:id/file",
-    requireAuth,
-    (req, res) => {
-        try {
-            const server = findServer(
-                req.params.id
-            );
+            '<div class="card">',
+            '<h2>Alle Server</h2>',
+            '<div class="table-wrap">',
+            '<table>',
+            '<thead><tr>',
+            '<th>ID</th>',
+            '<th>Name</th>',
+            '<th>Owner</th>',
+            '<th>E-Mail</th>',
+            '<th>Status</th>',
+            '<th>Aktion</th>',
+            '</tr></thead>',
+            '<tbody>',
+            serverRows,
+            '</tbody>',
+            '</table>',
+            '</div>',
+            '</div>',
 
-            if (!server) {
-                return res.status(404).json({
-                    success: false,
-                    error: "Server nicht gefunden."
-                });
-            }
+            '<div class="card">',
+            '<h2>Logs</h2>',
+            '<div class="table-wrap">',
+            '<table>',
+            '<thead><tr>',
+            '<th>ID</th>',
+            '<th>User</th>',
+            '<th>Aktion</th>',
+            '<th>Details</th>',
+            '<th>Zeit</th>',
+            '</tr></thead>',
+            '<tbody>',
+            logRows,
+            '</tbody>',
+            '</table>',
+            '</div>',
+            '</div>'
+        ].join('');
 
-            if (
-                !isOwner(req.user) &&
-                server.ownerId !== req.user.id
-            ) {
-                return res.status(403).json({
-                    success: false,
-                    error: "Keine Berechtigung."
-                });
-            }
-
-            const relativePath =
-                String(
-                    req.body.path || ""
-                ).trim();
-
-            if (!relativePath) {
-                return res.status(400).json({
-                    success: false,
-                    error: "Kein Dateipfad angegeben."
-                });
-            }
-
-            const target =
-                safeResolveInsideServer(
-                    server,
-                    relativePath
-                );
-
-            const content =
-                String(
-                    req.body.content || ""
-                );
-
-            ensureDirectory(
-                path.dirname(target)
-            );
-
-            fs.writeFileSync(
-                target,
+        res.send(
+            page(
+                'Admin Panel',
                 content,
-                "utf8"
-            );
-
-            appendServerLog(
-                server,
-                `Datei geändert: ${relativePath}`
-            );
-
-            res.json({
-                success: true,
-                message: "Datei gespeichert."
-            });
-        } catch (error) {
-            res.status(400).json({
-                success: false,
-                error: error.message
-            });
-        }
-    }
-);
-
-/* ============================================================
-   API - DATEI ERSTELLEN
-   ============================================================ */
-
-app.post(
-    "/api/servers/:id/file",
-    requireAuth,
-    (req, res) => {
-        try {
-            const server = findServer(
-                req.params.id
-            );
-
-            if (!server) {
-                return res.status(404).json({
-                    success: false,
-                    error: "Server nicht gefunden."
-                });
-            }
-
-            if (
-                !isOwner(req.user) &&
-                server.ownerId !== req.user.id
-            ) {
-                return res.status(403).json({
-                    success: false,
-                    error: "Keine Berechtigung."
-                });
-            }
-
-            const relativePath =
-                String(
-                    req.body.path || ""
-                ).trim();
-
-            if (!relativePath) {
-                return res.status(400).json({
-                    success: false,
-                    error: "Kein Dateipfad."
-                });
-            }
-
-            const target =
-                safeResolveInsideServer(
-                    server,
-                    relativePath
-                );
-
-            if (fs.existsSync(target)) {
-                return res.status(409).json({
-                    success: false,
-                    error: "Datei existiert bereits."
-                });
-            }
-
-            ensureDirectory(
-                path.dirname(target)
-            );
-
-            fs.writeFileSync(
-                target,
-                String(
-                    req.body.content || ""
-                ),
-                "utf8"
-            );
-
-            res.json({
-                success: true
-            });
-        } catch (error) {
-            res.status(400).json({
-                success: false,
-                error: error.message
-            });
-        }
-    }
-);
-
-/* ============================================================
-   API - SERVER LÖSCHEN
-   ============================================================ */
-
-app.delete(
-    "/api/servers/:id",
-    requireAuth,
-    (req, res) => {
-        try {
-            const index =
-                servers.findIndex(
-                    server =>
-                        server.id ===
-                        req.params.id
-                );
-
-            if (index === -1) {
-                return res.status(404).json({
-                    success: false,
-                    error: "Server nicht gefunden."
-                });
-            }
-
-            const server =
-                servers[index];
-
-            if (
-                !isOwner(req.user) &&
-                server.ownerId !== req.user.id
-            ) {
-                return res.status(403).json({
-                    success: false,
-                    error: "Keine Berechtigung."
-                });
-            }
-
-            if (
-                serverIsRunning(server.id)
-            ) {
-                stopMinecraft(server);
-            }
-
-            processes.delete(
-                server.id
-            );
-
-            const directory =
-                serverDirectory(server);
-
-            if (fs.existsSync(directory)) {
-                fs.rmSync(
-                    directory,
-                    {
-                        recursive: true,
-                        force: true
-                    }
-                );
-            }
-
-            servers.splice(index, 1);
-
-            writeJson(
-                SERVERS_FILE,
-                servers
-            );
-
-            res.json({
-                success: true,
-                message: "Server gelöscht."
-            });
-        } catch (error) {
-            res.status(500).json({
-                success: false,
-                error: error.message
-            });
-        }
-    }
-);
-
-/* ============================================================
-   OWNER - ALLE SERVER
-   ============================================================ */
-
-app.get(
-    "/api/owner/servers",
-    requireOwner,
-    (req, res) => {
-        res.json({
-            success: true,
-            servers: servers.map(server => ({
-                id: server.id,
-                name: server.name,
-                ownerId: server.ownerId,
-                status: server.status,
-                locked: server.locked,
-                maintenance: server.maintenance,
-                running: serverIsRunning(
-                    server.id
-                ),
-                createdAt: server.createdAt
-            }))
-        });
-    }
-);
-
-/* ============================================================
-   OWNER - ALLE USER
-   ============================================================ */
-
-app.get(
-    "/api/owner/users",
-    requireOwner,
-    (req, res) => {
-        res.json({
-            success: true,
-            users: users.map(user => ({
-                id: user.id,
-                username: user.username,
-                email: user.email,
-                coins: user.coins,
-                role: user.role,
-                banned: user.banned,
-                createdAt: user.createdAt
-            }))
-        });
-    }
-);
-
-/* ============================================================
-   OWNER - COINS GEBEN
-   ============================================================ */
-
-app.post(
-    "/api/owner/users/:id/coins",
-    requireOwner,
-    (req, res) => {
-        const user = findUserById(
-            req.params.id
+                req.user
+            )
         );
 
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                error: "Benutzer nicht gefunden."
-            });
-        }
+    } catch (error) {
 
-        const amount =
-            Number(req.body.amount);
+        console.error('Admin:', error);
 
-        if (
-            !Number.isFinite(amount) ||
-            !Number.isInteger(amount)
-        ) {
-            return res.status(400).json({
-                success: false,
-                error: "Ungültige Coin-Anzahl."
-            });
-        }
-
-        user.coins =
-            Math.max(
-                0,
-                Number(user.coins || 0) +
-                amount
-            );
-
-        writeJson(
-            USERS_FILE,
-            users
+        res.status(500).send(
+            page(
+                'Admin Fehler',
+                '<div class="card error"><h1>Admin Panel Fehler</h1><p>Das Admin Panel konnte nicht geladen werden.</p></div>',
+                req.user
+            )
         );
-
-        res.json({
-            success: true,
-            coins: user.coins
-        });
     }
-);
+});
 
 /* ============================================================
-   OWNER - USER BAN
+   ADMIN USER BAN
    ============================================================ */
 
-app.post(
-    "/api/owner/users/:id/ban",
-    requireOwner,
-    (req, res) => {
-        const user = findUserById(
-            req.params.id
-        );
+app.post('/admin/user/:id/ban', requireAdmin, async function (req, res) {
 
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                error: "Benutzer nicht gefunden."
-            });
-        }
+    try {
 
-        if (isOwner(user)) {
-            return res.status(400).json({
-                success: false,
-                error: "Der Owner kann nicht gebannt werden."
-            });
-        }
+        const id = Number(req.params.id);
 
-        user.banned = true;
-        user.sessionToken = null;
+        const target = await findUserById(id);
 
-        writeJson(
-            USERS_FILE,
-            users
-        );
-
-        res.json({
-            success: true,
-            message: "Benutzer gesperrt."
-        });
-    }
-);
-
-/* ============================================================
-   OWNER - USER ENTSPERREN
-   ============================================================ */
-
-app.post(
-    "/api/owner/users/:id/unban",
-    requireOwner,
-    (req, res) => {
-        const user = findUserById(
-            req.params.id
-        );
-
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                error: "Benutzer nicht gefunden."
-            });
-        }
-
-        user.banned = false;
-
-        writeJson(
-            USERS_FILE,
-            users
-        );
-
-        res.json({
-            success: true,
-            message: "Benutzer entsperrt."
-        });
-    }
-);
-
-/* ============================================================
-   OWNER - USER LÖSCHEN
-   ============================================================ */
-
-app.delete(
-    "/api/owner/users/:id",
-    requireOwner,
-    (req, res) => {
-        const index =
-            users.findIndex(
-                user =>
-                    user.id ===
-                    req.params.id
-            );
-
-        if (index === -1) {
-            return res.status(404).json({
-                success: false,
-                error: "Benutzer nicht gefunden."
-            });
+        if (!target) {
+            return res.status(404).send('Benutzer nicht gefunden');
         }
 
         if (
-            isOwner(users[index])
+            String(target.email).toLowerCase() === OWNER_EMAIL
         ) {
-            return res.status(400).json({
-                success: false,
-                error: "Der Owner kann nicht gelöscht werden."
-            });
+            return res.status(403).send('Owner kann nicht gesperrt werden');
         }
 
-        users.splice(index, 1);
-
-        writeJson(
-            USERS_FILE,
-            users
+        await dbRun(
+            `
+            UPDATE users
+            SET banned = 1,
+                updated_at = ?
+            WHERE id = ?
+            `,
+            [now(), id]
         );
 
-        res.json({
-            success: true,
-            message: "Benutzer gelöscht."
-        });
+        await logAction(
+            req.user.id,
+            'USER_BAN',
+            'Benutzer #' + id + ' gesperrt'
+        );
+
+        res.redirect('/admin');
+
+    } catch (error) {
+
+        console.error(error);
+        res.status(500).send('Fehler');
     }
-);
+});
+
+app.post('/admin/user/:id/unban', requireAdmin, async function (req, res) {
+
+    try {
+
+        const id = Number(req.params.id);
+
+        await dbRun(
+            `
+            UPDATE users
+            SET banned = 0,
+                updated_at = ?
+            WHERE id = ?
+            `,
+            [now(), id]
+        );
+
+        await logAction(
+            req.user.id,
+            'USER_UNBAN',
+            'Benutzer #' + id + ' entsperrt'
+        );
+
+        res.redirect('/admin');
+
+    } catch (error) {
+
+        console.error(error);
+        res.status(500).send('Fehler');
+    }
+});
 
 /* ============================================================
-   OWNER - SERVER SPERREN
+   ADMIN SERVER STOP
    ============================================================ */
 
-app.post(
-    "/api/owner/servers/:id/lock",
-    requireOwner,
-    (req, res) => {
-        const server = findServer(
-            req.params.id
+app.post('/admin/server/:id/stop', requireAdmin, async function (req, res) {
+
+    try {
+
+        const id = Number(req.params.id);
+
+        await dbRun(
+            `
+            UPDATE servers
+            SET status = 'offline',
+                updated_at = ?
+            WHERE id = ?
+            `,
+            [now(), id]
         );
 
-        if (!server) {
-            return res.status(404).json({
-                success: false,
-                error: "Server nicht gefunden."
-            });
-        }
-
-        server.locked = true;
-
-        if (serverIsRunning(server.id)) {
-            stopMinecraft(server);
-        }
-
-        appendServerLog(
-            server,
-            "Server vom Owner gesperrt."
+        await logAction(
+            req.user.id,
+            'ADMIN_SERVER_STOP',
+            'Server #' + id + ' gestoppt'
         );
 
-        res.json({
-            success: true
-        });
+        res.redirect('/admin');
+
+    } catch (error) {
+
+        console.error(error);
+        res.status(500).send('Fehler');
     }
-);
+});
 
 /* ============================================================
-   OWNER - SERVER ENTSPERREN
+   ADMIN SERVER LOCK
    ============================================================ */
 
-app.post(
-    "/api/owner/servers/:id/unlock",
-    requireOwner,
-    (req, res) => {
-        const server = findServer(
-            req.params.id
+app.post('/admin/server/:id/lock', requireAdmin, async function (req, res) {
+
+    try {
+
+        const id = Number(req.params.id);
+
+        await dbRun(
+            `
+            UPDATE servers
+            SET locked = 1,
+                status = 'offline',
+                updated_at = ?
+            WHERE id = ?
+            `,
+            [now(), id]
         );
 
-        if (!server) {
-            return res.status(404).json({
-                success: false,
-                error: "Server nicht gefunden."
-            });
-        }
-
-        server.locked = false;
-
-        appendServerLog(
-            server,
-            "Server vom Owner entsperrt."
+        await logAction(
+            req.user.id,
+            'ADMIN_SERVER_LOCK',
+            'Server #' + id + ' gesperrt'
         );
 
-        res.json({
-            success: true
-        });
+        res.redirect('/admin');
+
+    } catch (error) {
+
+        console.error(error);
+        res.status(500).send('Fehler');
     }
-);
+});
 
 /* ============================================================
-   OWNER - WARTUNG
+   ADMIN SERVER DELETE
    ============================================================ */
 
-app.post(
-    "/api/owner/servers/:id/maintenance",
-    requireOwner,
-    (req, res) => {
-        const server = findServer(
-            req.params.id
+app.post('/admin/server/:id/delete', requireAdmin, async function (req, res) {
+
+    try {
+
+        const id = Number(req.params.id);
+
+        await dbRun(
+            `
+            DELETE FROM servers
+            WHERE id = ?
+            `,
+            [id]
         );
 
-        if (!server) {
-            return res.status(404).json({
-                success: false,
-                error: "Server nicht gefunden."
-            });
-        }
-
-        const enabled =
-            Boolean(req.body.enabled);
-
-        server.maintenance =
-            enabled;
-
-        if (
-            enabled &&
-            serverIsRunning(server.id)
-        ) {
-            stopMinecraft(server);
-        }
-
-        appendServerLog(
-            server,
-            enabled
-                ? "Wartungsmodus aktiviert."
-                : "Wartungsmodus deaktiviert."
+        await logAction(
+            req.user.id,
+            'ADMIN_SERVER_DELETE',
+            'Server #' + id + ' gelöscht'
         );
 
-        res.json({
-            success: true,
-            maintenance:
-                server.maintenance
-        });
+        res.redirect('/admin');
+
+    } catch (error) {
+
+        console.error(error);
+        res.status(500).send('Fehler');
     }
-);
+});
 
 /* ============================================================
-   OWNER - SERVER START
+   ADMIN WARTUNG
    ============================================================ */
 
-app.post(
-    "/api/owner/servers/:id/start",
-    requireOwner,
-    (req, res) => {
-        try {
-            const server = findServer(
-                req.params.id
-            );
+app.post('/admin/maintenance/on', requireAdmin, async function (req, res) {
 
-            if (!server) {
-                return res.status(404).json({
-                    success: false,
-                    error: "Server nicht gefunden."
-                });
-            }
+    try {
 
-            startMinecraft(server);
+        await dbRun(
+            `
+            UPDATE settings
+            SET value = '1'
+            WHERE key = 'maintenance'
+            `
+        );
 
-            res.json({
-                success: true
-            });
-        } catch (error) {
-            res.status(400).json({
-                success: false,
-                error: error.message
-            });
-        }
+        await dbRun(
+            `
+            UPDATE servers
+            SET maintenance = 1,
+                status = 'offline',
+                updated_at = ?
+            `,
+            [now()]
+        );
+
+        await logAction(
+            req.user.id,
+            'GLOBAL_MAINTENANCE_ON',
+            'Globale Wartung aktiviert'
+        );
+
+        res.redirect('/admin');
+
+    } catch (error) {
+
+        console.error(error);
+        res.status(500).send('Fehler');
     }
-);
+});
+
+app.post('/admin/maintenance/off', requireAdmin, async function (req, res) {
+
+    try {
+
+        await dbRun(
+            `
+            UPDATE settings
+            SET value = '0'
+            WHERE key = 'maintenance'
+            `
+        );
+
+        await dbRun(
+            `
+            UPDATE servers
+            SET maintenance = 0,
+                updated_at = ?
+            `,
+            [now()]
+        );
+
+        await logAction(
+            req.user.id,
+            'GLOBAL_MAINTENANCE_OFF',
+            'Globale Wartung deaktiviert'
+        );
+
+        res.redirect('/admin');
+
+    } catch (error) {
+
+        console.error(error);
+        res.status(500).send('Fehler');
+    }
+});
 
 /* ============================================================
-   OWNER - SERVER STOP
+   ALLE SERVER HERUNTERFAHREN
    ============================================================ */
 
-app.post(
-    "/api/owner/servers/:id/stop",
-    requireOwner,
-    (req, res) => {
-        try {
-            const server = findServer(
-                req.params.id
-            );
+app.post('/admin/shutdown', requireAdmin, async function (req, res) {
 
-            if (!server) {
-                return res.status(404).json({
-                    success: false,
-                    error: "Server nicht gefunden."
-                });
-            }
+    try {
 
-            stopMinecraft(server);
+        await dbRun(
+            `
+            UPDATE servers
+            SET status = 'offline',
+                updated_at = ?
+            `,
+            [now()]
+        );
 
-            res.json({
-                success: true
-            });
-        } catch (error) {
-            res.status(400).json({
-                success: false,
-                error: error.message
-            });
-        }
+        await logAction(
+            req.user.id,
+            'GLOBAL_SHUTDOWN',
+            'Alle Server heruntergefahren'
+        );
+
+        res.redirect('/admin');
+
+    } catch (error) {
+
+        console.error(error);
+        res.status(500).send('Fehler');
     }
-);
+});
 
 /* ============================================================
-   OWNER - ALLE SERVER HERUNTERFAHREN
+   HEALTH CHECK
    ============================================================ */
 
-app.post(
-    "/api/owner/shutdown-all",
-    requireOwner,
-    (req, res) => {
-        let stopped = 0;
-
-        for (const server of servers) {
-            if (
-                serverIsRunning(server.id)
-            ) {
-                try {
-                    stopMinecraft(server);
-                    stopped++;
-                } catch {}
-            }
-        }
-
-        res.json({
-            success: true,
-            stopped
-        });
-    }
-);
-
-/* ============================================================
-   OWNER - SERVER LÖSCHEN
-   ============================================================ */
-
-app.delete(
-    "/api/owner/servers/:id",
-    requireOwner,
-    (req, res) => {
-        try {
-            const index =
-                servers.findIndex(
-                    server =>
-                        server.id ===
-                        req.params.id
-                );
-
-            if (index === -1) {
-                return res.status(404).json({
-                    success: false,
-                    error: "Server nicht gefunden."
-                });
-            }
-
-            const server =
-                servers[index];
-
-            if (
-                serverIsRunning(server.id)
-            ) {
-                stopMinecraft(server);
-            }
-
-            processes.delete(
-                server.id
-            );
-
-            const directory =
-                serverDirectory(server);
-
-            if (fs.existsSync(directory)) {
-                fs.rmSync(
-                    directory,
-                    {
-                        recursive: true,
-                        force: true
-                    }
-                );
-            }
-
-            servers.splice(index, 1);
-
-            writeJson(
-                SERVERS_FILE,
-                servers
-            );
-
-            res.json({
-                success: true
-            });
-        } catch (error) {
-            res.status(500).json({
-                success: false,
-                error: error.message
-            });
-        }
-    }
-);
-
-/* ============================================================
-   OWNER - SERVER UMBENENNEN
-   ============================================================ */
-
-app.patch(
-    "/api/owner/servers/:id",
-    requireOwner,
-    (req, res) => {
-        const server = findServer(
-            req.params.id
-        );
-
-        if (!server) {
-            return res.status(404).json({
-                success: false,
-                error: "Server nicht gefunden."
-            });
-        }
-
-        const name = safeServerName(
-            req.body.name
-        );
-
-        server.name = name;
-
-        writeJson(
-            SERVERS_FILE,
-            servers
-        );
-
-        res.json({
-            success: true,
-            server
-        });
-    }
-);
-
-/* ============================================================
-   OWNER - USER ROLLE
-   ============================================================ */
-
-app.post(
-    "/api/owner/users/:id/role",
-    requireOwner,
-    (req, res) => {
-        const user = findUserById(
-            req.params.id
-        );
-
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                error: "Benutzer nicht gefunden."
-            });
-        }
-
-        if (isOwner(user)) {
-            return res.status(400).json({
-                success: false,
-                error: "Owner-Rolle kann nicht geändert werden."
-            });
-        }
-
-        const allowed = [
-            "user",
-            "support",
-            "moderator",
-            "admin"
-        ];
-
-        const role = String(
-            req.body.role || "user"
-        ).toLowerCase();
-
-        if (!allowed.includes(role)) {
-            return res.status(400).json({
-                success: false,
-                error: "Ungültige Rolle."
-            });
-        }
-
-        user.role = role;
-
-        writeJson(
-            USERS_FILE,
-            users
-        );
-
-        res.json({
-            success: true,
-            role
-        });
-    }
-);
-
-/* ============================================================
-   HTML
-   ============================================================ */
-
-const HTML = `<!DOCTYPE html>
-<html lang="de">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-<title>Florian / WeisserHai Minecraft Hosting</title>
-
-<style>
-
-* {
-    box-sizing: border-box;
-}
-
-body {
-    margin: 0;
-    font-family:
-        Arial,
-        Helvetica,
-        sans-serif;
-
-    background:
-        #0a0f18;
-
-    color: #fff;
-}
-
-button,
-input,
-textarea,
-select {
-    font: inherit;
-}
-
-button {
-    cursor: pointer;
-}
-
-.nav {
-    height: 70px;
-
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-
-    padding: 0 25px;
-
-    background: #101826;
-
-    border-bottom:
-        1px solid #243148;
-
-    position: sticky;
-    top: 0;
-    z-index: 100;
-}
-
-.logo {
-    font-size: 21px;
-    font-weight: bold;
-}
-
-.logo span {
-    color: #55a7ff;
-}
-
-.nav-user {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-}
-
-.container {
-    max-width: 1250px;
-    margin: 0 auto;
-    padding: 30px 20px;
-}
-
-.card {
-    background: #111a29;
-    border: 1px solid #243148;
-    border-radius: 15px;
-    padding: 20px;
-    margin-bottom: 20px;
-}
-
-.auth {
-    max-width: 430px;
-    margin: 80px auto;
-}
-
-h1,
-h2,
-h3 {
-    margin-top: 0;
-}
-
-input,
-textarea,
-select {
-    width: 100%;
-    padding: 12px;
-    margin: 7px 0 13px;
-
-    background: #0a101b;
-    border: 1px solid #2b3b56;
-    border-radius: 9px;
-
-    color: #fff;
-}
-
-textarea {
-    min-height: 300px;
-    resize: vertical;
-
-    font-family:
-        Consolas,
-        monospace;
-}
-
-button {
-    border: 0;
-    border-radius: 9px;
-    padding: 11px 15px;
-    background: #3185e5;
-    color: white;
-    font-weight: bold;
-}
-
-button:hover {
-    opacity: .88;
-}
-
-button.danger {
-    background: #d64040;
-}
-
-button.success {
-    background: #26995d;
-}
-
-button.warning {
-    background: #c38b28;
-}
-
-button.secondary {
-    background: #303e55;
-}
-
-.grid {
-    display: grid;
-    grid-template-columns:
-        repeat(auto-fit, minmax(270px, 1fr));
-
-    gap: 18px;
-}
-
-.server {
-    background: #0c1421;
-    border: 1px solid #263650;
-    border-radius: 13px;
-    padding: 18px;
-}
-
-.server-title {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-}
-
-.status {
-    display: inline-block;
-    padding: 5px 9px;
-    border-radius: 999px;
-    font-size: 12px;
-    background: #303e55;
-}
-
-.status.running {
-    background: #167346;
-}
-
-.status.offline {
-    background: #4b5566;
-}
-
-.status.locked {
-    background: #a53535;
-}
-
-.actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 15px;
-}
-
-.hidden {
-    display: none !important;
-}
-
-.error {
-    color: #ff7171;
-    margin: 10px 0;
-}
-
-.success-text {
-    color: #55df99;
-}
-
-.muted {
-    color: #9aa8bd;
-}
-
-.console {
-    background: #05080d;
-    border: 1px solid #263650;
-    border-radius: 10px;
-    padding: 12px;
-
-    height: 330px;
-    overflow: auto;
-
-    white-space: pre-wrap;
-
-    font-family: Consolas, monospace;
-    font-size: 13px;
-}
-
-.row {
-    display: flex;
-    gap: 10px;
-}
-
-.row > * {
-    flex: 1;
-}
-
-.top-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-bottom: 20px;
-}
-
-table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-th,
-td {
-    padding: 11px;
-    border-bottom: 1px solid #263650;
-    text-align: left;
-}
-
-.badge {
-    display: inline-block;
-    padding: 4px 8px;
-    border-radius: 6px;
-    background: #273650;
-    font-size: 12px;
-}
-
-.owner {
-    background:
-        linear-gradient(
-            135deg,
-            #101c30,
-            #142947
-        );
-    border-color: #3d83ca;
-}
-
-#toast {
-    position: fixed;
-    right: 20px;
-    bottom: 20px;
-
-    background: #18253a;
-    border: 1px solid #344966;
-
-    padding: 13px 17px;
-    border-radius: 10px;
-
-    display: none;
-
-    z-index: 1000;
-}
-
-</style>
-</head>
-
-<body>
-
-<div class="nav">
-
-    <div class="logo">
-        Florian /
-        <span>WeisserHai Minecraft Hosting</span>
-    </div>
-
-    <div id="navUser" class="nav-user"></div>
-
-</div>
-
-<div class="container">
-
-    <div id="authPage">
-
-        <div class="auth card">
-
-            <h1>Willkommen</h1>
-
-            <p class="muted">
-                Minecraft Hosting
-            </p>
-
-            <div id="loginBox">
-
-                <h2>Login</h2>
-
-                <input
-                    id="loginEmail"
-                    type="email"
-                    placeholder="E-Mail"
-                >
-
-                <input
-                    id="loginPassword"
-                    type="password"
-                    placeholder="Passwort"
-                >
-
-                <button
-                    onclick="login()"
-                    style="width:100%"
-                >
-                    Einloggen
-                </button>
-
-                <br><br>
-
-                <button
-                    class="secondary"
-                    onclick="showRegister()"
-                    style="width:100%"
-                >
-                    Neues Konto erstellen
-                </button>
-
-                <div id="loginError" class="error"></div>
-
-            </div>
-
-            <div id="registerBox" class="hidden">
-
-                <h2>Registrieren</h2>
-
-                <input
-                    id="registerUsername"
-                    placeholder="Benutzername"
-                >
-
-                <input
-                    id="registerEmail"
-                    type="email"
-                    placeholder="E-Mail"
-                >
-
-                <input
-                    id="registerPassword"
-                    type="password"
-                    placeholder="Passwort"
-                >
-
-                <button
-                    onclick="register()"
-                    style="width:100%"
-                >
-                    Registrieren
-                </button>
-
-                <br><br>
-
-                <button
-                    class="secondary"
-                    onclick="showLogin()"
-                    style="width:100%"
-                >
-                    Zurück zum Login
-                </button>
-
-                <div
-                    id="registerError"
-                    class="error"
-                ></div>
-
-            </div>
-
-        </div>
-
-    </div>
-
-    <div id="appPage" class="hidden">
-
-        <div class="top-actions">
-
-            <button onclick="showDashboard()">
-                Dashboard
-            </button>
-
-            <button
-                id="ownerButton"
-                class="warning hidden"
-                onclick="showOwner()"
-            >
-                Owner Panel
-            </button>
-
-            <button
-                class="secondary"
-                onclick="logout()"
-            >
-                Logout
-            </button>
-
-        </div>
-
-        <div id="dashboardPage">
-
-            <div class="card">
-
-                <h1>Dein Minecraft Hosting</h1>
-
-                <p class="muted">
-                    Erstelle und verwalte deine Minecraft-Server.
-                </p>
-
-                <div class="row">
-
-                    <div>
-                        <label>Servername</label>
-
-                        <input
-                            id="newServerName"
-                            placeholder="Mein Minecraft Server"
-                        >
-                    </div>
-
-                    <div>
-                        <label>RAM</label>
-
-                        <select id="newServerMemory">
-
-                            <option value="1G">
-                                1 GB
-                            </option>
-
-                            <option value="2G">
-                                2 GB
-                            </option>
-
-                            <option value="4G">
-                                4 GB
-                            </option>
-
-                            <option value="8G">
-                                8 GB
-                            </option>
-
-                        </select>
-
-                    </div>
-
-                </div>
-
-                <button onclick="createServer()">
-                    + Server erstellen
-                </button>
-
-            </div>
-
-            <div class="card">
-
-                <h2>Meine Server</h2>
-
-                <div
-                    id="serverList"
-                    class="grid"
-                ></div>
-
-            </div>
-
-        </div>
-
-        <div id="serverPage" class="hidden">
-
-            <div class="top-actions">
-
-                <button
-                    class="secondary"
-                    onclick="showDashboard()"
-                >
-                    ← Zurück
-                </button>
-
-            </div>
-
-            <div
-                id="serverDetails"
-            ></div>
-
-            <div class="card">
-
-                <h2>Konsole</h2>
-
-                <div
-                    id="console"
-                    class="console"
-                ></div>
-
-                <div class="row">
-
-                    <input
-                        id="consoleCommand"
-                        placeholder="Minecraft-Befehl, z.B. say Hallo"
-                        onkeydown="if(event.key==='Enter') sendCommand()"
-                    >
-
-                    <button
-                        onclick="sendCommand()"
-                    >
-                        Senden
-                    </button>
-
-                </div>
-
-            </div>
-
-            <div class="card">
-
-                <h2>Dateien / Coding</h2>
-
-                <div class="row">
-
-                    <div>
-
-                        <h3>Dateien</h3>
-
-                        <div id="fileList"></div>
-
-                    </div>
-
-                    <div>
-
-                        <input
-                            id="filePath"
-                            placeholder="z.B. server.properties"
-                        >
-
-                        <textarea
-                            id="fileContent"
-                            placeholder="Dateiinhalt..."
-                        ></textarea>
-
-                        <div class="actions">
-
-                            <button
-                                onclick="loadFile()"
-                            >
-                                Datei laden
-                            </button>
-
-                            <button
-                                onclick="saveFile()"
-                                class="success"
-                            >
-                                Speichern
-                            </button>
-
-                            <button
-                                onclick="createFile()"
-                                class="secondary"
-                            >
-                                Neue Datei
-                            </button>
-
-                        </div>
-
-                    </div>
-
-                </div>
-
-            </div>
-
-        </div>
-
-        <div
-            id="ownerPage"
-            class="hidden"
-        >
-
-            <div class="card owner">
-
-                <h1>👑 Owner Panel</h1>
-
-                <p class="muted">
-                    Nur für
-                    florianzustolberg@gmail.com
-                </p>
-
-                <button
-                    class="danger"
-                    onclick="shutdownAll()"
-                >
-                    Alle Server herunterfahren
-                </button>
-
-            </div>
-
-            <div class="card">
-
-                <h2>Alle Server</h2>
-
-                <div id="ownerServers"></div>
-
-            </div>
-
-            <div class="card">
-
-                <h2>Benutzer</h2>
-
-                <div id="ownerUsers"></div>
-
-            </div>
-
-        </div>
-
-    </div>
-
-</div>
-
-<div id="toast"></div>
-
-<script>
-
-let currentUser = null;
-let currentServer = null;
-
-function toast(message) {
-
-    const el =
-        document.getElementById("toast");
-
-    el.textContent = message;
-    el.style.display = "block";
-
-    setTimeout(() => {
-        el.style.display = "none";
-    }, 3000);
-}
-
-async function api(url, options = {}) {
-
-    const response =
-        await fetch(url, {
-            credentials: "same-origin",
-            ...options,
-            headers: {
-                "Content-Type":
-                    "application/json",
-                ...(options.headers || {})
-            }
-        });
-
-    let data = {};
-
-    try {
-        data = await response.json();
-    } catch {}
-
-    if (!response.ok) {
-        throw new Error(
-            data.error ||
-            "Anfrage fehlgeschlagen."
-        );
-    }
-
-    return data;
-}
-
-function showLogin() {
-
-    document
-        .getElementById("loginBox")
-        .classList.remove("hidden");
-
-    document
-        .getElementById("registerBox")
-        .classList.add("hidden");
-}
-
-function showRegister() {
-
-    document
-        .getElementById("loginBox")
-        .classList.add("hidden");
-
-    document
-        .getElementById("registerBox")
-        .classList.remove("hidden");
-}
-
-async function login() {
-
-    const email =
-        document.getElementById(
-            "loginEmail"
-        ).value;
-
-    const password =
-        document.getElementById(
-            "loginPassword"
-        ).value;
-
-    try {
-
-        const data =
-            await api(
-                "/api/login",
-                {
-                    method: "POST",
-                    body: JSON.stringify({
-                        email,
-                        password
-                    })
-                }
-            );
-
-        currentUser = data.user;
-
-        openApp();
-
-        toast(
-            "Erfolgreich eingeloggt."
-        );
-
-    } catch (error) {
-
-        document
-            .getElementById(
-                "loginError"
-            )
-            .textContent =
-            error.message;
-    }
-}
-
-async function register() {
-
-    const username =
-        document.getElementById(
-            "registerUsername"
-        ).value;
-
-    const email =
-        document.getElementById(
-            "registerEmail"
-        ).value;
-
-    const password =
-        document.getElementById(
-            "registerPassword"
-        ).value;
-
-    try {
-
-        const data =
-            await api(
-                "/api/register",
-                {
-                    method: "POST",
-                    body: JSON.stringify({
-                        username,
-                        email,
-                        password
-                    })
-                }
-            );
-
-        currentUser = data.user;
-
-        openApp();
-
-        toast(
-            "Konto erstellt."
-        );
-
-    } catch (error) {
-
-        document
-            .getElementById(
-                "registerError"
-            )
-            .textContent =
-            error.message;
-    }
-}
-
-async function logout() {
-
-    try {
-        await api(
-            "/api/logout",
-            {
-                method: "POST"
-            }
-        );
-    } catch {}
-
-    currentUser = null;
-    currentServer = null;
-
-    document
-        .getElementById("appPage")
-        .classList.add("hidden");
-
-    document
-        .getElementById("authPage")
-        .classList.remove("hidden");
-
-    showLogin();
-
-    toast("Ausgeloggt.");
-}
-
-function openApp() {
-
-    document
-        .getElementById("authPage")
-        .classList.add("hidden");
-
-    document
-        .getElementById("appPage")
-        .classList.remove("hidden");
-
-    const nav =
-        document.getElementById(
-            "navUser"
-        );
-
-    nav.innerHTML =
-        "<span>" +
-        escapeHtml(
-            currentUser.username
-        ) +
-        "</span> " +
-        "<span class='badge'>" +
-        escapeHtml(
-            currentUser.coins
-        ) +
-        " Coins</span>";
-
-    if (currentUser.owner) {
-
-        document
-            .getElementById(
-                "ownerButton"
-            )
-            .classList.remove(
-                "hidden"
-            );
-
-    } else {
-
-        document
-            .getElementById(
-                "ownerButton"
-            )
-            .classList.add(
-                "hidden"
-            );
-    }
-
-    showDashboard();
-}
-
-function showDashboard() {
-
-    document
-        .getElementById(
-            "dashboardPage"
-        )
-        .classList.remove(
-            "hidden"
-        );
-
-    document
-        .getElementById(
-            "serverPage"
-        )
-        .classList.add(
-            "hidden"
-        );
-
-    document
-        .getElementById(
-            "ownerPage"
-        )
-        .classList.add(
-            "hidden"
-        );
-
-    loadServers();
-}
-
-function showOwner() {
-
-    if (!currentUser.owner) {
-        return;
-    }
-
-    document
-        .getElementById(
-            "dashboardPage"
-        )
-        .classList.add(
-            "hidden"
-        );
-
-    document
-        .getElementById(
-            "serverPage"
-        )
-        .classList.add(
-            "hidden"
-        );
-
-    document
-        .getElementById(
-            "ownerPage"
-        )
-        .classList.remove(
-            "hidden"
-        );
-
-    loadOwner();
-}
-
-async function loadServers() {
-
-    try {
-
-        const data =
-            await api(
-                "/api/servers"
-            );
-
-        const list =
-            document.getElementById(
-                "serverList"
-            );
-
-        if (!data.servers.length) {
-
-            list.innerHTML =
-                "<p class='muted'>" +
-                "Noch keine Server." +
-                "</p>";
-
-            return;
-        }
-
-        list.innerHTML =
-            data.servers.map(
-                server => {
-
-                    let status =
-                        server.status;
-
-                    let statusClass =
-                        status === "running"
-                            ? "running"
-                            : "offline";
-
-                    if (server.locked) {
-                        statusClass =
-                            "locked";
-                    }
-
-                    return \`
-                        <div class="server">
-
-                            <div class="server-title">
-
-                                <h3>
-                                    \${escapeHtml(
-                                        server.name
-                                    )}
-                                </h3>
-
-                                <span
-                                    class="status \${statusClass}"
-                                >
-                                    \${server.locked
-                                        ? "GESPERRT"
-                                        : escapeHtml(
-                                            status
-                                        )}
-                                </span>
-
-                            </div>
-
-                            <p class="muted">
-                                RAM:
-                                \${escapeHtml(
-                                    server.memory
-                                )}
-                            </p>
-
-                            <div class="actions">
-
-                                <button
-                                    onclick="openServer('\${server.id}')"
-                                >
-                                    Verwalten
-                                </button>
-
-                                <button
-                                    class="success"
-                                    onclick="serverAction('\${server.id}', 'start')"
-                                >
-                                    Start
-                                </button>
-
-                                <button
-                                    class="warning"
-                                    onclick="serverAction('\${server.id}', 'restart')"
-                                >
-                                    Neustart
-                                </button>
-
-                                <button
-                                    class="danger"
-                                    onclick="serverAction('\${server.id}', 'stop')"
-                                >
-                                    Stop
-                                </button>
-
-                            </div>
-
-                        </div>
-                    \`;
-                }
-            ).join("");
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function createServer() {
-
-    const name =
-        document.getElementById(
-            "newServerName"
-        ).value;
-
-    const memory =
-        document.getElementById(
-            "newServerMemory"
-        ).value;
-
-    try {
-
-        await api(
-            "/api/servers",
-            {
-                method: "POST",
-                body: JSON.stringify({
-                    name,
-                    memory
-                })
-            }
-        );
-
-        document.getElementById(
-            "newServerName"
-        ).value = "";
-
-        toast(
-            "Minecraft-Server erstellt."
-        );
-
-        loadServers();
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function serverAction(
-    id,
-    action
-) {
-
-    try {
-
-        await api(
-            "/api/servers/" +
-            id +
-            "/" +
-            action,
-            {
-                method: "POST"
-            }
-        );
-
-        toast(
-            "Aktion ausgeführt."
-        );
-
-        loadServers();
-
-        if (
-            currentServer &&
-            currentServer.id === id
-        ) {
-            loadServerDetails();
-        }
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function openServer(id) {
-
-    currentServer = {
-        id
-    };
-
-    document
-        .getElementById(
-            "dashboardPage"
-        )
-        .classList.add(
-            "hidden"
-        );
-
-    document
-        .getElementById(
-            "serverPage"
-        )
-        .classList.remove(
-            "hidden"
-        );
-
-    await loadServerDetails();
-    await loadLogs();
-    await loadFiles();
-}
-
-async function loadServerDetails() {
-
-    if (!currentServer) return;
-
-    try {
-
-        const data =
-            await api(
-                "/api/servers/" +
-                currentServer.id
-            );
-
-        currentServer =
-            data.server;
-
-        const el =
-            document.getElementById(
-                "serverDetails"
-            );
-
-        el.innerHTML = \`
-            <div class="card">
-
-                <h1>
-                    \${escapeHtml(
-                        currentServer.name
-                    )}
-                </h1>
-
-                <p class="muted">
-                    Status:
-                    \${escapeHtml(
-                        currentServer.status
-                    )}
-                </p>
-
-                <p>
-                    RAM:
-                    \${escapeHtml(
-                        currentServer.memory
-                    )}
-                </p>
-
-                <p>
-                    \${currentServer.locked
-                        ? "🔒 Server gesperrt"
-                        : "🔓 Server nicht gesperrt"}
-                </p>
-
-                <p>
-                    \${currentServer.maintenance
-                        ? "🛠 Wartungsmodus aktiv"
-                        : ""}
-                </p>
-
-                <div class="actions">
-
-                    <button
-                        class="success"
-                        onclick="serverAction('${currentServer.id}', 'start')"
-                    >
-                        Start
-                    </button>
-
-                    <button
-                        class="warning"
-                        onclick="serverAction('${currentServer.id}', 'restart')"
-                    >
-                        Neustart
-                    </button>
-
-                    <button
-                        class="danger"
-                        onclick="serverAction('${currentServer.id}', 'stop')"
-                    >
-                        Stop
-                    </button>
-
-                    <button
-                        class="secondary"
-                        onclick="loadServerDetails()"
-                    >
-                        Aktualisieren
-                    </button>
-
-                </div>
-
-            </div>
-        \`;
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function loadLogs() {
-
-    if (!currentServer) return;
-
-    try {
-
-        const data =
-            await api(
-                "/api/servers/" +
-                currentServer.id +
-                "/logs"
-            );
-
-        const consoleEl =
-            document.getElementById(
-                "console"
-            );
-
-        consoleEl.textContent =
-            data.logs.join("\\n");
-
-        consoleEl.scrollTop =
-            consoleEl.scrollHeight;
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function sendCommand() {
-
-    const input =
-        document.getElementById(
-            "consoleCommand"
-        );
-
-    const command =
-        input.value.trim();
-
-    if (!command) return;
-
-    try {
-
-        await api(
-            "/api/servers/" +
-            currentServer.id +
-            "/console",
-            {
-                method: "POST",
-                body: JSON.stringify({
-                    command
-                })
-            }
-        );
-
-        input.value = "";
-
-        await loadLogs();
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function loadFiles() {
-
-    if (!currentServer) return;
-
-    try {
-
-        const data =
-            await api(
-                "/api/servers/" +
-                currentServer.id +
-                "/files"
-            );
-
-        const list =
-            document.getElementById(
-                "fileList"
-            );
-
-        list.innerHTML =
-            data.files.map(
-                file => \`
-                    <div
-                        style="
-                            padding:8px;
-                            border-bottom:1px solid #263650;
-                        "
-                    >
-
-                        \${file.type === "file"
-                            ? "📄"
-                            : "📁"}
-
-                        <a
-                            href="#"
-                            onclick="selectFile('\${encodeURIComponent(file.path)}');return false;"
-                            style="color:#62b0ff"
-                        >
-                            \${escapeHtml(
-                                file.path
-                            )}
-                        </a>
-
-                    </div>
-                \`
-            ).join("");
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function selectFile(encoded) {
-
-    const file =
-        decodeURIComponent(encoded);
-
-    document.getElementById(
-        "filePath"
-    ).value = file;
-
-    await loadFile();
-}
-
-async function loadFile() {
-
-    const file =
-        document.getElementById(
-            "filePath"
-        ).value.trim();
-
-    if (!file) {
-        toast(
-            "Dateipfad eingeben."
-        );
-        return;
-    }
-
-    try {
-
-        const data =
-            await api(
-                "/api/servers/" +
-                currentServer.id +
-                "/file?path=" +
-                encodeURIComponent(file)
-            );
-
-        document.getElementById(
-            "fileContent"
-        ).value =
-            data.content;
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function saveFile() {
-
-    const file =
-        document.getElementById(
-            "filePath"
-        ).value.trim();
-
-    const content =
-        document.getElementById(
-            "fileContent"
-        ).value;
-
-    try {
-
-        await api(
-            "/api/servers/" +
-            currentServer.id +
-            "/file",
-            {
-                method: "PUT",
-                body: JSON.stringify({
-                    path: file,
-                    content
-                })
-            }
-        );
-
-        toast(
-            "Datei gespeichert."
-        );
-
-        loadFiles();
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function createFile() {
-
-    const file =
-        document.getElementById(
-            "filePath"
-        ).value.trim();
-
-    if (!file) {
-        toast(
-            "Dateipfad eingeben."
-        );
-        return;
-    }
-
-    try {
-
-        await api(
-            "/api/servers/" +
-            currentServer.id +
-            "/file",
-            {
-                method: "POST",
-                body: JSON.stringify({
-                    path: file,
-                    content: ""
-                })
-            }
-        );
-
-        toast(
-            "Datei erstellt."
-        );
-
-        loadFiles();
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function loadOwner() {
-
-    try {
-
-        const serverData =
-            await api(
-                "/api/owner/servers"
-            );
-
-        const userData =
-            await api(
-                "/api/owner/users"
-            );
-
-        renderOwnerServers(
-            serverData.servers
-        );
-
-        renderOwnerUsers(
-            userData.users
-        );
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-function renderOwnerServers(
-    list
-) {
-
-    const el =
-        document.getElementById(
-            "ownerServers"
-        );
-
-    if (!list.length) {
-
-        el.innerHTML =
-            "<p class='muted'>" +
-            "Keine Server vorhanden." +
-            "</p>";
-
-        return;
-    }
-
-    el.innerHTML =
-        list.map(
-            server => \`
-
-                <div class="server">
-
-                    <h3>
-                        \${escapeHtml(
-                            server.name
-                        )}
-                    </h3>
-
-                    <p class="muted">
-                        Besitzer:
-                        \${escapeHtml(
-                            server.ownerId
-                        )}
-                    </p>
-
-                    <p>
-                        Status:
-                        \${escapeHtml(
-                            server.status
-                        )}
-                    </p>
-
-                    <p>
-                        \${server.locked
-                            ? "🔒 Gesperrt"
-                            : "🔓 Frei"}
-                    </p>
-
-                    <div class="actions">
-
-                        <button
-                            class="success"
-                            onclick="ownerServerAction('${server.id}', 'start')"
-                        >
-                            Start
-                        </button>
-
-                        <button
-                            class="danger"
-                            onclick="ownerServerAction('${server.id}', 'stop')"
-                        >
-                            Stop
-                        </button>
-
-                        <button
-                            class="warning"
-                            onclick="ownerMaintenance('${server.id}', true)"
-                        >
-                            Wartung an
-                        </button>
-
-                        <button
-                            class="secondary"
-                            onclick="ownerMaintenance('${server.id}', false)"
-                        >
-                            Wartung aus
-                        </button>
-
-                        <button
-                            class="warning"
-                            onclick="ownerLock('${server.id}', ${!server.locked})"
-                        >
-                            \${server.locked
-                                ? "Entsperren"
-                                : "Sperren"}
-                        </button>
-
-                        <button
-                            class="danger"
-                            onclick="ownerDeleteServer('${server.id}')"
-                        >
-                            Löschen
-                        </button>
-
-                    </div>
-
-                </div>
-
-            \`
-        ).join("");
-}
-
-function renderOwnerUsers(
-    list
-) {
-
-    const el =
-        document.getElementById(
-            "ownerUsers"
-        );
-
-    if (!list.length) {
-
-        el.innerHTML =
-            "<p>Keine Benutzer.</p>";
-
-        return;
-    }
-
-    el.innerHTML =
-        \`
-        <table>
-
-            <thead>
-
-                <tr>
-                    <th>User</th>
-                    <th>E-Mail</th>
-                    <th>Coins</th>
-                    <th>Rolle</th>
-                    <th>Status</th>
-                    <th>Aktionen</th>
-                </tr>
-
-            </thead>
-
-            <tbody>
-
-                \${list.map(
-                    user => \`
-
-                    <tr>
-
-                        <td>
-                            \${escapeHtml(
-                                user.username
-                            )}
-                        </td>
-
-                        <td>
-                            \${escapeHtml(
-                                user.email
-                            )}
-                        </td>
-
-                        <td>
-                            \${escapeHtml(
-                                user.coins
-                            )}
-                        </td>
-
-                        <td>
-                            \${escapeHtml(
-                                user.role
-                            )}
-                        </td>
-
-                        <td>
-                            \${user.banned
-                                ? "🔴 Gebannt"
-                                : "🟢 Aktiv"}
-                        </td>
-
-                        <td>
-
-                            <div class="actions">
-
-                                <button
-                                    onclick="giveCoins('${user.id}')"
-                                >
-                                    + Coins
-                                </button>
-
-                                <button
-                                    class="warning"
-                                    onclick="setRole('${user.id}')"
-                                >
-                                    Rolle
-                                </button>
-
-                                \${user.banned
-                                    ? \`
-                                        <button
-                                            class="success"
-                                            onclick="unbanUser('${user.id}')"
-                                        >
-                                            Entbannen
-                                        </button>
-                                      \`
-                                    : \`
-                                        <button
-                                            class="danger"
-                                            onclick="banUser('${user.id}')"
-                                        >
-                                            Bannen
-                                        </button>
-                                      \`}
-
-                                <button
-                                    class="danger"
-                                    onclick="deleteUser('${user.id}')"
-                                >
-                                    Löschen
-                                </button>
-
-                            </div>
-
-                        </td>
-
-                    </tr>
-
-                    \`
-                ).join("")}
-
-            </tbody>
-
-        </table>
-        \`;
-}
-
-async function ownerServerAction(
-    id,
-    action
-) {
-
-    try {
-
-        await api(
-            "/api/owner/servers/" +
-            id +
-            "/" +
-            action,
-            {
-                method: "POST"
-            }
-        );
-
-        toast(
-            "Server-Aktion ausgeführt."
-        );
-
-        loadOwner();
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function ownerMaintenance(
-    id,
-    enabled
-) {
-
-    try {
-
-        await api(
-            "/api/owner/servers/" +
-            id +
-            "/maintenance",
-            {
-                method: "POST",
-                body: JSON.stringify({
-                    enabled
-                })
-            }
-        );
-
-        toast(
-            enabled
-                ? "Wartung aktiviert."
-                : "Wartung deaktiviert."
-        );
-
-        loadOwner();
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function ownerLock(
-    id,
-    lock
-) {
-
-    try {
-
-        await api(
-            "/api/owner/servers/" +
-            id +
-            "/" +
-            (lock
-                ? "lock"
-                : "unlock"),
-            {
-                method: "POST"
-            }
-        );
-
-        toast(
-            lock
-                ? "Server gesperrt."
-                : "Server entsperrt."
-        );
-
-        loadOwner();
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function ownerDeleteServer(
-    id
-) {
-
-    if (
-        !confirm(
-            "Diesen Minecraft-Server wirklich löschen?"
-        )
-    ) {
-        return;
-    }
-
-    try {
-
-        await api(
-            "/api/owner/servers/" +
-            id,
-            {
-                method: "DELETE"
-            }
-        );
-
-        toast(
-            "Server gelöscht."
-        );
-
-        loadOwner();
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function shutdownAll() {
-
-    if (
-        !confirm(
-            "Wirklich ALLE Minecraft-Server herunterfahren?"
-        )
-    ) {
-        return;
-    }
-
-    try {
-
-        const data =
-            await api(
-                "/api/owner/shutdown-all",
-                {
-                    method: "POST"
-                }
-            );
-
-        toast(
-            data.stopped +
-            " Server heruntergefahren."
-        );
-
-        loadOwner();
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function giveCoins(
-    userId
-) {
-
-    const amount =
-        prompt(
-            "Wie viele Coins sollen gegeben werden?"
-        );
-
-    if (amount === null) {
-        return;
-    }
-
-    try {
-
-        await api(
-            "/api/owner/users/" +
-            userId +
-            "/coins",
-            {
-                method: "POST",
-                body: JSON.stringify({
-                    amount:
-                        Number(amount)
-                })
-            }
-        );
-
-        toast(
-            "Coins geändert."
-        );
-
-        loadOwner();
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function banUser(
-    userId
-) {
-
-    if (
-        !confirm(
-            "Benutzer wirklich bannen?"
-        )
-    ) {
-        return;
-    }
-
-    try {
-
-        await api(
-            "/api/owner/users/" +
-            userId +
-            "/ban",
-            {
-                method: "POST"
-            }
-        );
-
-        toast(
-            "Benutzer gebannt."
-        );
-
-        loadOwner();
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function unbanUser(
-    userId
-) {
-
-    try {
-
-        await api(
-            "/api/owner/users/" +
-            userId +
-            "/unban",
-            {
-                method: "POST"
-            }
-        );
-
-        toast(
-            "Benutzer entbannt."
-        );
-
-        loadOwner();
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function deleteUser(
-    userId
-) {
-
-    if (
-        !confirm(
-            "Benutzer wirklich löschen?"
-        )
-    ) {
-        return;
-    }
-
-    try {
-
-        await api(
-            "/api/owner/users/" +
-            userId,
-            {
-                method: "DELETE"
-            }
-        );
-
-        toast(
-            "Benutzer gelöscht."
-        );
-
-        loadOwner();
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-async function setRole(
-    userId
-) {
-
-    const role =
-        prompt(
-            "Rolle eingeben: user, support, moderator oder admin"
-        );
-
-    if (!role) return;
-
-    try {
-
-        await api(
-            "/api/owner/users/" +
-            userId +
-            "/role",
-            {
-                method: "POST",
-                body: JSON.stringify({
-                    role
-                })
-            }
-        );
-
-        toast(
-            "Rolle geändert."
-        );
-
-        loadOwner();
-
-    } catch (error) {
-
-        toast(error.message);
-    }
-}
-
-function escapeHtml(
-    value
-) {
-
-    return String(
-        value ?? ""
-    )
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-}
-
-/* ============================================================
-   AUTO LOGIN
-   ============================================================ */
-
-async function checkLogin() {
-
-    try {
-
-        const data =
-            await api(
-                "/api/status"
-            );
-
-        if (
-            data.loggedIn &&
-            data.user
-        ) {
-
-            currentUser =
-                data.user;
-
-            openApp();
-
-        } else {
-
-            document
-                .getElementById(
-                    "authPage"
-                )
-                .classList.remove(
-                    "hidden"
-                );
-
-        }
-
-    } catch {
-
-        document
-            .getElementById(
-                "authPage"
-            )
-            .classList.remove(
-                "hidden"
-            );
-    }
-}
-
-/* ============================================================
-   AUTOMATISCHE AKTUALISIERUNG
-   ============================================================ */
-
-setInterval(() => {
-
-    if (
-        currentServer &&
-        !document
-            .getElementById(
-                "serverPage"
-            )
-            .classList.contains(
-                "hidden"
-            )
-    ) {
-
-        loadServerDetails();
-        loadLogs();
-    }
-
-}, 5000);
-
-/* ============================================================
-   START
-   ============================================================ */
-
-checkLogin();
-
-</script>
-
-</body>
-</html>`;
-
-/* ============================================================
-   WEBSEITE
-   ============================================================ */
-
-app.get("/", (req, res) => {
-    res.type("html").send(HTML);
+app.get('/health', function (req, res) {
+
+    res.status(200).json({
+        ok: true,
+        service: 'Florian / WeisserHai Minecraft Hosting',
+        node: process.version,
+        time: now()
+    });
 });
 
 /* ============================================================
    404
    ============================================================ */
 
-app.use((req, res) => {
-
-    if (
-        req.path.startsWith("/api/")
-    ) {
-
-        return res.status(404).json({
-            success: false,
-            error: "API-Endpunkt nicht gefunden."
-        });
-    }
+app.use(function (req, res) {
 
     res.status(404).send(
-        "Seite nicht gefunden."
+        page(
+            '404',
+            [
+                '<div class="card">',
+                '<h1>404</h1>',
+                '<p>Diese Seite wurde nicht gefunden.</p>',
+                '<a class="btn" href="/">Zur Startseite</a>',
+                '</div>'
+            ].join('')
+        )
     );
 });
 
@@ -4470,104 +2566,95 @@ app.use((req, res) => {
    ERROR HANDLER
    ============================================================ */
 
-app.use(
-    (error, req, res, next) => {
+app.use(function (error, req, res, next) {
 
-        console.error(
-            "SERVER ERROR:",
-            error
-        );
+    console.error('Express Error:', error);
 
-        if (
-            res.headersSent
-        ) {
-            return next(error);
-        }
+    if (res.headersSent) {
+        return next(error);
+    }
 
-        res.status(500).json({
-            success: false,
-            error:
-                "Interner Serverfehler."
-        });
+    res.status(500).send(
+        page(
+            'Serverfehler',
+            [
+                '<div class="card error">',
+                '<h1>Interner Serverfehler</h1>',
+                '<p>Die Anfrage konnte nicht verarbeitet werden.</p>',
+                '<a class="btn" href="/">Zur Startseite</a>',
+                '</div>'
+            ].join('')
+        )
+    );
+});
+
+/* ============================================================
+   START
+   ============================================================ */
+
+const server = app.listen(
+    PORT,
+    '0.0.0.0',
+    function () {
+
+        console.log('');
+        console.log('==============================================');
+        console.log(' Florian / WeisserHai Minecraft Hosting');
+        console.log('==============================================');
+        console.log('Webseite läuft.');
+        console.log('Port:', PORT);
+        console.log('Node:', process.version);
+        console.log('Owner:', OWNER_EMAIL);
+        console.log('Datenbank:', DB_FILE);
+        console.log('==============================================');
+        console.log('');
     }
 );
 
 /* ============================================================
-   PROZESSE BEIM BEENDEN STOPPEN
+   SAUBERES HERUNTERFAHREN
    ============================================================ */
 
-function shutdown() {
+function shutdown(signal) {
 
     console.log(
-        "Fahre Minecraft-Server herunter..."
+        'Empfangenes Signal:',
+        signal
     );
 
-    for (const [
-        serverId,
-        processData
-    ] of processes) {
+    server.close(function () {
 
-        try {
+        db.close(function () {
 
-            processData.child.stdin.write(
-                "stop\n"
+            console.log(
+                'Server und Datenbank geschlossen.'
             );
 
-        } catch {
-
-            try {
-                processData.child.kill();
-            } catch {}
-        }
-    }
-
-    setTimeout(() => {
-        process.exit(0);
-    }, 5000);
+            process.exit(0);
+        });
+    });
 }
 
-process.on(
-    "SIGTERM",
-    shutdown
-);
+process.on('SIGTERM', function () {
+    shutdown('SIGTERM');
+});
 
-process.on(
-    "SIGINT",
-    shutdown
-);
+process.on('SIGINT', function () {
+    shutdown('SIGINT');
+});
 
-/* ============================================================
-   SERVER STARTEN
-   ============================================================ */
+process.on('uncaughtException', function (error) {
 
-app.listen(
-    PORT,
-    "0.0.0.0",
-    () => {
+    console.error(
+        'UNCAUGHT EXCEPTION:',
+        error
+    );
+});
 
-        console.log("");
-        console.log(
-            "=========================================="
-        );
-        console.log(
-            " Florian / WeisserHai Minecraft Hosting"
-        );
-        console.log(
-            "=========================================="
-        );
-        console.log(
-            `Webseite läuft auf Port ${PORT}`
-        );
-        console.log(
-            `Owner: ${OWNER_EMAIL}`
-        );
-        console.log(
-            `Minecraft JAR: ${MINECRAFT_JAR}`
-        );
-        console.log(
-            "=========================================="
-        );
-        console.log("");
-    }
-);
-```
+process.on('unhandledRejection', function (error) {
+
+    console.error(
+        'UNHANDLED REJECTION:',
+        error
+    );
+});
