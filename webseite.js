@@ -1,1486 +1,1109 @@
 "use strict";
 
 /*
-==========================================================
- Florian / WeisserHai Minecraft Hosting
- komplette webseite.js
-==========================================================
+===========================================================
+ FLORIAN / WEISSERHAI MINECRAFT HOSTING
+===========================================================
 
-Start:
-node webseite.js
+ Node.js 20+ / 24
+ Express Webserver
+ Minecraft Server Management
+ Login / Registrierung
+ Owner Panel
+ Server Prozesse
+ Dateien / Code Editor
+ Wartungsmodus
+ Bannsystem
 
-Pakete:
-npm install express express-session bcryptjs
+ START:
+   node webseite.js
 
-ENV:
-PORT=10000
-SESSION_SECRET=ein-langes-geheimes-geheimnis
+ EMPFOHLENE .env:
+   PORT=10000
+   SESSION_SECRET=DEIN_LANGER_GEHEIMER_SESSION_KEY
+   OWNER_EMAIL=florianzustolberg@gmail.com
 
-OWNER:
-florianzustolberg@gmail.com
+ MINECRAFT:
+   Lege Minecraft-JAR-Dateien unter ./minecraft-jars/
+   ab.
 
-Daten:
-data/users.json
-data/servers.json
-data/settings.json
-data/logs.json
+ Beispiel:
+   minecraft-jars/server.jar
 
-WICHTIG:
-Diese Datei ist die Weboberfläche und Verwaltung.
-Für echte Minecraft-Java-Prozesse muss ein Minecraft-
-Backend/Docker-System angebunden werden.
-==========================================================
+ Hinweis:
+   Für Java/Minecraft muss Java auf dem Hosting-System installiert
+   sein und "java" über PATH erreichbar sein.
+===========================================================
 */
 
 const express = require("express");
 const session = require("express-session");
-const bcrypt = require("bcryptjs");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { spawn } = require("child_process");
+const http = require("http");
+
+try {
+  require("dotenv").config();
+} catch (_) {
+  // dotenv ist optional.
+}
+
+/* =========================================================
+   KONFIGURATION
+========================================================= */
 
 const app = express();
 
-const PORT = Number(process.env.PORT) || 10000;
+const PORT = Number(process.env.PORT || 10000);
+
+const OWNER_EMAIL = String(
+  process.env.OWNER_EMAIL || "florianzustolberg@gmail.com"
+).toLowerCase();
 
 const SESSION_SECRET =
-    process.env.SESSION_SECRET ||
-    "CHANGE_ME_TO_A_LONG_RANDOM_SECRET";
+  process.env.SESSION_SECRET ||
+  "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_123456789";
 
-const OWNER_EMAIL = "florianzustolberg@gmail.com";
+const HOSTING_NAME = "Florian / WeisserHai Minecraft Hosting";
 
-const DATA_DIR = path.join(__dirname, "data");
+const ROOT = __dirname;
 
+const DATA_DIR = path.join(ROOT, "data");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 const SERVERS_FILE = path.join(DATA_DIR, "servers.json");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
-const LOGS_FILE = path.join(DATA_DIR, "logs.json");
+const BANS_FILE = path.join(DATA_DIR, "bans.json");
+const MINECRAFT_DIR = path.join(ROOT, "minecraft-jars");
+const SERVERS_DIR = path.join(ROOT, "minecraft-servers");
 
-if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+/* =========================================================
+   VERZEICHNISSE
+========================================================= */
+
+for (const directory of [
+  DATA_DIR,
+  MINECRAFT_DIR,
+  SERVERS_DIR
+]) {
+  fs.mkdirSync(directory, {
+    recursive: true
+  });
 }
 
 /* =========================================================
-   DATEIEN
+   JSON HILFSFUNKTIONEN
 ========================================================= */
 
-function ensureFile(file, value) {
-    if (!fs.existsSync(file)) {
-        fs.writeFileSync(
-            file,
-            JSON.stringify(value, null, 2),
-            "utf8"
-        );
-    }
-}
-
-ensureFile(USERS_FILE, []);
-ensureFile(SERVERS_FILE, []);
-
-ensureFile(SETTINGS_FILE, {
-    maintenance: false,
-    maintenanceText:
-        "Die Minecraft-Server werden momentan gewartet.",
-    globalServerLock: false
-});
-
-ensureFile(LOGS_FILE, []);
-
-/* =========================================================
-   JSON
-========================================================= */
-
-function readJSON(file, fallback) {
-    try {
-        return JSON.parse(
-            fs.readFileSync(file, "utf8")
-        );
-    } catch (error) {
-        console.error(
-            "Fehler beim Lesen:",
-            file,
-            error.message
-        );
-
-        try {
-            fs.writeFileSync(
-                file,
-                JSON.stringify(fallback, null, 2),
-                "utf8"
-            );
-        } catch {}
-
-        return fallback;
-    }
-}
-
-function writeJSON(file, data) {
+function ensureJsonFile(file, fallback) {
+  if (!fs.existsSync(file)) {
     fs.writeFileSync(
-        file,
-        JSON.stringify(data, null, 2),
-        "utf8"
+      file,
+      JSON.stringify(fallback, null, 2),
+      "utf8"
     );
+  }
 }
 
-function users() {
-    return readJSON(USERS_FILE, []);
+function readJson(file, fallback) {
+  try {
+    if (!fs.existsSync(file)) {
+      fs.writeFileSync(
+        file,
+        JSON.stringify(fallback, null, 2),
+        "utf8"
+      );
+
+      return fallback;
+    }
+
+    const raw = fs.readFileSync(file, "utf8").trim();
+
+    if (!raw) {
+      return fallback;
+    }
+
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error("JSON-Lesefehler:", file, error.message);
+
+    return fallback;
+  }
 }
 
-function servers() {
-    return readJSON(SERVERS_FILE, []);
-}
+function writeJson(file, data) {
+  const temporary = `${file}.tmp`;
 
-function settings() {
-    return readJSON(SETTINGS_FILE, {
-        maintenance: false,
-        maintenanceText:
-            "Die Minecraft-Server werden momentan gewartet.",
-        globalServerLock: false
-    });
-}
+  fs.writeFileSync(
+    temporary,
+    JSON.stringify(data, null, 2),
+    "utf8"
+  );
 
-function logs() {
-    return readJSON(LOGS_FILE, []);
+  fs.renameSync(temporary, file);
 }
 
 /* =========================================================
-   HILFSFUNKTIONEN
+   STANDARD-DATEN
 ========================================================= */
 
-function uid(prefix) {
-    return (
-        prefix +
-        "_" +
-        crypto.randomBytes(10).toString("hex")
+ensureJsonFile(USERS_FILE, []);
+ensureJsonFile(SERVERS_FILE, []);
+ensureJsonFile(SETTINGS_FILE, {
+  maintenance: false,
+  maintenanceMessage:
+    "Die Webseite befindet sich momentan im Wartungsmodus."
+});
+ensureJsonFile(BANS_FILE, []);
+
+/* =========================================================
+   DATEN
+========================================================= */
+
+let users = readJson(USERS_FILE, []);
+let servers = readJson(SERVERS_FILE, []);
+let settings = readJson(SETTINGS_FILE, {
+  maintenance: false,
+  maintenanceMessage:
+    "Die Webseite befindet sich momentan im Wartungsmodus."
+});
+let bans = readJson(BANS_FILE, []);
+
+/* =========================================================
+   SPEICHERN
+========================================================= */
+
+function saveUsers() {
+  writeJson(USERS_FILE, users);
+}
+
+function saveServers() {
+  writeJson(SERVERS_FILE, servers);
+}
+
+function saveSettings() {
+  writeJson(SETTINGS_FILE, settings);
+}
+
+function saveBans() {
+  writeJson(BANS_FILE, bans);
+}
+
+/* =========================================================
+   OWNER
+========================================================= */
+
+function isOwner(user) {
+  if (!user) {
+    return false;
+  }
+
+  return (
+    String(user.email || "").toLowerCase() === OWNER_EMAIL
+  );
+}
+
+/* =========================================================
+   PASSWORT
+========================================================= */
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+
+  const hash = crypto
+    .pbkdf2Sync(
+      String(password),
+      salt,
+      120000,
+      64,
+      "sha512"
+    )
+    .toString("hex");
+
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  try {
+    if (!stored || !stored.includes(":")) {
+      return false;
+    }
+
+    const parts = stored.split(":");
+
+    const salt = parts[0];
+    const originalHash = parts[1];
+
+    const hash = crypto
+      .pbkdf2Sync(
+        String(password),
+        salt,
+        120000,
+        64,
+        "sha512"
+      )
+      .toString("hex");
+
+    return crypto.timingSafeEqual(
+      Buffer.from(hash, "hex"),
+      Buffer.from(originalHash, "hex")
     );
+  } catch (_) {
+    return false;
+  }
 }
 
-function now() {
-    return new Date().toISOString();
+/* =========================================================
+   ID
+========================================================= */
+
+function id(prefix) {
+  return (
+    prefix +
+    "_" +
+    crypto.randomBytes(10).toString("hex")
+  );
 }
 
-function clean(value, max = 100) {
-    return String(value || "")
-        .trim()
-        .slice(0, max);
+/* =========================================================
+   NAME SICHER MACHEN
+========================================================= */
+
+function safeName(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9äöüÄÖÜß _-]/g, "")
+    .replace(/\s+/g, "-")
+    .slice(0, 40);
 }
 
-function validEmail(email) {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
-        email
-    );
+/* =========================================================
+   SERVERPFAD
+========================================================= */
+
+function getServerDirectory(server) {
+  const directory = path.join(
+    SERVERS_DIR,
+    server.id
+  );
+
+  fs.mkdirSync(directory, {
+    recursive: true
+  });
+
+  return directory;
 }
 
-function validServerName(name) {
-    return /^[a-zA-Z0-9äöüÄÖÜß _.-]{2,40}$/.test(
-        name
-    );
+/* =========================================================
+   PFAD-SCHUTZ
+========================================================= */
+
+function safeServerPath(server, requestedPath) {
+  const base = path.resolve(
+    getServerDirectory(server)
+  );
+
+  const requested = String(
+    requestedPath || ""
+  );
+
+  const target = path.resolve(
+    base,
+    requested
+  );
+
+  if (
+    target !== base &&
+    !target.startsWith(base + path.sep)
+  ) {
+    throw new Error("Ungültiger Dateipfad.");
+  }
+
+  return target;
 }
 
-function escapeHTML(value) {
-    return String(value ?? "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-}
+/* =========================================================
+   USER SUCHEN
+========================================================= */
 
-function findUserById(id) {
-    return users().find(
-        user => user.id === id
-    );
+function findUserById(userId) {
+  return users.find(
+    user => user.id === userId
+  );
 }
 
 function findUserByEmail(email) {
-    return users().find(
-        user =>
-            user.email.toLowerCase() ===
-            email.toLowerCase()
-    );
+  return users.find(
+    user =>
+      String(user.email).toLowerCase() ===
+      String(email).toLowerCase()
+  );
 }
 
-function isOwner(user) {
-    return (
-        user &&
-        user.email.toLowerCase() ===
-            OWNER_EMAIL.toLowerCase()
-    );
+function findServer(serverId) {
+  return servers.find(
+    server => server.id === serverId
+  );
 }
 
-function addLog(action, user, details = "") {
-    const list = logs();
+/* =========================================================
+   BAN
+========================================================= */
 
-    list.push({
-        id: uid("log"),
-        action,
-        userId: user ? user.id : null,
-        email: user ? user.email : null,
-        details,
-        time: now()
+function isBanned(user) {
+  if (!user) {
+    return false;
+  }
+
+  return bans.some(
+    ban =>
+      ban.email &&
+      ban.email.toLowerCase() ===
+        user.email.toLowerCase()
+  );
+}
+
+/* =========================================================
+   AUTH MIDDLEWARE
+========================================================= */
+
+function requireLogin(req, res, next) {
+  if (!req.session.userId) {
+    return res.status(401).json({
+      error: "Nicht eingeloggt."
     });
+  }
 
-    if (list.length > 5000) {
-        list.splice(
-            0,
-            list.length - 5000
-        );
+  const user = findUserById(
+    req.session.userId
+  );
+
+  if (!user) {
+    req.session.destroy(() => {});
+    return res.status(401).json({
+      error: "Sitzung ungültig."
+    });
+  }
+
+  if (isBanned(user)) {
+    req.session.destroy(() => {});
+    return res.status(403).json({
+      error: "Dein Konto wurde gesperrt."
+    });
+  }
+
+  req.user = user;
+
+  next();
+}
+
+function requireOwner(req, res, next) {
+  if (!req.user || !isOwner(req.user)) {
+    return res.status(403).json({
+      error: "Nur der Owner darf diese Funktion benutzen."
+    });
+  }
+
+  next();
+}
+
+/* =========================================================
+   SERVER-BERECHTIGUNG
+========================================================= */
+
+function userCanAccessServer(user, server) {
+  if (!user || !server) {
+    return false;
+  }
+
+  if (isOwner(user)) {
+    return true;
+  }
+
+  return server.ownerId === user.id;
+}
+
+function requireServerAccess(req, res, next) {
+  const server = findServer(
+    req.params.serverId
+  );
+
+  if (!server) {
+    return res.status(404).json({
+      error: "Server nicht gefunden."
+    });
+  }
+
+  if (
+    !userCanAccessServer(
+      req.user,
+      server
+    )
+  ) {
+    return res.status(403).json({
+      error: "Keine Berechtigung für diesen Server."
+    });
+  }
+
+  req.server = server;
+
+  next();
+}
+
+/* =========================================================
+   MINECRAFT PROZESSE
+========================================================= */
+
+const processes = new Map();
+
+function getProcess(serverId) {
+  return processes.get(serverId);
+}
+
+function isServerRunning(serverId) {
+  const processInfo = processes.get(serverId);
+
+  return Boolean(
+    processInfo &&
+    processInfo.process &&
+    !processInfo.process.killed
+  );
+}
+
+function appendConsole(server, text) {
+  const clean = String(text || "");
+
+  server.console = server.console || [];
+
+  server.console.push({
+    time: new Date().toISOString(),
+    text: clean
+  });
+
+  if (server.console.length > 500) {
+    server.console = server.console.slice(-500);
+  }
+
+  saveServers();
+}
+
+/* =========================================================
+   EULA
+========================================================= */
+
+function ensureEula(serverDirectory) {
+  const eula = path.join(
+    serverDirectory,
+    "eula.txt"
+  );
+
+  if (!fs.existsSync(eula)) {
+    fs.writeFileSync(
+      eula,
+      "eula=true\n",
+      "utf8"
+    );
+  }
+}
+
+/* =========================================================
+   SERVER STARTEN
+========================================================= */
+
+function startMinecraftServer(server) {
+  if (isServerRunning(server.id)) {
+    return {
+      success: false,
+      message: "Server läuft bereits."
+    };
+  }
+
+  const directory =
+    getServerDirectory(server);
+
+  ensureEula(directory);
+
+  const jarName =
+    server.jar || "server.jar";
+
+  const jarPath = path.join(
+    MINECRAFT_DIR,
+    jarName
+  );
+
+  const localJarPath = path.join(
+    directory,
+    jarName
+  );
+
+  if (
+    fs.existsSync(jarPath) &&
+    !fs.existsSync(localJarPath)
+  ) {
+    fs.copyFileSync(
+      jarPath,
+      localJarPath
+    );
+  }
+
+  if (!fs.existsSync(localJarPath)) {
+    appendConsole(
+      server,
+      `Minecraft-JAR nicht gefunden: ${jarName}`
+    );
+
+    return {
+      success: false,
+      message:
+        `Minecraft-JAR "${jarName}" wurde nicht gefunden.`
+    };
+  }
+
+  const ram = Math.max(
+    512,
+    Number(server.ram || 1024)
+  );
+
+  const args = [
+    `-Xms${ram}M`,
+    `-Xmx${ram}M`,
+    "-jar",
+    jarName,
+    "nogui"
+  ];
+
+  const child = spawn(
+    "java",
+    args,
+    {
+      cwd: directory,
+      stdio: [
+        "pipe",
+        "pipe",
+        "pipe"
+      ],
+      windowsHide: true
     }
+  );
 
-    writeJSON(LOGS_FILE, list);
+  processes.set(server.id, {
+    process: child,
+    startedAt: Date.now()
+  });
+
+  server.status = "starting";
+  server.startedAt = new Date().toISOString();
+
+  saveServers();
+
+  child.stdout.on(
+    "data",
+    data => {
+      const text =
+        data.toString();
+
+      appendConsole(
+        server,
+        text
+      );
+    }
+  );
+
+  child.stderr.on(
+    "data",
+    data => {
+      const text =
+        data.toString();
+
+      appendConsole(
+        server,
+        text
+      );
+    }
+  );
+
+  child.on(
+    "error",
+    error => {
+      appendConsole(
+        server,
+        `Prozessfehler: ${error.message}`
+      );
+
+      server.status = "stopped";
+
+      processes.delete(server.id);
+
+      saveServers();
+    }
+  );
+
+  child.on(
+    "exit",
+    (code, signal) => {
+      appendConsole(
+        server,
+        `Server beendet. Code=${code} Signal=${signal || "none"}`
+      );
+
+      server.status = "stopped";
+      server.startedAt = null;
+
+      processes.delete(server.id);
+
+      saveServers();
+    }
+  );
+
+  setTimeout(() => {
+    if (isServerRunning(server.id)) {
+      server.status = "online";
+      saveServers();
+    }
+  }, 3000);
+
+  return {
+    success: true,
+    message: "Server wird gestartet."
+  };
+}
+
+/* =========================================================
+   SERVER STOPPEN
+========================================================= */
+
+function stopMinecraftServer(server) {
+  const info =
+    processes.get(server.id);
+
+  if (!info || !info.process) {
+    server.status = "stopped";
+    saveServers();
+
+    return {
+      success: true,
+      message: "Server läuft nicht."
+    };
+  }
+
+  try {
+    info.process.stdin.write(
+      "stop\n"
+    );
+  } catch (_) {}
+
+  setTimeout(() => {
+    const current =
+      processes.get(server.id);
+
+    if (
+      current &&
+      current.process &&
+      !current.process.killed
+    ) {
+      try {
+        current.process.kill(
+          "SIGTERM"
+        );
+      } catch (_) {}
+    }
+  }, 10000);
+
+  server.status = "stopping";
+
+  saveServers();
+
+  return {
+    success: true,
+    message: "Server wird gestoppt."
+  };
+}
+
+/* =========================================================
+   SERVER RESTART
+========================================================= */
+
+async function restartMinecraftServer(server) {
+  stopMinecraftServer(server);
+
+  await new Promise(
+    resolve =>
+      setTimeout(
+        resolve,
+        3000
+      )
+  );
+
+  return startMinecraftServer(
+    server
+  );
 }
 
 /* =========================================================
    EXPRESS
 ========================================================= */
 
+app.disable("x-powered-by");
+
 app.use(
-    express.urlencoded({
-        extended: true,
-        limit: "10mb"
-    })
+  express.json({
+    limit: "10mb"
+  })
 );
 
 app.use(
-    express.json({
-        limit: "10mb"
-    })
+  express.urlencoded({
+    extended: true,
+    limit: "10mb"
+  })
 );
 
 app.use(
-    session({
-        secret: SESSION_SECRET,
-        resave: false,
-        saveUninitialized: false,
-        rolling: true,
-        cookie: {
-            httpOnly: true,
-            secure:
-                process.env.NODE_ENV ===
-                "production",
-            sameSite: "lax",
-            maxAge:
-                1000 *
-                60 *
-                60 *
-                24 *
-                30
-        }
-    })
+  session({
+    secret: SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    rolling: true,
+    cookie: {
+      httpOnly: true,
+      sameSite: "lax",
+      secure:
+        process.env.NODE_ENV === "production",
+      maxAge:
+        1000 *
+        60 *
+        60 *
+        24 *
+        30
+    }
+  })
 );
 
 /* =========================================================
-   CURRENT USER
+   WARTUNG
 ========================================================= */
 
-function getCurrentUser(req) {
-    if (!req.session.userId) {
-        return null;
-    }
-
-    return findUserById(
+app.use(
+  (req, res, next) => {
+    if (
+      settings.maintenance &&
+      req.path !== "/api/status" &&
+      !req.path.startsWith("/api/auth") &&
+      req.path !== "/"
+    ) {
+      const user =
+        req.session &&
         req.session.userId
+          ? findUserById(
+              req.session.userId
+            )
+          : null;
+
+      if (!user || !isOwner(user)) {
+        return res.status(503).json({
+          error:
+            settings.maintenanceMessage
+        });
+      }
+    }
+
+    next();
+  }
+);
+
+/* =========================================================
+   STARTSEITE
+========================================================= */
+
+app.get(
+  "/",
+  (req, res) => {
+    res.send(
+      renderPage(
+        "Florian / WeisserHai Minecraft Hosting"
+      )
     );
-}
+  }
+);
 
 /* =========================================================
-   LOGIN MIDDLEWARE
+   API STATUS
 ========================================================= */
 
-function requireLogin(req, res, next) {
-    const user = getCurrentUser(req);
-
-    if (!user) {
-        return res.redirect("/login");
-    }
-
-    if (user.banned) {
-        req.session.destroy(() => {});
-
-        return res.status(403).send(
-            page(
-                "Account gesperrt",
-                `
-                <div class="card">
-                    <h1>🚫 Account gesperrt</h1>
-                    <p>
-                        Dein Account wurde vom Owner gesperrt.
-                    </p>
-                    <a class="btn" href="/login">
-                        Zum Login
-                    </a>
-                </div>
-                `
-            )
-        );
-    }
-
-    req.user = user;
-
-    next();
-}
-
-function requireOwner(req, res, next) {
-    const user = getCurrentUser(req);
-
-    if (!user) {
-        return res.redirect("/login");
-    }
-
-    if (!isOwner(user)) {
-        return res.status(403).send(
-            page(
-                "Kein Zugriff",
-                `
-                <div class="card">
-                    <h1>403</h1>
-                    <p>
-                        Dieser Bereich ist nur für den Owner.
-                    </p>
-                    <a class="btn" href="/">
-                        Startseite
-                    </a>
-                </div>
-                `,
-                user
-            )
-        );
-    }
-
-    req.user = user;
-
-    next();
-}
+app.get(
+  "/api/status",
+  (req, res) => {
+    res.json({
+      success: true,
+      name: HOSTING_NAME,
+      maintenance:
+        Boolean(settings.maintenance),
+      loggedIn:
+        Boolean(req.session.userId),
+      version: "2.0.0"
+    });
+  }
+);
 
 /* =========================================================
-   MAINTENANCE
+   REGISTRIERUNG
 ========================================================= */
 
-function maintenanceMiddleware(
-    req,
-    res,
-    next
-) {
-    const current = settings();
-    const user = getCurrentUser(req);
+app.post(
+  "/api/auth/register",
+  (req, res) => {
+    const email = String(
+      req.body.email || ""
+    )
+      .trim()
+      .toLowerCase();
+
+    const password = String(
+      req.body.password || ""
+    );
 
     if (
-        current.maintenance &&
-        !isOwner(user) &&
-        !req.path.startsWith("/login") &&
-        !req.path.startsWith("/register") &&
-        !req.path.startsWith("/health") &&
-        !req.path.startsWith("/logout")
+      !email ||
+      !email.includes("@")
     ) {
-        return res.status(503).send(
-            page(
-                "Wartung",
-                `
-                <div class="card center">
-                    <div class="big">🛠️</div>
-
-                    <h1>Wartungsarbeiten</h1>
-
-                    <p>
-                        ${escapeHTML(
-                            current.maintenanceText
-                        )}
-                    </p>
-
-                    <p class="muted">
-                        Bitte versuche es später erneut.
-                    </p>
-
-                    ${
-                        user
-                            ? `
-                            <a class="btn"
-                               href="/logout">
-                                Logout
-                            </a>
-                            `
-                            : ""
-                    }
-                </div>
-                `,
-                user
-            )
-        );
-    }
-
-    next();
-}
-
-app.use(maintenanceMiddleware);
-
-/* =========================================================
-   HTML
-========================================================= */
-
-function page(
-    title,
-    content,
-    user = null
-) {
-    const owner = isOwner(user);
-
-    const current = settings();
-
-    return `
-<!DOCTYPE html>
-<html lang="de">
-<head>
-
-<meta charset="UTF-8">
-
-<meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
->
-
-<title>
-    ${escapeHTML(title)}
-    | Florian/WeisserHai
-</title>
-
-<style>
-
-* {
-    box-sizing: border-box;
-}
-
-body {
-    margin: 0;
-    min-height: 100vh;
-
-    font-family:
-        Arial,
-        Helvetica,
-        sans-serif;
-
-    color: #fff;
-
-    background:
-        radial-gradient(
-            circle at top,
-            #164a7c,
-            #07111f 50%,
-            #03070d
-        );
-}
-
-nav {
-    position: sticky;
-    top: 0;
-    z-index: 100;
-
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-
-    gap: 20px;
-
-    padding: 17px 5%;
-
-    background:
-        rgba(3, 8, 16, .94);
-
-    border-bottom:
-        1px solid
-        rgba(255,255,255,.08);
-
-    backdrop-filter: blur(15px);
-}
-
-.logo {
-    font-size: 20px;
-    font-weight: 900;
-}
-
-.navlinks {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 7px;
-}
-
-.navlinks a {
-    color: #fff;
-    text-decoration: none;
-
-    padding: 9px 12px;
-
-    border-radius: 9px;
-}
-
-.navlinks a:hover {
-    background:
-        rgba(255,255,255,.1);
-}
-
-.container {
-    width: min(1150px, 92%);
-    margin: 35px auto;
-}
-
-.hero {
-    text-align: center;
-    padding: 70px 10px;
-}
-
-.hero h1 {
-    margin: 0;
-
-    font-size:
-        clamp(40px, 7vw, 76px);
-}
-
-.hero h2 {
-    color: #7db9ff;
-}
-
-.hero p {
-    color: #aab9cc;
-    font-size: 18px;
-}
-
-.grid {
-    display: grid;
-
-    grid-template-columns:
-        repeat(
-            auto-fit,
-            minmax(250px, 1fr)
-        );
-
-    gap: 18px;
-}
-
-.card {
-    background:
-        rgba(10, 22, 38, .9);
-
-    border:
-        1px solid
-        rgba(255,255,255,.08);
-
-    border-radius: 18px;
-
-    padding: 23px;
-
-    box-shadow:
-        0 20px 60px
-        rgba(0,0,0,.2);
-
-    margin-bottom: 18px;
-}
-
-.card h1,
-.card h2,
-.card h3 {
-    margin-top: 0;
-}
-
-.center {
-    text-align: center;
-}
-
-.big {
-    font-size: 60px;
-}
-
-.muted {
-    color: #91a2b8;
-}
-
-.btn,
-button {
-    display: inline-block;
-
-    border: 0;
-
-    padding:
-        11px 16px;
-
-    border-radius: 10px;
-
-    color: #fff;
-
-    background: #247fff;
-
-    text-decoration: none;
-
-    cursor: pointer;
-
-    font-weight: 700;
-}
-
-button:hover,
-.btn:hover {
-    filter: brightness(1.15);
-}
-
-.green {
-    background: #159b69;
-}
-
-.red {
-    background: #d53c52;
-}
-
-.orange {
-    background: #d48a19;
-}
-
-.gray {
-    background: #405066;
-}
-
-input,
-select,
-textarea {
-    display: block;
-
-    width: 100%;
-
-    margin:
-        7px 0 15px;
-
-    padding: 13px;
-
-    color: #fff;
-
-    background: #071322;
-
-    border:
-        1px solid
-        #2d415a;
-
-    border-radius: 10px;
-
-    outline: none;
-}
-
-textarea {
-    min-height: 180px;
-
-    resize: vertical;
-
-    font-family: monospace;
-}
-
-.actions {
-    display: flex;
-
-    flex-wrap: wrap;
-
-    gap: 8px;
-}
-
-.badge {
-    display: inline-block;
-
-    padding:
-        5px 9px;
-
-    border-radius: 999px;
-
-    background:
-        rgba(255,255,255,.08);
-
-    font-size: 13px;
-}
-
-.online {
-    color: #48e49b;
-}
-
-.offline {
-    color: #ff6579;
-}
-
-.locked {
-    color: #ffb443;
-}
-
-.stat {
-    font-size: 34px;
-    font-weight: 900;
-}
-
-.alert {
-    padding: 14px;
-
-    border-radius: 11px;
-
-    margin:
-        10px 0;
-
-    background:
-        rgba(37,127,255,.12);
-
-    border:
-        1px solid
-        rgba(37,127,255,.3);
-}
-
-.alert-red {
-    background:
-        rgba(213,60,82,.13);
-
-    border-color:
-        rgba(213,60,82,.35);
-}
-
-.alert-orange {
-    background:
-        rgba(212,138,25,.13);
-
-    border-color:
-        rgba(212,138,25,.35);
-}
-
-table {
-    width: 100%;
-
-    border-collapse:
-        collapse;
-
-    overflow: hidden;
-}
-
-th,
-td {
-    padding:
-        11px 7px;
-
-    text-align: left;
-
-    border-bottom:
-        1px solid
-        rgba(255,255,255,.08);
-}
-
-.code {
-    padding: 15px;
-
-    background: #02060b;
-
-    border:
-        1px solid
-        #26364a;
-
-    border-radius: 10px;
-
-    font-family: monospace;
-
-    overflow: auto;
-}
-
-footer {
-    padding: 45px 5%;
-
-    text-align: center;
-
-    color: #6f8097;
-}
-
-small {
-    color: #8394a9;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<nav>
-
-    <div class="logo">
-        ⛏️ Florian/WeisserHai
-    </div>
-
-    <div class="navlinks">
-
-        <a href="/">
-            Home
-        </a>
-
-        ${
-            user
-                ? `
-                    <a href="/dashboard">
-                        Dashboard
-                    </a>
-
-                    <a href="/servers">
-                        Server
-                    </a>
-
-                    ${
-                        owner
-                            ? `
-                            <a href="/admin">
-                                👑 Admin
-                            </a>
-                            `
-                            : ""
-                    }
-
-                    <a href="/logout">
-                        Logout
-                    </a>
-                `
-                : `
-                    <a href="/login">
-                        Login
-                    </a>
-
-                    <a href="/register">
-                        Registrieren
-                    </a>
-                `
-        }
-
-    </div>
-
-</nav>
-
-<main class="container">
-
-${
-    current.maintenance &&
-    owner
-        ? `
-        <div class="alert alert-orange">
-            🛠️ Wartung ist aktuell
-            <strong>AKTIV</strong>.
-        </div>
-        `
-        : ""
-}
-
-${content}
-
-</main>
-
-<footer>
-    Florian/WeisserHai Minecraft Hosting
-    <br>
-    <small>
-        Minecraft Server Hosting
-    </small>
-</footer>
-
-</body>
-</html>
-`;
-}
-
-/* =========================================================
-   HOME
-========================================================= */
-
-app.get("/", (req, res) => {
-    const user = getCurrentUser(req);
-
-    res.send(
-        page(
-            "Minecraft Hosting",
-            `
-            <section class="hero">
-
-                <h1>
-                    Florian/WeisserHai
-                </h1>
-
-                <h2>
-                    Minecraft Hosting
-                </h2>
-
-                <p>
-                    Einfach Minecraft-Server erstellen
-                    und verwalten.
-                </p>
-
-                <div class="actions"
-                     style="justify-content:center;">
-
-                    ${
-                        user
-                            ? `
-                            <a class="btn"
-                               href="/dashboard">
-                                Dashboard
-                            </a>
-                            `
-                            : `
-                            <a class="btn"
-                               href="/register">
-                                Kostenlos starten
-                            </a>
-
-                            <a class="btn gray"
-                               href="/login">
-                                Login
-                            </a>
-                            `
-                    }
-
-                </div>
-
-            </section>
-
-            <div class="grid">
-
-                <div class="card">
-                    <h3>🆓 Kostenloser Server</h3>
-                    <p class="muted">
-                        Jeder normale Benutzer kann
-                        einen kostenlosen Server erstellen.
-                    </p>
-                </div>
-
-                <div class="card">
-                    <h3>🖥️ Verwaltung</h3>
-                    <p class="muted">
-                        Serverstatus, Dateien,
-                        Einstellungen und Konsole.
-                    </p>
-                </div>
-
-                <div class="card">
-                    <h3>👑 Owner-System</h3>
-                    <p class="muted">
-                        Der Owner kann alle Server
-                        und Benutzer verwalten.
-                    </p>
-                </div>
-
-            </div>
-            `,
-            user
-        )
-    );
-});
-
-/* =========================================================
-   REGISTER
-========================================================= */
-
-app.get("/register", (req, res) => {
-    if (getCurrentUser(req)) {
-        return res.redirect("/dashboard");
-    }
-
-    res.send(
-        page(
-            "Registrieren",
-            `
-            <div class="card"
-                 style="max-width:520px;margin:auto;">
-
-                <h1>Account erstellen</h1>
-
-                <form method="POST"
-                      action="/register">
-
-                    <label>Name</label>
-
-                    <input
-                        name="name"
-                        minlength="2"
-                        maxlength="40"
-                        required
-                        placeholder="Dein Name"
-                    >
-
-                    <label>E-Mail</label>
-
-                    <input
-                        name="email"
-                        type="email"
-                        required
-                        placeholder="name@example.com"
-                    >
-
-                    <label>Passwort</label>
-
-                    <input
-                        name="password"
-                        type="password"
-                        minlength="6"
-                        required
-                        placeholder="Mindestens 6 Zeichen"
-                    >
-
-                    <button type="submit">
-                        Registrieren
-                    </button>
-
-                </form>
-
-                <p class="muted">
-                    Bereits registriert?
-                    <a href="/login">
-                        Jetzt einloggen
-                    </a>
-                </p>
-
-            </div>
-            `
-        )
-    );
-});
-
-app.post("/register", async (req, res) => {
-    const name = clean(
-        req.body.name,
-        40
-    );
-
-    const email = clean(
-        req.body.email,
-        120
-    ).toLowerCase();
-
-    const password =
-        String(req.body.password || "");
-
-    if (
-        !name ||
-        !validEmail(email)
-    ) {
-        return res.status(400).send(
-            page(
-                "Fehler",
-                `
-                <div class="card">
-                    <h2>Ungültige Daten</h2>
-                    <a class="btn"
-                       href="/register">
-                        Zurück
-                    </a>
-                </div>
-                `
-            )
-        );
+      return res.status(400).json({
+        error:
+          "Bitte eine gültige E-Mail-Adresse eingeben."
+      });
     }
 
     if (password.length < 6) {
-        return res.status(400).send(
-            page(
-                "Fehler",
-                `
-                <div class="card">
-                    <h2>
-                        Passwort zu kurz
-                    </h2>
-
-                    <p>
-                        Mindestens 6 Zeichen.
-                    </p>
-
-                    <a class="btn"
-                       href="/register">
-                        Zurück
-                    </a>
-                </div>
-                `
-            )
-        );
+      return res.status(400).json({
+        error:
+          "Das Passwort muss mindestens 6 Zeichen haben."
+      });
     }
 
-    const list = users();
-
-    if (
-        list.some(
-            user =>
-                user.email.toLowerCase() ===
-                email
-        )
-    ) {
-        return res.status(409).send(
-            page(
-                "Account vorhanden",
-                `
-                <div class="card">
-                    <h2>
-                        E-Mail bereits registriert
-                    </h2>
-
-                    <a class="btn"
-                       href="/login">
-                        Zum Login
-                    </a>
-                </div>
-                `
-            )
-        );
+    if (findUserByEmail(email)) {
+      return res.status(409).json({
+        error:
+          "Diese E-Mail ist bereits registriert."
+      });
     }
-
-    const passwordHash =
-        await bcrypt.hash(
-            password,
-            12
-        );
 
     const user = {
-        id: uid("user"),
-
-        name,
-        email,
-
-        passwordHash,
-
-        role:
-            email === OWNER_EMAIL
-                ? "owner"
-                : "user",
-
-        coins: 0,
-
-        banned: false,
-
-        createdAt: now(),
-
-        lastLogin: null
+      id: id("user"),
+      email,
+      passwordHash:
+        hashPassword(password),
+      createdAt:
+        new Date().toISOString(),
+      banned: false
     };
 
-    list.push(user);
+    users.push(user);
 
-    writeJSON(
-        USERS_FILE,
-        list
-    );
+    saveUsers();
 
     req.session.userId = user.id;
 
-    addLog(
-        "REGISTER",
-        user,
-        "Account erstellt"
-    );
-
-    res.redirect("/dashboard");
-});
+    req.session.save(() => {
+      res.json({
+        success: true,
+        message:
+          "Registrierung erfolgreich.",
+        user: {
+          id: user.id,
+          email: user.email,
+          owner: isOwner(user)
+        }
+      });
+    });
+  }
+);
 
 /* =========================================================
    LOGIN
 ========================================================= */
 
-app.get("/login", (req, res) => {
-    if (getCurrentUser(req)) {
-        return res.redirect("/dashboard");
-    }
+app.post(
+  "/api/auth/login",
+  (req, res) => {
+    const email = String(
+      req.body.email || ""
+    )
+      .trim()
+      .toLowerCase();
 
-    res.send(
-        page(
-            "Login",
-            `
-            <div class="card"
-                 style="max-width:520px;margin:auto;">
-
-                <h1>Login</h1>
-
-                <form method="POST"
-                      action="/login">
-
-                    <label>E-Mail</label>
-
-                    <input
-                        type="email"
-                        name="email"
-                        required
-                        autocomplete="email"
-                    >
-
-                    <label>Passwort</label>
-
-                    <input
-                        type="password"
-                        name="password"
-                        required
-                        autocomplete="current-password"
-                    >
-
-                    <button type="submit">
-                        Einloggen
-                    </button>
-
-                </form>
-
-                <p class="muted">
-                    Noch keinen Account?
-                    <a href="/register">
-                        Registrieren
-                    </a>
-                </p>
-
-            </div>
-            `
-        )
+    const password = String(
+      req.body.password || ""
     );
-});
-
-app.post("/login", async (req, res) => {
-    const email = clean(
-        req.body.email,
-        120
-    ).toLowerCase();
-
-    const password =
-        String(req.body.password || "");
 
     const user =
-        findUserByEmail(email);
+      findUserByEmail(email);
 
     if (!user) {
-        return res.status(401).send(
-            page(
-                "Login",
-                `
-                <div class="card">
-                    <h2>
-                        Login fehlgeschlagen
-                    </h2>
-
-                    <p>
-                        E-Mail oder Passwort ist falsch.
-                    </p>
-
-                    <a class="btn"
-                       href="/login">
-                        Erneut versuchen
-                    </a>
-                </div>
-                `
-            )
-        );
+      return res.status(401).json({
+        error:
+          "E-Mail oder Passwort ist falsch."
+      });
     }
 
-    if (user.banned) {
-        return res.status(403).send(
-            page(
-                "Gesperrt",
-                `
-                <div class="card">
-                    <h2>
-                        🚫 Account gesperrt
-                    </h2>
-
-                    <p>
-                        Dieser Account wurde gebannt.
-                    </p>
-                </div>
-                `
-            )
-        );
+    if (isBanned(user)) {
+      return res.status(403).json({
+        error:
+          "Dieses Konto wurde gesperrt."
+      });
     }
 
-    const valid =
-        await bcrypt.compare(
-            password,
-            user.passwordHash
-        );
-
-    if (!valid) {
-        return res.status(401).send(
-            page(
-                "Login",
-                `
-                <div class="card">
-                    <h2>
-                        Login fehlgeschlagen
-                    </h2>
-
-                    <p>
-                        E-Mail oder Passwort ist falsch.
-                    </p>
-
-                    <a class="btn"
-                       href="/login">
-                        Erneut versuchen
-                    </a>
-                </div>
-                `
-            )
-        );
+    if (
+      !verifyPassword(
+        password,
+        user.passwordHash
+      )
+    ) {
+      return res.status(401).json({
+        error:
+          "E-Mail oder Passwort ist falsch."
+      });
     }
 
-    const list = users();
+    req.session.regenerate(
+      error => {
+        if (error) {
+          console.error(
+            "Session-Fehler:",
+            error
+          );
 
-    const stored =
-        list.find(
-            x => x.id === user.id
+          return res.status(500).json({
+            error:
+              "Login konnte nicht erstellt werden."
+          });
+        }
+
+        req.session.userId =
+          user.id;
+
+        req.session.save(
+          saveError => {
+            if (saveError) {
+              return res.status(500).json({
+                error:
+                  "Session konnte nicht gespeichert werden."
+              });
+            }
+
+            res.json({
+              success: true,
+              message:
+                "Login erfolgreich.",
+              user: {
+                id: user.id,
+                email: user.email,
+                owner: isOwner(user)
+              }
+            });
+          }
         );
-
-    if (stored) {
-        stored.lastLogin = now();
-    }
-
-    writeJSON(
-        USERS_FILE,
-        list
+      }
     );
-
-    req.session.userId = user.id;
-
-    addLog(
-        "LOGIN",
-        user
-    );
-
-    res.redirect("/dashboard");
-});
+  }
+);
 
 /* =========================================================
    LOGOUT
 ========================================================= */
 
-app.get("/logout", (req, res) => {
-    req.session.destroy(() => {
-        res.redirect("/");
-    });
-});
+app.post(
+  "/api/auth/logout",
+  (req, res) => {
+    req.session.destroy(
+      error => {
+        if (error) {
+          return res.status(500).json({
+            error:
+              "Logout fehlgeschlagen."
+          });
+        }
+
+        res.clearCookie(
+          "connect.sid"
+        );
+
+        res.json({
+          success: true
+        });
+      }
+    );
+  }
+);
 
 /* =========================================================
-   DASHBOARD
+   AKTUELLER USER
 ========================================================= */
 
 app.get(
-    "/dashboard",
-    requireLogin,
-    (req, res) => {
-        const myServers =
-            servers().filter(
-                server =>
-                    server.ownerId ===
-                    req.user.id
-            );
-
-        const current =
-            settings();
-
-        res.send(
-            page(
-                "Dashboard",
-                `
-                <div class="card">
-
-                    <h1>
-                        Hallo
-                        ${escapeHTML(
-                            req.user.name
-                        )}
-                        👋
-                    </h1>
-
-                    <p class="muted">
-                        ${escapeHTML(
-                            req.user.email
-                        )}
-                    </p>
-
-                    ${
-                        isOwner(req.user)
-                            ? `
-                            <div class="alert">
-                                👑
-                                <strong>
-                                    OWNER
-                                </strong>
-                                <br>
-                                Du hast Zugriff auf
-                                alle Server und Benutzer.
-                            </div>
-                            `
-                            : ""
-                    }
-
-                    ${
-                        current.globalServerLock &&
-                        !isOwner(req.user)
-                            ? `
-                            <div class="alert alert-orange">
-                                🔒
-                                Servererstellung und
-                                Serverstarts sind momentan
-                                gesperrt.
-                            </div>
-                            `
-                            : ""
-                    }
-
-                </div>
-
-                <div class="grid">
-
-                    <div class="card">
-                        <h3>
-                            🖥️ Meine Server
-                        </h3>
-
-                        <div class="stat">
-                            ${myServers.length}
-                        </div>
-                    </div>
-
-                    <div class="card">
-                        <h3>
-                            🪙 Coins
-                        </h3>
-
-                        <div class="stat">
-                            ${Number(
-                                req.user.coins || 0
-                            )}
-                        </div>
-                    </div>
-
-                    <div class="card">
-                        <h3>
-                            👤 Rolle
-                        </h3>
-
-                        <div class="stat">
-                            ${escapeHTML(
-                                req.user.role
-                            ).toUpperCase()}
-                        </div>
-                    </div>
-
-                </div>
-
-                <div class="actions">
-
-                    <a class="btn"
-                       href="/servers">
-                        🖥️ Meine Server
-                    </a>
-
-                    <a class="btn green"
-                       href="/servers/create">
-                        + Server erstellen
-                    </a>
-
-                    ${
-                        isOwner(req.user)
-                            ? `
-                            <a class="btn orange"
-                               href="/admin">
-                                👑 Admin Panel
-                            </a>
-                            `
-                            : ""
-                    }
-
-                </div>
-                `,
-                req.user
-            )
-        );
+  "/api/auth/me",
+  (req, res) => {
+    if (!req.session.userId) {
+      return res.json({
+        loggedIn: false
+      });
     }
+
+    const user =
+      findUserById(
+        req.session.userId
+      );
+
+    if (!user) {
+      return res.json({
+        loggedIn: false
+      });
+    }
+
+    res.json({
+      loggedIn: true,
+      user: {
+        id: user.id,
+        email: user.email,
+        owner: isOwner(user),
+        createdAt:
+          user.createdAt
+      }
+    });
+  }
+);
+
+/* =========================================================
+   USER DATEN
+========================================================= */
+
+app.get(
+  "/api/account",
+  requireLogin,
+  (req, res) => {
+    const ownServers =
+      servers.filter(
+        server =>
+          server.ownerId ===
+          req.user.id
+      );
+
+    res.json({
+      success: true,
+      user: {
+        id: req.user.id,
+        email: req.user.email,
+        owner: isOwner(req.user),
+        createdAt:
+          req.user.createdAt
+      },
+      serverCount:
+        ownServers.length,
+      serverLimit:
+        isOwner(req.user)
+          ? null
+          : 1
+    });
+  }
 );
 
 /* =========================================================
@@ -1488,2561 +1111,3659 @@ app.get(
 ========================================================= */
 
 app.get(
-    "/servers",
-    requireLogin,
-    (req, res) => {
-        const list =
-            servers().filter(
-                server =>
-                    server.ownerId ===
-                    req.user.id
-            );
+  "/api/servers",
+  requireLogin,
+  (req, res) => {
+    const visible =
+      isOwner(req.user)
+        ? servers
+        : servers.filter(
+            server =>
+              server.ownerId ===
+              req.user.id
+          );
 
-        res.send(
-            page(
-                "Meine Server",
-                `
-                <div class="actions"
-                     style="justify-content:space-between;">
-
-                    <h1>
-                        Meine Minecraft-Server
-                    </h1>
-
-                    <a class="btn green"
-                       href="/servers/create">
-                        + Server erstellen
-                    </a>
-
-                </div>
-
-                <div class="grid">
-
-                    ${
-                        list.length
-                            ? list
-                                  .map(
-                                      server =>
-                                          serverCard(
-                                              server,
-                                              req.user
-                                          )
-                                  )
-                                  .join("")
-                            : `
-                            <div class="card">
-
-                                <h2>
-                                    Noch kein Server
-                                </h2>
-
-                                <p class="muted">
-                                    Du hast noch keinen
-                                    Minecraft-Server.
-                                </p>
-
-                                <a class="btn"
-                                   href="/servers/create">
-                                    Jetzt erstellen
-                                </a>
-
-                            </div>
-                            `
-                    }
-
-                </div>
-                `,
-                req.user
-            )
-        );
-    }
+    res.json({
+      success: true,
+      servers: visible.map(
+        server => ({
+          id: server.id,
+          name: server.name,
+          ownerId:
+            server.ownerId,
+          status:
+            server.status,
+          ram: server.ram,
+          jar: server.jar,
+          locked:
+            Boolean(server.locked),
+          createdAt:
+            server.createdAt,
+          startedAt:
+            server.startedAt
+        })
+      )
+    });
+  }
 );
-
-function serverCard(
-    server,
-    user
-) {
-    let status;
-
-    if (server.locked) {
-        status =
-            `<span class="locked">
-                🔒 Gesperrt
-             </span>`;
-    } else if (
-        server.status ===
-        "running"
-    ) {
-        status =
-            `<span class="online">
-                ● Online
-             </span>`;
-    } else {
-        status =
-            `<span class="offline">
-                ● Offline
-             </span>`;
-    }
-
-    return `
-    <div class="card">
-
-        <h2>
-            ${escapeHTML(
-                server.name
-            )}
-        </h2>
-
-        <p>
-            ${status}
-        </p>
-
-        <p class="muted">
-
-            Version:
-            ${escapeHTML(
-                server.version
-            )}
-
-            <br>
-
-            Typ:
-            ${escapeHTML(
-                server.type
-            )}
-
-            <br>
-
-            RAM:
-            ${server.ram} MB
-
-        </p>
-
-        <div class="actions">
-
-            <a class="btn"
-               href="/servers/${server.id}">
-                Verwalten
-            </a>
-
-            ${
-                !server.locked
-                    ? `
-                    <form method="POST"
-                          action="/servers/${server.id}/start">
-                        <button class="green">
-                            Start
-                        </button>
-                    </form>
-
-                    <form method="POST"
-                          action="/servers/${server.id}/stop">
-                        <button class="orange">
-                            Stop
-                        </button>
-                    </form>
-                    `
-                    : ""
-            }
-
-        </div>
-
-    </div>
-    `;
-}
 
 /* =========================================================
    SERVER ERSTELLEN
 ========================================================= */
 
-app.get(
-    "/servers/create",
-    requireLogin,
-    (req, res) => {
-        const current =
-            settings();
-
-        const amount =
-            servers().filter(
-                server =>
-                    server.ownerId ===
-                    req.user.id
-            ).length;
-
-        if (
-            !isOwner(req.user) &&
-            current.globalServerLock
-        ) {
-            return res.status(403).send(
-                page(
-                    "Gesperrt",
-                    `
-                    <div class="card">
-
-                        <h1>
-                            🔒 Servererstellung gesperrt
-                        </h1>
-
-                        <p>
-                            Der Owner hat die
-                            Servererstellung momentan
-                            deaktiviert.
-                        </p>
-
-                    </div>
-                    `,
-                    req.user
-                )
-            );
-        }
-
-        if (
-            !isOwner(req.user) &&
-            amount >= 1
-        ) {
-            return res.send(
-                page(
-                    "Limit",
-                    `
-                    <div class="card">
-
-                        <h1>
-                            Server-Limit erreicht
-                        </h1>
-
-                        <p>
-                            Normale Benutzer können
-                            einen kostenlosen Server
-                            besitzen.
-                        </p>
-
-                        <a class="btn"
-                           href="/servers">
-                            Zurück
-                        </a>
-
-                    </div>
-                    `,
-                    req.user
-                )
-            );
-        }
-
-        res.send(
-            page(
-                "Server erstellen",
-                `
-                <div class="card">
-
-                    <h1>
-                        Minecraft-Server erstellen
-                    </h1>
-
-                    <form method="POST"
-                          action="/servers/create">
-
-                        <label>
-                            Servername
-                        </label>
-
-                        <input
-                            name="name"
-                            minlength="2"
-                            maxlength="40"
-                            required
-                            placeholder="Mein Server"
-                        >
-
-                        <label>
-                            Minecraft-Version
-                        </label>
-
-                        <select name="version">
-
-                            <option>
-                                1.21.8
-                            </option>
-
-                            <option>
-                                1.21.7
-                            </option>
-
-                            <option>
-                                1.21.6
-                            </option>
-
-                            <option>
-                                1.21.5
-                            </option>
-
-                            <option>
-                                1.21.4
-                            </option>
-
-                            <option>
-                                1.20.6
-                            </option>
-
-                            <option>
-                                1.20.4
-                            </option>
-
-                        </select>
-
-                        <label>
-                            Server-Typ
-                        </label>
-
-                        <select name="type">
-
-                            <option>
-                                Vanilla
-                            </option>
-
-                            <option>
-                                Paper
-                            </option>
-
-                            <option>
-                                Fabric
-                            </option>
-
-                            <option>
-                                Forge
-                            </option>
-
-                        </select>
-
-                        <button class="green"
-                                type="submit">
-                            Server erstellen
-                        </button>
-
-                    </form>
-
-                </div>
-                `,
-                req.user
-            )
-        );
-    }
-);
-
 app.post(
-    "/servers/create",
-    requireLogin,
-    (req, res) => {
-        const current =
-            settings();
-
-        if (
-            current.globalServerLock &&
-            !isOwner(req.user)
-        ) {
-            return res.status(403).send(
-                "Servererstellung gesperrt."
-            );
-        }
-
-        const name =
-            clean(
-                req.body.name,
-                40
-            );
-
-        const version =
-            clean(
-                req.body.version,
-                30
-            );
-
-        const type =
-            clean(
-                req.body.type,
-                30
-            );
-
-        if (
-            !validServerName(name)
-        ) {
-            return res.status(400).send(
-                "Ungültiger Servername."
-            );
-        }
-
-        const allowed =
-            [
-                "Vanilla",
-                "Paper",
-                "Fabric",
-                "Forge"
-            ];
-
-        if (
-            !allowed.includes(type)
-        ) {
-            return res.status(400).send(
-                "Ungültiger Servertyp."
-            );
-        }
-
-        const amount =
-            servers().filter(
-                server =>
-                    server.ownerId ===
-                    req.user.id
-            ).length;
-
-        if (
-            !isOwner(req.user) &&
-            amount >= 1
-        ) {
-            return res.status(403).send(
-                "Server-Limit erreicht."
-            );
-        }
-
-        const list = servers();
-
-        const server = {
-            id: uid("server"),
-
-            ownerId:
-                req.user.id,
-
-            ownerEmail:
-                req.user.email,
-
-            name,
-
-            version,
-
-            type,
-
-            status:
-                "offline",
-
-            locked:
-                false,
-
-            lockReason:
-                null,
-
-            ram:
-                2048,
-
-            cpu:
-                100,
-
-            storage:
-                10240,
-
-            createdAt:
-                now(),
-
-            updatedAt:
-                now(),
-
-            files: {
-                "server.properties":
-                    `motd=${name}\n` +
-                    "max-players=20\n" +
-                    "online-mode=true\n" +
-                    "difficulty=normal\n" +
-                    "gamemode=survival\n",
-
-                "README.txt":
-                    "Florian/WeisserHai Minecraft Server\n"
-            },
-
-            console: [],
-
-            settings: {
-                whitelist:
-                    false,
-
-                backup:
-                    true,
-
-                autoStart:
-                    false
-            }
-        };
-
-        list.push(server);
-
-        writeJSON(
-            SERVERS_FILE,
-            list
-        );
-
-        addLog(
-            "SERVER_CREATE",
-            req.user,
-            server.name
-        );
-
-        res.redirect(
-            `/servers/${server.id}`
-        );
-    }
-);
-
-/* =========================================================
-   SERVER DETAIL
-========================================================= */
-
-app.get(
-    "/servers/:id",
-    requireLogin,
-    (req, res) => {
-        const server =
-            servers().find(
-                x =>
-                    x.id ===
-                    req.params.id
-            );
-
-        if (!server) {
-            return res.status(404).send(
-                "Server nicht gefunden."
-            );
-        }
-
-        if (
-            server.ownerId !==
-                req.user.id &&
-            !isOwner(req.user)
-        ) {
-            return res.status(403).send(
-                "Kein Zugriff."
-            );
-        }
-
-        const files =
-            Object.keys(
-                server.files || {}
-            );
-
-        res.send(
-            page(
-                server.name,
-                `
-                <div class="card">
-
-                    <h1>
-                        ${escapeHTML(
-                            server.name
-                        )}
-                    </h1>
-
-                    <p>
-                        ${
-                            server.locked
-                                ? `
-                                <span class="locked">
-                                    🔒 Gesperrt
-                                </span>
-                                `
-                                : server.status ===
-                                  "running"
-                                ? `
-                                <span class="online">
-                                    ● Online
-                                </span>
-                                `
-                                : `
-                                <span class="offline">
-                                    ● Offline
-                                </span>
-                                `
-                        }
-                    </p>
-
-                    ${
-                        server.locked
-                            ? `
-                            <div class="alert alert-red">
-                                Dieser Server wurde gesperrt.
-
-                                ${
-                                    server.lockReason
-                                        ? `
-                                        <br>
-                                        Grund:
-                                        ${escapeHTML(
-                                            server.lockReason
-                                        )}
-                                        `
-                                        : ""
-                                }
-                            </div>
-                            `
-                            : ""
-                    }
-
-                    <p class="muted">
-
-                        Server-ID:
-                        ${escapeHTML(
-                            server.id
-                        )}
-
-                        <br>
-
-                        Version:
-                        ${escapeHTML(
-                            server.version
-                        )}
-
-                        <br>
-
-                        Typ:
-                        ${escapeHTML(
-                            server.type
-                        )}
-
-                    </p>
-
-                    <div class="actions">
-
-                        ${
-                            !server.locked
-                                ? `
-                                <form method="POST"
-                                      action="/servers/${server.id}/start">
-
-                                    <button class="green">
-                                        ▶ Start
-                                    </button>
-
-                                </form>
-
-                                <form method="POST"
-                                      action="/servers/${server.id}/stop">
-
-                                    <button class="orange">
-                                        ■ Stop
-                                    </button>
-
-                                </form>
-
-                                <form method="POST"
-                                      action="/servers/${server.id}/restart">
-
-                                    <button>
-                                        ↻ Neustart
-                                    </button>
-
-                                </form>
-                                `
-                                : ""
-                        }
-
-                        ${
-                            isOwner(req.user)
-                                ? `
-                                <form method="POST"
-                                      action="/admin/servers/${server.id}/toggle-lock">
-
-                                    <button class="orange">
-                                        ${
-                                            server.locked
-                                                ? "🔓 Entsperren"
-                                                : "🔒 Sperren"
-                                        }
-                                    </button>
-
-                                </form>
-                                `
-                                : ""
-                        }
-
-                        <form method="POST"
-                              action="/servers/${server.id}/delete"
-                              onsubmit="return confirm('Server wirklich löschen?')">
-
-                            <button class="red">
-                                🗑️ Löschen
-                            </button>
-
-                        </form>
-
-                    </div>
-
-                </div>
-
-                <div class="grid">
-
-                    <div class="card">
-                        <h3>RAM</h3>
-                        <div class="stat">
-                            ${server.ram} MB
-                        </div>
-                    </div>
-
-                    <div class="card">
-                        <h3>CPU</h3>
-                        <div class="stat">
-                            ${server.cpu}%
-                        </div>
-                    </div>
-
-                    <div class="card">
-                        <h3>Speicher</h3>
-                        <div class="stat">
-                            ${server.storage} MB
-                        </div>
-                    </div>
-
-                </div>
-
-                <div class="card">
-
-                    <h2>
-                        📁 Serverdateien
-                    </h2>
-
-                    ${
-                        files.length
-                            ? files
-                                  .map(
-                                      file =>
-                                          `
-                                          <p>
-                                              <a class="btn gray"
-                                                 href="/servers/${server.id}/files/${encodeURIComponent(file)}">
-                                                  ${escapeHTML(
-                                                      file
-                                                  )}
-                                              </a>
-                                          </p>
-                                          `
-                                  )
-                                  .join("")
-                            : "<p>Keine Dateien.</p>"
-                    }
-
-                </div>
-
-                <div class="card">
-
-                    <h2>
-                        📝 Datei erstellen / bearbeiten
-                    </h2>
-
-                    <form method="POST"
-                          action="/servers/${server.id}/files">
-
-                        <label>
-                            Dateiname
-                        </label>
-
-                        <input
-                            name="filename"
-                            maxlength="100"
-                            required
-                            placeholder="plugins/mein-plugin.txt"
-                        >
-
-                        <label>
-                            Inhalt / Code
-                        </label>
-
-                        <textarea
-                            name="content"
-                            placeholder="Hier deinen Code eintragen..."
-                        ></textarea>
-
-                        <button>
-                            Datei speichern
-                        </button>
-
-                    </form>
-
-                </div>
-
-                <div class="card">
-
-                    <h2>
-                        🖥️ Konsole
-                    </h2>
-
-                    <div class="code">
-
-                        ${
-                            server.console &&
-                            server.console.length
-                                ? server.console
-                                      .slice(-100)
-                                      .map(
-                                          x =>
-                                              escapeHTML(
-                                                  x
-                                              )
-                                      )
-                                      .join(
-                                          "<br>"
-                                      )
-                                : "Keine Einträge."
-                        }
-
-                    </div>
-
-                </div>
-                `,
-                req.user
-            )
-        );
-    }
-);
-
-/* =========================================================
-   SERVER GET OWNED
-========================================================= */
-
-function getServerForUser(
-    req
-) {
-    const list = servers();
-
-    const server =
-        list.find(
-            x =>
-                x.id ===
-                req.params.id
-        );
-
-    if (!server) {
-        return null;
+  "/api/servers",
+  requireLogin,
+  (req, res) => {
+    const name = safeName(
+      req.body.name
+    );
+
+    const ram = Number(
+      req.body.ram || 1024
+    );
+
+    const jar = safeName(
+      req.body.jar ||
+        "server.jar"
+    );
+
+    if (!name) {
+      return res.status(400).json({
+        error:
+          "Bitte einen Servernamen eingeben."
+      });
     }
 
     if (
-        server.ownerId !==
-            req.user.id &&
-        !isOwner(req.user)
+      !Number.isFinite(ram) ||
+      ram < 512 ||
+      ram > 32768
     ) {
-        return null;
+      return res.status(400).json({
+        error:
+          "RAM muss zwischen 512 MB und 32768 MB liegen."
+      });
     }
 
-    return {
-        server,
-        list
+    const ownedServers =
+      servers.filter(
+        server =>
+          server.ownerId ===
+          req.user.id
+      );
+
+    if (
+      !isOwner(req.user) &&
+      ownedServers.length >= 1
+    ) {
+      return res.status(403).json({
+        error:
+          "Normale Benutzer dürfen einen kostenlosen Server besitzen."
+      });
+    }
+
+    const server = {
+      id: id("server"),
+      ownerId:
+        req.user.id,
+      name,
+      ram,
+      jar,
+      status: "stopped",
+      locked: false,
+      createdAt:
+        new Date().toISOString(),
+      startedAt: null,
+      console: []
     };
+
+    servers.push(server);
+
+    const directory =
+      getServerDirectory(
+        server
+      );
+
+    ensureEula(directory);
+
+    const properties =
+      path.join(
+        directory,
+        "server.properties"
+      );
+
+    if (
+      !fs.existsSync(properties)
+    ) {
+      fs.writeFileSync(
+        properties,
+        [
+          "motd=Florian Minecraft Server",
+          "online-mode=true",
+          "enable-command-block=false",
+          "max-players=20",
+          "difficulty=normal",
+          "gamemode=survival",
+          "pvp=true",
+          "server-port=25565"
+        ].join("\n") +
+          "\n",
+        "utf8"
+      );
+    }
+
+    saveServers();
+
+    res.json({
+      success: true,
+      message:
+        "Minecraft-Server erstellt.",
+      server
+    });
+  }
+);
+
+/* =========================================================
+   SERVER DETAILS
+========================================================= */
+
+app.get(
+  "/api/servers/:serverId",
+  requireLogin,
+  requireServerAccess,
+  (req, res) => {
+    const server =
+      req.server;
+
+    res.json({
+      success: true,
+      server: {
+        ...server,
+        running:
+          isServerRunning(
+            server.id
+          ),
+        process: Boolean(
+          getProcess(server.id)
+        )
+      }
+    });
+  }
+);
+
+/* =========================================================
+   SERVER START
+========================================================= */
+
+app.post(
+  "/api/servers/:serverId/start",
+  requireLogin,
+  requireServerAccess,
+  (req, res) => {
+    const server =
+      req.server;
+
+    if (server.locked) {
+      return res.status(423).json({
+        error:
+          "Dieser Server wurde gesperrt."
+      });
+    }
+
+    const result =
+      startMinecraftServer(
+        server
+      );
+
+    res.json(result);
+  }
+);
+
+/* =========================================================
+   SERVER STOP
+========================================================= */
+
+app.post(
+  "/api/servers/:serverId/stop",
+  requireLogin,
+  requireServerAccess,
+  (req, res) => {
+    const result =
+      stopMinecraftServer(
+        req.server
+      );
+
+    res.json(result);
+  }
+);
+
+/* =========================================================
+   SERVER RESTART
+========================================================= */
+
+app.post(
+  "/api/servers/:serverId/restart",
+  requireLogin,
+  requireServerAccess,
+  async (req, res) => {
+    if (req.server.locked) {
+      return res.status(423).json({
+        error:
+          "Dieser Server wurde gesperrt."
+      });
+    }
+
+    const result =
+      await restartMinecraftServer(
+        req.server
+      );
+
+    res.json(result);
+  }
+);
+
+/* =========================================================
+   SERVER BEFEHL
+========================================================= */
+
+app.post(
+  "/api/servers/:serverId/command",
+  requireLogin,
+  requireServerAccess,
+  (req, res) => {
+    const command = String(
+      req.body.command || ""
+    ).trim();
+
+    if (!command) {
+      return res.status(400).json({
+        error:
+          "Kein Befehl angegeben."
+      });
+    }
+
+    if (
+      !isServerRunning(
+        req.server.id
+      )
+    ) {
+      return res.status(400).json({
+        error:
+          "Der Server läuft nicht."
+      });
+    }
+
+    const info =
+      getProcess(
+        req.server.id
+      );
+
+    try {
+      info.process.stdin.write(
+        command.replace(
+          /\r?\n/g,
+          ""
+        ) + "\n"
+      );
+
+      appendConsole(
+        req.server,
+        `> ${command}`
+      );
+
+      res.json({
+        success: true
+      });
+    } catch (error) {
+      res.status(500).json({
+        error:
+          "Befehl konnte nicht gesendet werden."
+      });
+    }
+  }
+);
+
+/* =========================================================
+   SERVER SPERREN
+========================================================= */
+
+app.post(
+  "/api/servers/:serverId/lock",
+  requireLogin,
+  requireOwner,
+  (req, res) => {
+    const server =
+      findServer(
+        req.params.serverId
+      );
+
+    if (!server) {
+      return res.status(404).json({
+        error:
+          "Server nicht gefunden."
+      });
+    }
+
+    server.locked = true;
+
+    stopMinecraftServer(
+      server
+    );
+
+    saveServers();
+
+    res.json({
+      success: true,
+      message:
+        "Server wurde gesperrt."
+    });
+  }
+);
+
+/* =========================================================
+   SERVER ENTSPERREN
+========================================================= */
+
+app.post(
+  "/api/servers/:serverId/unlock",
+  requireLogin,
+  requireOwner,
+  (req, res) => {
+    const server =
+      findServer(
+        req.params.serverId
+      );
+
+    if (!server) {
+      return res.status(404).json({
+        error:
+          "Server nicht gefunden."
+      });
+    }
+
+    server.locked = false;
+
+    saveServers();
+
+    res.json({
+      success: true,
+      message:
+        "Server wurde entsperrt."
+    });
+  }
+);
+
+/* =========================================================
+   SERVER LÖSCHEN
+========================================================= */
+
+app.delete(
+  "/api/servers/:serverId",
+  requireLogin,
+  requireServerAccess,
+  (req, res) => {
+    const server =
+      req.server;
+
+    if (
+      !isOwner(req.user) &&
+      server.ownerId !==
+        req.user.id
+    ) {
+      return res.status(403).json({
+        error:
+          "Keine Berechtigung."
+      });
+    }
+
+    stopMinecraftServer(
+      server
+    );
+
+    const directory =
+      getServerDirectory(
+        server
+      );
+
+    try {
+      if (fs.existsSync(directory)) {
+        fs.rmSync(
+          directory,
+          {
+            recursive: true,
+            force: true
+          }
+        );
+      }
+    } catch (error) {
+      return res.status(500).json({
+        error:
+          "Serverdateien konnten nicht gelöscht werden."
+      });
+    }
+
+    servers =
+      servers.filter(
+        item =>
+          item.id !==
+          server.id
+      );
+
+    saveServers();
+
+    res.json({
+      success: true,
+      message:
+        "Server wurde gelöscht."
+    });
+  }
+);
+
+/* =========================================================
+   DATEIEN LISTEN
+========================================================= */
+
+app.get(
+  "/api/servers/:serverId/files",
+  requireLogin,
+  requireServerAccess,
+  (req, res) => {
+    const relative =
+      String(
+        req.query.path || ""
+      );
+
+    let directory;
+
+    try {
+      directory =
+        safeServerPath(
+          req.server,
+          relative
+        );
+    } catch (error) {
+      return res.status(400).json({
+        error:
+          error.message
+      });
+    }
+
+    if (!fs.existsSync(directory)) {
+      return res.status(404).json({
+        error:
+          "Ordner nicht gefunden."
+      });
+    }
+
+    if (
+      !fs.statSync(directory).isDirectory()
+    ) {
+      return res.status(400).json({
+        error:
+          "Pfad ist kein Ordner."
+      });
+    }
+
+    const entries =
+      fs.readdirSync(
+        directory,
+        {
+          withFileTypes: true
+        }
+      );
+
+    res.json({
+      success: true,
+      path: relative,
+      files: entries.map(
+        entry => ({
+          name:
+            entry.name,
+          type:
+            entry.isDirectory()
+              ? "directory"
+              : "file"
+        })
+      )
+    });
+  }
+);
+
+/* =========================================================
+   DATEI LESEN
+========================================================= */
+
+app.get(
+  "/api/servers/:serverId/file",
+  requireLogin,
+  requireServerAccess,
+  (req, res) => {
+    const relative =
+      String(
+        req.query.path || ""
+      );
+
+    let file;
+
+    try {
+      file =
+        safeServerPath(
+          req.server,
+          relative
+        );
+    } catch (error) {
+      return res.status(400).json({
+        error:
+          error.message
+      });
+    }
+
+    if (!fs.existsSync(file)) {
+      return res.status(404).json({
+        error:
+          "Datei nicht gefunden."
+      });
+    }
+
+    if (
+      !fs.statSync(file).isFile()
+    ) {
+      return res.status(400).json({
+        error:
+          "Das ist keine Datei."
+      });
+    }
+
+    const content =
+      fs.readFileSync(
+        file,
+        "utf8"
+      );
+
+    res.json({
+      success: true,
+      path: relative,
+      content
+    });
+  }
+);
+
+/* =========================================================
+   DATEI SPEICHERN
+========================================================= */
+
+app.put(
+  "/api/servers/:serverId/file",
+  requireLogin,
+  requireServerAccess,
+  (req, res) => {
+    const relative =
+      String(
+        req.body.path || ""
+      );
+
+    const content =
+      String(
+        req.body.content || ""
+      );
+
+    let file;
+
+    try {
+      file =
+        safeServerPath(
+          req.server,
+          relative
+        );
+    } catch (error) {
+      return res.status(400).json({
+        error:
+          error.message
+      });
+    }
+
+    fs.mkdirSync(
+      path.dirname(file),
+      {
+        recursive: true
+      }
+    );
+
+    fs.writeFileSync(
+      file,
+      content,
+      "utf8"
+    );
+
+    res.json({
+      success: true,
+      message:
+        "Datei gespeichert."
+    });
+  }
+);
+
+/* =========================================================
+   DATEI ERSTELLEN
+========================================================= */
+
+app.post(
+  "/api/servers/:serverId/file",
+  requireLogin,
+  requireServerAccess,
+  (req, res) => {
+    const relative =
+      String(
+        req.body.path || ""
+      );
+
+    const content =
+      String(
+        req.body.content || ""
+      );
+
+    let file;
+
+    try {
+      file =
+        safeServerPath(
+          req.server,
+          relative
+        );
+    } catch (error) {
+      return res.status(400).json({
+        error:
+          error.message
+      });
+    }
+
+    if (fs.existsSync(file)) {
+      return res.status(409).json({
+        error:
+          "Datei existiert bereits."
+      });
+    }
+
+    fs.mkdirSync(
+      path.dirname(file),
+      {
+        recursive: true
+      }
+    );
+
+    fs.writeFileSync(
+      file,
+      content,
+      "utf8"
+    );
+
+    res.json({
+      success: true,
+      message:
+        "Datei erstellt."
+    });
+  }
+);
+
+/* =========================================================
+   ORDNER ERSTELLEN
+========================================================= */
+
+app.post(
+  "/api/servers/:serverId/folder",
+  requireLogin,
+  requireServerAccess,
+  (req, res) => {
+    const relative =
+      String(
+        req.body.path || ""
+      );
+
+    let directory;
+
+    try {
+      directory =
+        safeServerPath(
+          req.server,
+          relative
+        );
+    } catch (error) {
+      return res.status(400).json({
+        error:
+          error.message
+      });
+    }
+
+    if (fs.existsSync(directory)) {
+      return res.status(409).json({
+        error:
+          "Ordner existiert bereits."
+      });
+    }
+
+    fs.mkdirSync(
+      directory,
+      {
+        recursive: true
+      }
+    );
+
+    res.json({
+      success: true,
+      message:
+        "Ordner erstellt."
+    });
+  }
+);
+
+/* =========================================================
+   DATEI / ORDNER LÖSCHEN
+========================================================= */
+
+app.delete(
+  "/api/servers/:serverId/file",
+  requireLogin,
+  requireServerAccess,
+  (req, res) => {
+    const relative =
+      String(
+        req.query.path || ""
+      );
+
+    let target;
+
+    try {
+      target =
+        safeServerPath(
+          req.server,
+          relative
+        );
+    } catch (error) {
+      return res.status(400).json({
+        error:
+          error.message
+      });
+    }
+
+    if (!fs.existsSync(target)) {
+      return res.status(404).json({
+        error:
+          "Datei oder Ordner nicht gefunden."
+      });
+    }
+
+    fs.rmSync(
+      target,
+      {
+        recursive: true,
+        force: true
+      }
+    );
+
+    res.json({
+      success: true,
+      message:
+        "Gelöscht."
+    });
+  }
+);
+
+/* =========================================================
+   KONSOLE
+========================================================= */
+
+app.get(
+  "/api/servers/:serverId/console",
+  requireLogin,
+  requireServerAccess,
+  (req, res) => {
+    res.json({
+      success: true,
+      console:
+        req.server.console ||
+        []
+    });
+  }
+);
+
+/* =========================================================
+   OWNER: ALLE SERVER
+========================================================= */
+
+app.get(
+  "/api/admin/servers",
+  requireLogin,
+  requireOwner,
+  (req, res) => {
+    res.json({
+      success: true,
+      servers:
+        servers.map(
+          server => {
+            const owner =
+              findUserById(
+                server.ownerId
+              );
+
+            return {
+              id:
+                server.id,
+              name:
+                server.name,
+              ownerId:
+                server.ownerId,
+              ownerEmail:
+                owner
+                  ? owner.email
+                  : "unbekannt",
+              status:
+                server.status,
+              locked:
+                Boolean(
+                  server.locked
+                ),
+              running:
+                isServerRunning(
+                  server.id
+                ),
+              createdAt:
+                server.createdAt
+            };
+          }
+        )
+    });
+  }
+);
+
+/* =========================================================
+   OWNER: ALLE SERVER STOPPEN
+========================================================= */
+
+app.post(
+  "/api/admin/servers/shutdown-all",
+  requireLogin,
+  requireOwner,
+  (req, res) => {
+    let stopped = 0;
+
+    for (const server of servers) {
+      if (
+        isServerRunning(
+          server.id
+        )
+      ) {
+        stopMinecraftServer(
+          server
+        );
+
+        stopped++;
+      }
+    }
+
+    res.json({
+      success: true,
+      message:
+        `${stopped} Server werden heruntergefahren.`
+    });
+  }
+);
+
+/* =========================================================
+   OWNER: ALLE SERVER SPERREN
+========================================================= */
+
+app.post(
+  "/api/admin/servers/lock-all",
+  requireLogin,
+  requireOwner,
+  (req, res) => {
+    for (const server of servers) {
+      server.locked = true;
+
+      if (
+        isServerRunning(
+          server.id
+        )
+      ) {
+        stopMinecraftServer(
+          server
+        );
+      }
+    }
+
+    saveServers();
+
+    res.json({
+      success: true,
+      message:
+        "Alle Server wurden gesperrt."
+    });
+  }
+);
+
+/* =========================================================
+   OWNER: ALLE SERVER ENTSPERREN
+========================================================= */
+
+app.post(
+  "/api/admin/servers/unlock-all",
+  requireLogin,
+  requireOwner,
+  (req, res) => {
+    for (const server of servers) {
+      server.locked = false;
+    }
+
+    saveServers();
+
+    res.json({
+      success: true,
+      message:
+        "Alle Server wurden entsperrt."
+    });
+  }
+);
+
+/* =========================================================
+   OWNER: WARTUNG EIN
+========================================================= */
+
+app.post(
+  "/api/admin/maintenance",
+  requireLogin,
+  requireOwner,
+  (req, res) => {
+    settings.maintenance =
+      Boolean(
+        req.body.enabled
+      );
+
+    if (
+      req.body.message !==
+      undefined
+    ) {
+      settings.maintenanceMessage =
+        String(
+          req.body.message
+        ).slice(0, 500);
+    }
+
+    saveSettings();
+
+    res.json({
+      success: true,
+      maintenance:
+        settings.maintenance
+    });
+  }
+);
+
+/* =========================================================
+   OWNER: USER LISTE
+========================================================= */
+
+app.get(
+  "/api/admin/users",
+  requireLogin,
+  requireOwner,
+  (req, res) => {
+    res.json({
+      success: true,
+      users:
+        users.map(
+          user => ({
+            id:
+              user.id,
+            email:
+              user.email,
+            owner:
+              isOwner(user),
+            banned:
+              isBanned(user),
+            createdAt:
+              user.createdAt,
+            serverCount:
+              servers.filter(
+                server =>
+                  server.ownerId ===
+                  user.id
+              ).length
+          })
+        )
+    });
+  }
+);
+
+/* =========================================================
+   OWNER: USER BANNEN
+========================================================= */
+
+app.post(
+  "/api/admin/users/:userId/ban",
+  requireLogin,
+  requireOwner,
+  (req, res) => {
+    const user =
+      findUserById(
+        req.params.userId
+      );
+
+    if (!user) {
+      return res.status(404).json({
+        error:
+          "Benutzer nicht gefunden."
+      });
+    }
+
+    if (isOwner(user)) {
+      return res.status(403).json({
+        error:
+          "Der Owner kann nicht gebannt werden."
+      });
+    }
+
+    const exists =
+      bans.some(
+        ban =>
+          ban.email ===
+          user.email
+      );
+
+    if (!exists) {
+      bans.push({
+        id:
+          id("ban"),
+        userId:
+          user.id,
+        email:
+          user.email,
+        reason:
+          String(
+            req.body.reason ||
+              "Keine Angabe"
+          ),
+        createdAt:
+          new Date().toISOString()
+      });
+
+      saveBans();
+    }
+
+    user.banned = true;
+
+    saveUsers();
+
+    for (const server of servers) {
+      if (
+        server.ownerId ===
+        user.id
+      ) {
+        server.locked = true;
+
+        stopMinecraftServer(
+          server
+        );
+      }
+    }
+
+    saveServers();
+
+    res.json({
+      success: true,
+      message:
+        "Benutzer wurde gebannt."
+    });
+  }
+);
+
+/* =========================================================
+   OWNER: USER ENTBANNEN
+========================================================= */
+
+app.post(
+  "/api/admin/users/:userId/unban",
+  requireLogin,
+  requireOwner,
+  (req, res) => {
+    const user =
+      findUserById(
+        req.params.userId
+      );
+
+    if (!user) {
+      return res.status(404).json({
+        error:
+          "Benutzer nicht gefunden."
+      });
+    }
+
+    bans =
+      bans.filter(
+        ban =>
+          ban.userId !==
+          user.id
+      );
+
+    user.banned = false;
+
+    saveBans();
+    saveUsers();
+
+    res.json({
+      success: true,
+      message:
+        "Benutzer wurde entbannt."
+    });
+  }
+);
+
+/* =========================================================
+   OWNER: USER LÖSCHEN
+========================================================= */
+
+app.delete(
+  "/api/admin/users/:userId",
+  requireLogin,
+  requireOwner,
+  (req, res) => {
+    const user =
+      findUserById(
+        req.params.userId
+      );
+
+    if (!user) {
+      return res.status(404).json({
+        error:
+          "Benutzer nicht gefunden."
+      });
+    }
+
+    if (isOwner(user)) {
+      return res.status(403).json({
+        error:
+          "Der Owner kann nicht gelöscht werden."
+      });
+    }
+
+    const ownedServers =
+      servers.filter(
+        server =>
+          server.ownerId ===
+          user.id
+      );
+
+    for (const server of ownedServers) {
+      stopMinecraftServer(
+        server
+      );
+
+      const directory =
+        getServerDirectory(
+          server
+        );
+
+      if (
+        fs.existsSync(directory)
+      ) {
+        fs.rmSync(
+          directory,
+          {
+            recursive: true,
+            force: true
+          }
+        );
+      }
+    }
+
+    servers =
+      servers.filter(
+        server =>
+          server.ownerId !==
+          user.id
+      );
+
+    users =
+      users.filter(
+        item =>
+          item.id !==
+          user.id
+      );
+
+    bans =
+      bans.filter(
+        ban =>
+          ban.userId !==
+          user.id
+      );
+
+    saveUsers();
+    saveServers();
+    saveBans();
+
+    res.json({
+      success: true,
+      message:
+        "Benutzer und dessen Server wurden gelöscht."
+    });
+  }
+);
+
+/* =========================================================
+   OWNER: SERVER GLOBAL LÖSCHEN
+========================================================= */
+
+app.delete(
+  "/api/admin/servers/:serverId",
+  requireLogin,
+  requireOwner,
+  (req, res) => {
+    const server =
+      findServer(
+        req.params.serverId
+      );
+
+    if (!server) {
+      return res.status(404).json({
+        error:
+          "Server nicht gefunden."
+      });
+    }
+
+    stopMinecraftServer(
+      server
+    );
+
+    const directory =
+      getServerDirectory(
+        server
+      );
+
+    if (
+      fs.existsSync(directory)
+    ) {
+      fs.rmSync(
+        directory,
+        {
+          recursive: true,
+          force: true
+        }
+      );
+    }
+
+    servers =
+      servers.filter(
+        item =>
+          item.id !==
+          server.id
+      );
+
+    saveServers();
+
+    res.json({
+      success: true,
+      message:
+        "Server wurde gelöscht."
+    });
+  }
+);
+
+/* =========================================================
+   OWNER: SERVER SPERREN GLOBAL
+========================================================= */
+
+app.post(
+  "/api/admin/servers/:serverId/lock",
+  requireLogin,
+  requireOwner,
+  (req, res) => {
+    const server =
+      findServer(
+        req.params.serverId
+      );
+
+    if (!server) {
+      return res.status(404).json({
+        error:
+          "Server nicht gefunden."
+      });
+    }
+
+    server.locked = true;
+
+    stopMinecraftServer(
+      server
+    );
+
+    saveServers();
+
+    res.json({
+      success: true,
+      message:
+        "Server gesperrt."
+    });
+  }
+);
+
+/* =========================================================
+   OWNER: SERVER ENTPERREN GLOBAL
+========================================================= */
+
+app.post(
+  "/api/admin/servers/:serverId/unlock",
+  requireLogin,
+  requireOwner,
+  (req, res) => {
+    const server =
+      findServer(
+        req.params.serverId
+      );
+
+    if (!server) {
+      return res.status(404).json({
+        error:
+          "Server nicht gefunden."
+      });
+    }
+
+    server.locked = false;
+
+    saveServers();
+
+    res.json({
+      success: true,
+      message:
+        "Server entsperrt."
+    });
+  }
+);
+
+/* =========================================================
+   OWNER: JAR LISTE
+========================================================= */
+
+app.get(
+  "/api/admin/jars",
+  requireLogin,
+  requireOwner,
+  (req, res) => {
+    const jars =
+      fs.readdirSync(
+        MINECRAFT_DIR
+      ).filter(
+        file =>
+          file
+            .toLowerCase()
+            .endsWith(".jar")
+      );
+
+    res.json({
+      success: true,
+      jars
+    });
+  }
+);
+
+/* =========================================================
+   404 API
+========================================================= */
+
+app.use(
+  "/api",
+  (req, res) => {
+    res.status(404).json({
+      error:
+        "API-Endpunkt nicht gefunden."
+    });
+  }
+);
+
+/* =========================================================
+   FEHLERHANDLER
+========================================================= */
+
+app.use(
+  (
+    error,
+    req,
+    res,
+    next
+  ) => {
+    console.error(
+      "SERVER FEHLER:",
+      error
+    );
+
+    if (res.headersSent) {
+      return next(error);
+    }
+
+    res.status(500).json({
+      error:
+        "Interner Serverfehler."
+    });
+  }
+);
+
+/* =========================================================
+   WEBSEITE
+========================================================= */
+
+function renderPage(title) {
+  return `<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>${escapeHtml(title)}</title>
+
+<style>
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  background: #080b12;
+  color: #ffffff;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.container {
+  width: min(1200px, calc(100% - 30px));
+  margin: auto;
+}
+
+header {
+  border-bottom: 1px solid #202638;
+  background: #0c1019;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.nav {
+  min-height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+}
+
+.logo {
+  font-weight: 900;
+  font-size: 20px;
+}
+
+.logo span {
+  color: #6ea8ff;
+}
+
+.nav-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.hero {
+  padding: 70px 0 35px;
+}
+
+.hero h1 {
+  font-size: clamp(34px, 6vw, 70px);
+  margin: 0 0 15px;
+}
+
+.hero p {
+  color: #9da8bc;
+  font-size: 18px;
+  line-height: 1.6;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 18px;
+}
+
+.card {
+  background: #101522;
+  border: 1px solid #20283a;
+  border-radius: 16px;
+  padding: 22px;
+}
+
+.card h2,
+.card h3 {
+  margin-top: 0;
+}
+
+.muted {
+  color: #9da8bc;
+}
+
+.form {
+  display: grid;
+  gap: 12px;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  border: 1px solid #293247;
+  border-radius: 10px;
+  background: #090d15;
+  color: white;
+  padding: 13px;
+  outline: none;
+}
+
+textarea {
+  min-height: 220px;
+  resize: vertical;
+  font-family: Consolas, monospace;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: #6ea8ff;
+}
+
+.btn {
+  border: 0;
+  border-radius: 10px;
+  padding: 12px 16px;
+  background: #326ee8;
+  color: white;
+  font-weight: 700;
+}
+
+.btn:hover {
+  filter: brightness(1.1);
+}
+
+.btn-danger {
+  background: #c63838;
+}
+
+.btn-green {
+  background: #218b55;
+}
+
+.btn-gray {
+  background: #293247;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.section {
+  padding: 30px 0;
+}
+
+.server {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+
+.server-name {
+  font-size: 21px;
+  font-weight: 800;
+}
+
+.status {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: #293247;
+  color: #b9c4d9;
+  font-size: 12px;
+}
+
+.status.online {
+  background: #175f3c;
+  color: #9dffc9;
+}
+
+.status.stopped {
+  background: #46202a;
+  color: #ffb6c2;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 15px;
+}
+
+pre {
+  background: #060911;
+  border: 1px solid #20283a;
+  padding: 15px;
+  border-radius: 10px;
+  overflow: auto;
+  min-height: 160px;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 100;
+}
+
+.modal-box {
+  width: min(500px, 100%);
+  background: #101522;
+  border: 1px solid #293247;
+  border-radius: 16px;
+  padding: 25px;
+}
+
+.toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  padding: 14px 18px;
+  background: #101522;
+  border: 1px solid #293247;
+  border-radius: 10px;
+  display: none;
+  z-index: 200;
+}
+
+.admin {
+  border-color: #694dff;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+td,
+th {
+  text-align: left;
+  padding: 10px;
+  border-bottom: 1px solid #20283a;
+}
+
+@media (max-width: 700px) {
+  .nav {
+    align-items: flex-start;
+    padding: 15px 0;
+    flex-direction: column;
+  }
+}
+</style>
+</head>
+
+<body>
+
+<header>
+  <div class="container nav">
+    <div class="logo">
+      Florian <span>/</span> WeisserHai Minecraft Hosting
+    </div>
+
+    <div class="nav-actions">
+      <button class="btn btn-gray" onclick="showLogin()">
+        Login
+      </button>
+
+      <button class="btn" onclick="showRegister()">
+        Registrieren
+      </button>
+
+      <button
+        id="logoutButton"
+        class="btn btn-danger hidden"
+        onclick="logout()"
+      >
+        Logout
+      </button>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+
+<section class="hero">
+  <h1>Minecraft Hosting</h1>
+
+  <p>
+    Erstelle und verwalte deine Minecraft-Server
+    direkt über eine einfache Weboberfläche.
+  </p>
+
+  <div class="actions">
+    <button class="btn" onclick="showRegister()">
+      Kostenlos starten
+    </button>
+
+    <button class="btn btn-gray" onclick="showLogin()">
+      Einloggen
+    </button>
+  </div>
+</section>
+
+<section id="dashboard" class="section hidden">
+
+  <div class="card">
+    <h2>Dashboard</h2>
+
+    <p id="accountInfo" class="muted">
+      Lade Account...
+    </p>
+
+    <div class="actions">
+      <button
+        class="btn"
+        onclick="openCreateServer()"
+      >
+        + Minecraft-Server erstellen
+      </button>
+
+      <button
+        id="adminButton"
+        class="btn hidden"
+        onclick="loadAdmin()"
+      >
+        Admin Panel
+      </button>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Meine Server</h2>
+
+    <div
+      id="servers"
+      class="grid"
+    ></div>
+  </div>
+
+  <div
+    id="adminPanel"
+    class="section hidden"
+  ></div>
+
+</section>
+
+<section
+  id="loggedOut"
+  class="section"
+>
+  <div class="grid">
+
+    <div class="card">
+      <h2>1 kostenloser Server</h2>
+      <p class="muted">
+        Jeder normale Benutzer kann einen kostenlosen
+        Minecraft-Server verwalten.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>Serververwaltung</h2>
+      <p class="muted">
+        Starten, stoppen, neustarten und Serverdateien
+        verwalten.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>Code-Editor</h2>
+      <p class="muted">
+        Serverdateien können direkt über die Website
+        bearbeitet werden.
+      </p>
+    </div>
+
+  </div>
+</section>
+
+</main>
+
+<div
+  id="modal"
+  class="modal hidden"
+>
+  <div
+    id="modalContent"
+    class="modal-box"
+  ></div>
+</div>
+
+<div
+  id="toast"
+  class="toast"
+></div>
+
+<script>
+"use strict";
+
+let currentUser = null;
+let selectedServer = null;
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function toast(message) {
+  const element =
+    document.getElementById("toast");
+
+  element.textContent =
+    message;
+
+  element.style.display =
+    "block";
+
+  setTimeout(() => {
+    element.style.display =
+      "none";
+  }, 3000);
+}
+
+async function api(
+  url,
+  options = {}
+) {
+  const response =
+    await fetch(
+      url,
+      {
+        credentials: "same-origin",
+        headers: {
+          "Content-Type":
+            "application/json",
+          ...(options.headers || {})
+        },
+        ...options
+      }
+    );
+
+  let data = {};
+
+  try {
+    data =
+      await response.json();
+  } catch (_) {}
+
+  if (!response.ok) {
+    throw new Error(
+      data.error ||
+      "Anfrage fehlgeschlagen."
+    );
+  }
+
+  return data;
+}
+
+function openModal(html) {
+  document
+    .getElementById(
+      "modalContent"
+    )
+    .innerHTML = html;
+
+  document
+    .getElementById(
+      "modal"
+    )
+    .classList.remove(
+      "hidden"
+    );
+}
+
+function closeModal() {
+  document
+    .getElementById(
+      "modal"
+    )
+    .classList.add(
+      "hidden"
+    );
+}
+
+function showLogin() {
+  openModal(\`
+    <h2>Login</h2>
+
+    <form
+      class="form"
+      onsubmit="login(event)"
+    >
+      <input
+        id="loginEmail"
+        type="email"
+        placeholder="E-Mail"
+        required
+      >
+
+      <input
+        id="loginPassword"
+        type="password"
+        placeholder="Passwort"
+        required
+      >
+
+      <button class="btn">
+        Einloggen
+      </button>
+    </form>
+
+    <div class="actions">
+      <button
+        class="btn btn-gray"
+        onclick="showRegister()"
+      >
+        Noch kein Konto?
+      </button>
+
+      <button
+        class="btn btn-gray"
+        onclick="closeModal()"
+      >
+        Schließen
+      </button>
+    </div>
+  \`);
+}
+
+function showRegister() {
+  openModal(\`
+    <h2>Registrierung</h2>
+
+    <form
+      class="form"
+      onsubmit="register(event)"
+    >
+      <input
+        id="registerEmail"
+        type="email"
+        placeholder="E-Mail"
+        required
+      >
+
+      <input
+        id="registerPassword"
+        type="password"
+        placeholder="Passwort"
+        minlength="6"
+        required
+      >
+
+      <button class="btn">
+        Konto erstellen
+      </button>
+    </form>
+
+    <div class="actions">
+      <button
+        class="btn btn-gray"
+        onclick="showLogin()"
+      >
+        Ich habe bereits ein Konto
+      </button>
+
+      <button
+        class="btn btn-gray"
+        onclick="closeModal()"
+      >
+        Schließen
+      </button>
+    </div>
+  \`);
+}
+
+async function login(event) {
+  event.preventDefault();
+
+  try {
+    const data =
+      await api(
+        "/api/auth/login",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            email:
+              document
+                .getElementById(
+                  "loginEmail"
+                )
+                .value,
+
+            password:
+              document
+                .getElementById(
+                  "loginPassword"
+                )
+                .value
+          })
+        }
+      );
+
+    currentUser =
+      data.user;
+
+    closeModal();
+
+    await loadDashboard();
+
+    toast(
+      "Login erfolgreich."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function register(event) {
+  event.preventDefault();
+
+  try {
+    const data =
+      await api(
+        "/api/auth/register",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            email:
+              document
+                .getElementById(
+                  "registerEmail"
+                )
+                .value,
+
+            password:
+              document
+                .getElementById(
+                  "registerPassword"
+                )
+                .value
+          })
+        }
+      );
+
+    currentUser =
+      data.user;
+
+    closeModal();
+
+    await loadDashboard();
+
+    toast(
+      "Konto erstellt."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function logout() {
+  try {
+    await api(
+      "/api/auth/logout",
+      {
+        method: "POST"
+      }
+    );
+  } catch (_) {}
+
+  currentUser = null;
+
+  document
+    .getElementById(
+      "dashboard"
+    )
+    .classList.add(
+      "hidden"
+    );
+
+  document
+    .getElementById(
+      "loggedOut"
+    )
+    .classList.remove(
+      "hidden"
+    );
+
+  document
+    .getElementById(
+      "logoutButton"
+    )
+    .classList.add(
+      "hidden"
+    );
+
+  toast(
+    "Du wurdest ausgeloggt."
+  );
+}
+
+async function loadDashboard() {
+  document
+    .getElementById(
+      "loggedOut"
+    )
+    .classList.add(
+      "hidden"
+    );
+
+  document
+    .getElementById(
+      "dashboard"
+    )
+    .classList.remove(
+      "hidden"
+    );
+
+  document
+    .getElementById(
+      "logoutButton"
+    )
+    .classList.remove(
+      "hidden"
+    );
+
+  if (
+    currentUser &&
+    currentUser.owner
+  ) {
+    document
+      .getElementById(
+        "adminButton"
+      )
+      .classList.remove(
+        "hidden"
+      );
+  }
+
+  await loadAccount();
+
+  await loadServers();
+}
+
+async function loadAccount() {
+  try {
+    const data =
+      await api(
+        "/api/account"
+      );
+
+    document
+      .getElementById(
+        "accountInfo"
+      )
+      .textContent =
+        currentUser.owner
+          ? currentUser.email +
+            " · OWNER · unbegrenzte Server"
+          : currentUser.email +
+            " · 1 kostenloser Server";
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function loadServers() {
+  try {
+    const data =
+      await api(
+        "/api/servers"
+      );
+
+    const container =
+      document.getElementById(
+        "servers"
+      );
+
+    if (!data.servers.length) {
+      container.innerHTML = \`
+        <div class="card">
+          <h3>Noch kein Server</h3>
+          <p class="muted">
+            Erstelle deinen ersten Minecraft-Server.
+          </p>
+        </div>
+      \`;
+
+      return;
+    }
+
+    container.innerHTML =
+      data.servers
+        .map(
+          server => \`
+            <div class="card">
+              <div class="server">
+                <div>
+                  <div class="server-name">
+                    \${escapeHtml(server.name)}
+                  </div>
+
+                  <p class="muted">
+                    RAM:
+                    \${server.ram} MB
+                    ·
+                    JAR:
+                    \${escapeHtml(server.jar)}
+                  </p>
+
+                  <span
+                    class="status \${server.status === "online" ? "online" : "stopped"}"
+                  >
+                    \${escapeHtml(server.status)}
+                  </span>
+
+                  \${server.locked ? \`
+                    <span class="status">
+                      GESPERRT
+                    </span>
+                  \` : ""}
+                </div>
+              </div>
+
+              <div class="actions">
+
+                <button
+                  class="btn btn-green"
+                  onclick="serverAction('\${server.id}', 'start')"
+                >
+                  Start
+                </button>
+
+                <button
+                  class="btn btn-gray"
+                  onclick="serverAction('\${server.id}', 'stop')"
+                >
+                  Stop
+                </button>
+
+                <button
+                  class="btn btn-gray"
+                  onclick="serverAction('\${server.id}', 'restart')"
+                >
+                  Restart
+                </button>
+
+                <button
+                  class="btn"
+                  onclick="openServer('\${server.id}')"
+                >
+                  Verwalten
+                </button>
+
+                <button
+                  class="btn btn-danger"
+                  onclick="deleteServer('\${server.id}')"
+                >
+                  Löschen
+                </button>
+
+              </div>
+            </div>
+          \`
+        )
+        .join("");
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+function openCreateServer() {
+  openModal(\`
+    <h2>Server erstellen</h2>
+
+    <form
+      class="form"
+      onsubmit="createServer(event)"
+    >
+
+      <input
+        id="serverName"
+        placeholder="Servername"
+        maxlength="40"
+        required
+      >
+
+      <input
+        id="serverRam"
+        type="number"
+        min="512"
+        max="32768"
+        value="1024"
+        placeholder="RAM in MB"
+        required
+      >
+
+      <input
+        id="serverJar"
+        value="server.jar"
+        placeholder="Minecraft JAR"
+        required
+      >
+
+      <button class="btn">
+        Server erstellen
+      </button>
+
+    </form>
+
+    <div class="actions">
+      <button
+        class="btn btn-gray"
+        onclick="closeModal()"
+      >
+        Abbrechen
+      </button>
+    </div>
+  \`);
+}
+
+async function createServer(event) {
+  event.preventDefault();
+
+  try {
+    await api(
+      "/api/servers",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          name:
+            document
+              .getElementById(
+                "serverName"
+              )
+              .value,
+
+          ram:
+            Number(
+              document
+                .getElementById(
+                  "serverRam"
+                )
+                .value
+            ),
+
+          jar:
+            document
+              .getElementById(
+                "serverJar"
+              )
+              .value
+        })
+      }
+    );
+
+    closeModal();
+
+    await loadServers();
+
+    toast(
+      "Server erstellt."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function serverAction(
+  serverId,
+  action
+) {
+  try {
+    await api(
+      \`/api/servers/\${serverId}/\${action}\`,
+      {
+        method: "POST"
+      }
+    );
+
+    await loadServers();
+
+    toast(
+      "Aktion ausgeführt."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function deleteServer(
+  serverId
+) {
+  if (
+    !confirm(
+      "Diesen Server wirklich löschen?"
+    )
+  ) {
+    return;
+  }
+
+  try {
+    await api(
+      \`/api/servers/\${serverId}\`,
+      {
+        method: "DELETE"
+      }
+    );
+
+    await loadServers();
+
+    toast(
+      "Server gelöscht."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function openServer(
+  serverId
+) {
+  selectedServer =
+    serverId;
+
+  try {
+    const data =
+      await api(
+        \`/api/servers/\${serverId}\`
+      );
+
+    const server =
+      data.server;
+
+    openModal(\`
+      <h2>
+        \${escapeHtml(server.name)}
+      </h2>
+
+      <p class="muted">
+        Status:
+        \${escapeHtml(server.status)}
+      </p>
+
+      <div class="actions">
+        <button
+          class="btn btn-green"
+          onclick="serverAction('\${server.id}', 'start'); closeModal()"
+        >
+          Start
+        </button>
+
+        <button
+          class="btn btn-gray"
+          onclick="serverAction('\${server.id}', 'stop'); closeModal()"
+        >
+          Stop
+        </button>
+
+        <button
+          class="btn"
+          onclick="openConsole('\${server.id}')"
+        >
+          Konsole
+        </button>
+
+        <button
+          class="btn"
+          onclick="openFiles('\${server.id}')"
+        >
+          Dateien / Code
+        </button>
+      </div>
+
+      <div class="actions">
+        <button
+          class="btn btn-gray"
+          onclick="closeModal()"
+        >
+          Schließen
+        </button>
+      </div>
+    \`);
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function openConsole(
+  serverId
+) {
+  try {
+    const data =
+      await api(
+        \`/api/servers/\${serverId}/console\`
+      );
+
+    const text =
+      data.console
+        .map(
+          line =>
+            "[" +
+            new Date(
+              line.time
+            ).toLocaleTimeString() +
+            "] " +
+            line.text
+        )
+        .join("");
+
+    openModal(\`
+      <h2>Konsole</h2>
+
+      <pre>\${escapeHtml(text)}</pre>
+
+      <form
+        class="form"
+        onsubmit="sendCommand(event, '\${serverId}')"
+      >
+        <input
+          id="consoleCommand"
+          placeholder="z.B. say Hallo"
+          autocomplete="off"
+        >
+
+        <button class="btn">
+          Befehl senden
+        </button>
+      </form>
+
+      <div class="actions">
+        <button
+          class="btn btn-gray"
+          onclick="openServer('\${serverId}')"
+        >
+          Zurück
+        </button>
+      </div>
+    \`);
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function sendCommand(
+  event,
+  serverId
+) {
+  event.preventDefault();
+
+  const command =
+    document
+      .getElementById(
+        "consoleCommand"
+      )
+      .value;
+
+  try {
+    await api(
+      \`/api/servers/\${serverId}/command\`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          command
+        })
+      }
+    );
+
+    await openConsole(
+      serverId
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function openFiles(
+  serverId,
+  currentPath = ""
+) {
+  try {
+    const data =
+      await api(
+        \`/api/servers/\${serverId}/files?path=\${encodeURIComponent(currentPath)}\`
+      );
+
+    const rows =
+      data.files
+        .map(
+          item => \`
+            <div class="card">
+              <strong>
+                \${escapeHtml(item.name)}
+              </strong>
+
+              <span class="muted">
+                \${item.type}
+              </span>
+
+              <div class="actions">
+                \${item.type === "file"
+                  ? \`
+                    <button
+                      class="btn"
+                      onclick="editFile(
+                        '\${serverId}',
+                        '\${escapeHtml(
+                          currentPath
+                            ? currentPath + "/" + item.name
+                            : item.name
+                        )}'
+                      )"
+                    >
+                      Bearbeiten
+                    </button>
+                  \`
+                  : \`
+                    <button
+                      class="btn"
+                      onclick="openFiles(
+                        '\${serverId}',
+                        '\${escapeHtml(
+                          currentPath
+                            ? currentPath + "/" + item.name
+                            : item.name
+                        )}'
+                      )"
+                    >
+                      Öffnen
+                    </button>
+                  \`
+                }
+
+                <button
+                  class="btn btn-danger"
+                  onclick="deleteFile(
+                    '\${serverId}',
+                    '\${escapeHtml(
+                      currentPath
+                        ? currentPath + "/" + item.name
+                        : item.name
+                    )}'
+                  )"
+                >
+                  Löschen
+                </button>
+              </div>
+            </div>
+          \`
+        )
+        .join("");
+
+    openModal(\`
+      <h2>Dateien</h2>
+
+      <p class="muted">
+        /\${escapeHtml(currentPath)}
+      </p>
+
+      <div class="actions">
+        <button
+          class="btn"
+          onclick="newFile('\${serverId}', '\${escapeHtml(currentPath)}')"
+        >
+          + Datei
+        </button>
+
+        <button
+          class="btn"
+          onclick="newFolder('\${serverId}', '\${escapeHtml(currentPath)}')"
+        >
+          + Ordner
+        </button>
+      </div>
+
+      <div class="section">
+        \${rows || '<p class="muted">Leer</p>'}
+      </div>
+
+      <div class="actions">
+        <button
+          class="btn btn-gray"
+          onclick="openServer('\${serverId}')"
+        >
+          Zurück
+        </button>
+      </div>
+    \`);
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function editFile(
+  serverId,
+  filePath
+) {
+  try {
+    const data =
+      await api(
+        \`/api/servers/\${serverId}/file?path=\${encodeURIComponent(filePath)}\`
+      );
+
+    openModal(\`
+      <h2>
+        \${escapeHtml(filePath)}
+      </h2>
+
+      <textarea
+        id="editor"
+      >\${escapeHtml(data.content)}</textarea>
+
+      <div class="actions">
+        <button
+          class="btn"
+          onclick="saveFile(
+            '\${serverId}',
+            '\${escapeHtml(filePath)}'
+          )"
+        >
+          Speichern
+        </button>
+
+        <button
+          class="btn btn-gray"
+          onclick="openFiles(
+            '\${serverId}'
+          )"
+        >
+          Zurück
+        </button>
+      </div>
+    \`);
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function saveFile(
+  serverId,
+  filePath
+) {
+  try {
+    const content =
+      document
+        .getElementById(
+          "editor"
+        )
+        .value;
+
+    await api(
+      \`/api/servers/\${serverId}/file\`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          path: filePath,
+          content
+        })
+      }
+    );
+
+    toast(
+      "Datei gespeichert."
+    );
+
+    await editFile(
+      serverId,
+      filePath
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+function newFile(
+  serverId,
+  currentPath
+) {
+  openModal(\`
+    <h2>Neue Datei</h2>
+
+    <form
+      class="form"
+      onsubmit="createFile(event, '\${serverId}', '\${escapeHtml(currentPath)}')"
+    >
+      <input
+        id="newFileName"
+        placeholder="z.B. config.txt"
+        required
+      >
+
+      <textarea
+        id="newFileContent"
+        placeholder="Dateiinhalt"
+      ></textarea>
+
+      <button class="btn">
+        Erstellen
+      </button>
+    </form>
+  \`);
+}
+
+async function createFile(
+  event,
+  serverId,
+  currentPath
+) {
+  event.preventDefault();
+
+  const name =
+    document
+      .getElementById(
+        "newFileName"
+      )
+      .value;
+
+  const content =
+    document
+      .getElementById(
+        "newFileContent"
+      )
+      .value;
+
+  const fullPath =
+    currentPath
+      ? currentPath + "/" + name
+      : name;
+
+  try {
+    await api(
+      \`/api/servers/\${serverId}/file\`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          path: fullPath,
+          content
+        })
+      }
+    );
+
+    await openFiles(
+      serverId,
+      currentPath
+    );
+
+    toast(
+      "Datei erstellt."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+function newFolder(
+  serverId,
+  currentPath
+) {
+  openModal(\`
+    <h2>Neuer Ordner</h2>
+
+    <form
+      class="form"
+      onsubmit="createFolder(event, '\${serverId}', '\${escapeHtml(currentPath)}')"
+    >
+      <input
+        id="newFolderName"
+        placeholder="Ordnername"
+        required
+      >
+
+      <button class="btn">
+        Erstellen
+      </button>
+    </form>
+  \`);
+}
+
+async function createFolder(
+  event,
+  serverId,
+  currentPath
+) {
+  event.preventDefault();
+
+  const name =
+    document
+      .getElementById(
+        "newFolderName"
+      )
+      .value;
+
+  const fullPath =
+    currentPath
+      ? currentPath + "/" + name
+      : name;
+
+  try {
+    await api(
+      \`/api/servers/\${serverId}/folder\`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          path: fullPath
+        })
+      }
+    );
+
+    await openFiles(
+      serverId,
+      currentPath
+    );
+
+    toast(
+      "Ordner erstellt."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function deleteFile(
+  serverId,
+  filePath
+) {
+  if (
+    !confirm(
+      "Wirklich löschen?"
+    )
+  ) {
+    return;
+  }
+
+  try {
+    await api(
+      \`/api/servers/\${serverId}/file?path=\${encodeURIComponent(filePath)}\`,
+      {
+        method: "DELETE"
+      }
+    );
+
+    await openFiles(
+      serverId
+    );
+
+    toast(
+      "Gelöscht."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function loadAdmin() {
+  if (
+    !currentUser ||
+    !currentUser.owner
+  ) {
+    toast(
+      "Keine Berechtigung."
+    );
+
+    return;
+  }
+
+  try {
+    const [
+      usersData,
+      serversData
+    ] = await Promise.all([
+      api(
+        "/api/admin/users"
+      ),
+      api(
+        "/api/admin/servers"
+      )
+    ]);
+
+    const panel =
+      document.getElementById(
+        "adminPanel"
+      );
+
+    panel.classList.remove(
+      "hidden"
+    );
+
+    panel.innerHTML = \`
+      <div class="card admin">
+        <h2>Owner Admin Panel</h2>
+
+        <p class="muted">
+          Angemeldet als:
+          \${escapeHtml(currentUser.email)}
+        </p>
+
+        <div class="actions">
+
+          <button
+            class="btn btn-danger"
+            onclick="adminShutdownAll()"
+          >
+            Alle Server herunterfahren
+          </button>
+
+          <button
+            class="btn btn-danger"
+            onclick="adminLockAll()"
+          >
+            Alle Server sperren
+          </button>
+
+          <button
+            class="btn btn-green"
+            onclick="adminUnlockAll()"
+          >
+            Alle Server entsperren
+          </button>
+
+          <button
+            class="btn btn-gray"
+            onclick="adminMaintenance(true)"
+          >
+            Wartung EIN
+          </button>
+
+          <button
+            class="btn btn-green"
+            onclick="adminMaintenance(false)"
+          >
+            Wartung AUS
+          </button>
+
+        </div>
+
+        <h3>Benutzer</h3>
+
+        <div>
+          \${usersData.users.map(
+            user => \`
+              <div class="card">
+                <strong>
+                  \${escapeHtml(user.email)}
+                </strong>
+
+                <p class="muted">
+                  Server:
+                  \${user.serverCount}
+                  ·
+                  \${user.banned ? "GEBANNT" : "Aktiv"}
+                </p>
+
+                \${user.owner
+                  ? "<strong>OWNER</strong>"
+                  : \`
+                    <div class="actions">
+
+                      \${user.banned
+                        ? \`
+                          <button
+                            class="btn btn-green"
+                            onclick="unbanUser('\${user.id}')"
+                          >
+                            Entbannen
+                          </button>
+                        \`
+                        : \`
+                          <button
+                            class="btn btn-danger"
+                            onclick="banUser('\${user.id}')"
+                          >
+                            Bannen
+                          </button>
+                        \`
+                      }
+
+                      <button
+                        class="btn btn-danger"
+                        onclick="deleteUser('\${user.id}')"
+                      >
+                        Konto löschen
+                      </button>
+
+                    </div>
+                  \`
+                }
+              </div>
+            \`
+          ).join("")}
+        </div>
+
+        <h3>Alle Server</h3>
+
+        <div>
+          \${serversData.servers.map(
+            server => \`
+              <div class="card">
+                <strong>
+                  \${escapeHtml(server.name)}
+                </strong>
+
+                <p class="muted">
+                  Besitzer:
+                  \${escapeHtml(server.ownerEmail)}
+                </p>
+
+                <p>
+                  Status:
+                  \${escapeHtml(server.status)}
+                </p>
+
+                <div class="actions">
+
+                  <button
+                    class="btn btn-danger"
+                    onclick="adminDeleteServer('\${server.id}')"
+                  >
+                    Löschen
+                  </button>
+
+                  \${server.locked
+                    ? \`
+                      <button
+                        class="btn btn-green"
+                        onclick="adminUnlockServer('\${server.id}')"
+                      >
+                        Entsperren
+                      </button>
+                    \`
+                    : \`
+                      <button
+                        class="btn btn-danger"
+                        onclick="adminLockServer('\${server.id}')"
+                      >
+                        Sperren
+                      </button>
+                    \`
+                  }
+
+                </div>
+              </div>
+            \`
+          ).join("")}
+        </div>
+
+      </div>
+    \`;
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function adminShutdownAll() {
+  try {
+    await api(
+      "/api/admin/servers/shutdown-all",
+      {
+        method: "POST"
+      }
+    );
+
+    await loadAdmin();
+
+    toast(
+      "Alle Server werden heruntergefahren."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function adminLockAll() {
+  try {
+    await api(
+      "/api/admin/servers/lock-all",
+      {
+        method: "POST"
+      }
+    );
+
+    await loadAdmin();
+
+    toast(
+      "Alle Server gesperrt."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function adminUnlockAll() {
+  try {
+    await api(
+      "/api/admin/servers/unlock-all",
+      {
+        method: "POST"
+      }
+    );
+
+    await loadAdmin();
+
+    toast(
+      "Alle Server entsperrt."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function adminMaintenance(
+  enabled
+) {
+  try {
+    await api(
+      "/api/admin/maintenance",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          enabled,
+          message:
+            "Florian / WeisserHai Minecraft Hosting befindet sich momentan im Wartungsmodus."
+        })
+      }
+    );
+
+    toast(
+      enabled
+        ? "Wartungsmodus aktiviert."
+        : "Wartungsmodus deaktiviert."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function banUser(
+  userId
+) {
+  const reason =
+    prompt(
+      "Grund für den Bann:"
+    ) ||
+    "Keine Angabe";
+
+  try {
+    await api(
+      \`/api/admin/users/\${userId}/ban\`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          reason
+        })
+      }
+    );
+
+    await loadAdmin();
+
+    toast(
+      "Benutzer gebannt."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function unbanUser(
+  userId
+) {
+  try {
+    await api(
+      \`/api/admin/users/\${userId}/unban\`,
+      {
+        method: "POST"
+      }
+    );
+
+    await loadAdmin();
+
+    toast(
+      "Benutzer entbannt."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function deleteUser(
+  userId
+) {
+  if (
+    !confirm(
+      "Konto und alle zugehörigen Server wirklich löschen?"
+    )
+  ) {
+    return;
+  }
+
+  try {
+    await api(
+      \`/api/admin/users/\${userId}\`,
+      {
+        method: "DELETE"
+      }
+    );
+
+    await loadAdmin();
+
+    toast(
+      "Konto gelöscht."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function adminDeleteServer(
+  serverId
+) {
+  if (
+    !confirm(
+      "Server wirklich endgültig löschen?"
+    )
+  ) {
+    return;
+  }
+
+  try {
+    await api(
+      \`/api/admin/servers/\${serverId}\`,
+      {
+        method: "DELETE"
+      }
+    );
+
+    await loadAdmin();
+    await loadServers();
+
+    toast(
+      "Server gelöscht."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function adminLockServer(
+  serverId
+) {
+  try {
+    await api(
+      \`/api/admin/servers/\${serverId}/lock\`,
+      {
+        method: "POST"
+      }
+    );
+
+    await loadAdmin();
+
+    toast(
+      "Server gesperrt."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
+}
+
+async function adminUnlockServer(
+  serverId
+) {
+  try {
+    await api(
+      \`/api/admin/servers/\${serverId}/unlock\`,
+      {
+        method: "POST"
+      }
+    );
+
+    await loadAdmin();
+
+    toast(
+      "Server entsperrt."
+    );
+  } catch (error) {
+    toast(
+      error.message
+    );
+  }
 }
 
 /* =========================================================
-   START
+   AUTOMATISCH EINLOGGEN
 ========================================================= */
 
-app.post(
-    "/servers/:id/start",
-    requireLogin,
-    (req, res) => {
-        const result =
-            getServerForUser(req);
+async function checkSession() {
+  try {
+    const data =
+      await api(
+        "/api/auth/me"
+      );
 
-        if (!result) {
-            return res.status(404).send(
-                "Server nicht gefunden."
-            );
-        }
+    if (
+      data.loggedIn &&
+      data.user
+    ) {
+      currentUser =
+        data.user;
 
-        const current =
-            settings();
-
-        const server =
-            result.server;
-
-        if (
-            current.globalServerLock &&
-            !isOwner(req.user)
-        ) {
-            return res.status(403).send(
-                "Serverstarts sind momentan gesperrt."
-            );
-        }
-
-        if (server.locked) {
-            return res.status(403).send(
-                "Dieser Server ist gesperrt."
-            );
-        }
-
-        server.status =
-            "starting";
-
-        server.updatedAt =
-            now();
-
-        server.console ||= [];
-
-        server.console.push(
-            `[${now()}] Server wird gestartet.`
-        );
-
-        writeJSON(
-            SERVERS_FILE,
-            result.list
-        );
-
-        addLog(
-            "SERVER_START",
-            req.user,
-            server.name
-        );
-
-        /*
-        HIER später:
-        echtes Minecraft Backend / Docker
-        */
-
-        setTimeout(() => {
-            const list =
-                servers();
-
-            const item =
-                list.find(
-                    x =>
-                        x.id ===
-                        server.id
-                );
-
-            if (!item) {
-                return;
-            }
-
-            if (item.locked) {
-                item.status =
-                    "offline";
-
-                writeJSON(
-                    SERVERS_FILE,
-                    list
-                );
-
-                return;
-            }
-
-            item.status =
-                "running";
-
-            item.updatedAt =
-                now();
-
-            item.console ||= [];
-
-            item.console.push(
-                `[${now()}] Server ist online.`
-            );
-
-            writeJSON(
-                SERVERS_FILE,
-                list
-            );
-        }, 1500);
-
-        res.redirect(
-            `/servers/${server.id}`
-        );
+      await loadDashboard();
     }
+  } catch (_) {}
+}
+
+checkSession();
+
+setInterval(
+  async () => {
+    if (currentUser) {
+      await loadServers();
+    }
+  },
+  10000
+);
+
+</script>
+
+</body>
+</html>`;
+}
+
+/* =========================================================
+   HTML ESCAPE SERVER
+========================================================= */
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+/* =========================================================
+   HTTP SERVER
+========================================================= */
+
+const server = http.createServer(
+  app
+);
+
+server.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
+    console.log(
+      "======================================"
+    );
+
+    console.log(
+      " Florian / WeisserHai Minecraft Hosting"
+    );
+
+    console.log(
+      "======================================"
+    );
+
+    console.log(
+      `Server läuft auf Port: ${PORT}`
+    );
+
+    console.log(
+      `Owner: ${OWNER_EMAIL}`
+    );
+
+    console.log(
+      `Node.js: ${process.version}`
+    );
+
+    console.log(
+      "======================================"
+    );
+  }
 );
 
 /* =========================================================
-   STOP
+   SAUBER HERUNTERFAHREN
 ========================================================= */
 
-app.post(
-    "/servers/:id/stop",
-    requireLogin,
-    (req, res) => {
-        const result =
-            getServerForUser(req);
+function shutdown() {
+  console.log(
+    "Server wird heruntergefahren..."
+  );
 
-        if (!result) {
-            return res.status(404).send(
-                "Server nicht gefunden."
-            );
-        }
-
-        const server =
-            result.server;
-
-        server.status =
-            "stopping";
-
-        server.console ||= [];
-
-        server.console.push(
-            `[${now()}] Server wird gestoppt.`
-        );
-
-        server.updatedAt =
-            now();
-
-        writeJSON(
-            SERVERS_FILE,
-            result.list
-        );
-
-        addLog(
-            "SERVER_STOP",
-            req.user,
-            server.name
-        );
-
-        setTimeout(() => {
-            const list =
-                servers();
-
-            const item =
-                list.find(
-                    x =>
-                        x.id ===
-                        server.id
-                );
-
-            if (!item) {
-                return;
-            }
-
-            item.status =
-                "offline";
-
-            item.updatedAt =
-                now();
-
-            item.console ||= [];
-
-            item.console.push(
-                `[${now()}] Server ist offline.`
-            );
-
-            writeJSON(
-                SERVERS_FILE,
-                list
-            );
-        }, 1000);
-
-        res.redirect(
-            `/servers/${server.id}`
-        );
+  for (const serverData of servers) {
+    if (
+      isServerRunning(
+        serverData.id
+      )
+    ) {
+      stopMinecraftServer(
+        serverData
+      );
     }
-);
+  }
 
-/* =========================================================
-   RESTART
-========================================================= */
-
-app.post(
-    "/servers/:id/restart",
-    requireLogin,
-    (req, res) => {
-        const result =
-            getServerForUser(req);
-
-        if (!result) {
-            return res.status(404).send(
-                "Server nicht gefunden."
-            );
-        }
-
-        const server =
-            result.server;
-
-        if (server.locked) {
-            return res.status(403).send(
-                "Server ist gesperrt."
-            );
-        }
-
-        server.status =
-            "starting";
-
-        server.console ||= [];
-
-        server.console.push(
-            `[${now()}] Server wird neu gestartet.`
-        );
-
-        writeJSON(
-            SERVERS_FILE,
-            result.list
-        );
-
-        addLog(
-            "SERVER_RESTART",
-            req.user,
-            server.name
-        );
-
-        setTimeout(() => {
-            const list =
-                servers();
-
-            const item =
-                list.find(
-                    x =>
-                        x.id ===
-                        server.id
-                );
-
-            if (!item) {
-                return;
-            }
-
-            item.status =
-                "running";
-
-            item.updatedAt =
-                now();
-
-            item.console ||= [];
-
-            item.console.push(
-                `[${now()}] Neustart abgeschlossen.`
-            );
-
-            writeJSON(
-                SERVERS_FILE,
-                list
-            );
-        }, 1500);
-
-        res.redirect(
-            `/servers/${server.id}`
-        );
-    }
-);
-
-/* =========================================================
-   DELETE
-========================================================= */
-
-app.post(
-    "/servers/:id/delete",
-    requireLogin,
-    (req, res) => {
-        const list =
-            servers();
-
-        const server =
-            list.find(
-                x =>
-                    x.id ===
-                    req.params.id
-            );
-
-        if (!server) {
-            return res.status(404).send(
-                "Server nicht gefunden."
-            );
-        }
-
-        if (
-            server.ownerId !==
-                req.user.id &&
-            !isOwner(req.user)
-        ) {
-            return res.status(403).send(
-                "Kein Zugriff."
-            );
-        }
-
-        const newList =
-            list.filter(
-                x =>
-                    x.id !==
-                    server.id
-            );
-
-        writeJSON(
-            SERVERS_FILE,
-            newList
-        );
-
-        addLog(
-            "SERVER_DELETE",
-            req.user,
-            server.name
-        );
-
-        res.redirect("/servers");
-    }
-);
-
-/* =========================================================
-   FILES
-========================================================= */
-
-app.get(
-    "/servers/:id/files/:filename",
-    requireLogin,
-    (req, res) => {
-        const result =
-            getServerForUser(req);
-
-        if (!result) {
-            return res.status(404).send(
-                "Server nicht gefunden."
-            );
-        }
-
-        const filename =
-            req.params.filename;
-
-        const content =
-            result.server.files &&
-            result.server.files[
-                filename
-            ];
-
-        if (
-            typeof content !==
-            "string"
-        ) {
-            return res.status(404).send(
-                "Datei nicht gefunden."
-            );
-        }
-
-        res.send(
-            page(
-                filename,
-                `
-                <div class="card">
-
-                    <h1>
-                        📄
-                        ${escapeHTML(
-                            filename
-                        )}
-                    </h1>
-
-                    <form method="POST"
-                          action="/servers/${result.server.id}/files">
-
-                        <input
-                            type="hidden"
-                            name="filename"
-                            value="${escapeHTML(
-                                filename
-                            )}"
-                        >
-
-                        <textarea
-                            name="content"
-                        >${escapeHTML(
-                            content
-                        )}</textarea>
-
-                        <button>
-                            Speichern
-                        </button>
-
-                    </form>
-
-                    <br>
-
-                    <a class="btn gray"
-                       href="/servers/${result.server.id}">
-                        Zurück
-                    </a>
-
-                </div>
-                `,
-                req.user
-            )
-        );
-    }
-);
-
-/* =========================================================
-   SAVE FILE
-========================================================= */
-
-app.post(
-    "/servers/:id/files",
-    requireLogin,
-    (req, res) => {
-        const result =
-            getServerForUser(req);
-
-        if (!result) {
-            return res.status(404).send(
-                "Server nicht gefunden."
-            );
-        }
-
-        let filename =
-            clean(
-                req.body.filename,
-                100
-            );
-
-        const content =
-            String(
-                req.body.content || ""
-            ).slice(
-                0,
-                500000
-            );
-
-        filename =
-            filename
-                .replace(
-                    /\\/g,
-                    "/"
-                )
-                .replace(
-                    /^\/+/,
-                    ""
-                );
-
-        if (
-            !filename ||
-            filename.includes(
-                ".."
-            ) ||
-            filename.startsWith(
-                ".env"
-            )
-        ) {
-            return res.status(400).send(
-                "Ungültiger Dateiname."
-            );
-        }
-
-        result.server.files ||=
-            {};
-
-        result.server.files[
-            filename
-        ] = content;
-
-        result.server.updatedAt =
-            now();
-
-        writeJSON(
-            SERVERS_FILE,
-            result.list
-        );
-
-        addLog(
-            "FILE_SAVE",
-            req.user,
-            `${result.server.name}: ${filename}`
-        );
-
-        res.redirect(
-            `/servers/${result.server.id}/files/${encodeURIComponent(filename)}`
-        );
-    }
-);
-
-/* =========================================================
-   ADMIN PANEL
-========================================================= */
-
-app.get(
-    "/admin",
-    requireOwner,
-    (req, res) => {
-        const userList =
-            users();
-
-        const serverList =
-            servers();
-
-        const logList =
-            logs()
-                .slice(-100)
-                .reverse();
-
-        const current =
-            settings();
-
-        res.send(
-            page(
-                "Owner Admin Panel",
-                `
-                <div class="card">
-
-                    <h1>
-                        👑 Owner Admin Panel
-                    </h1>
-
-                    <p>
-                        Angemeldet als:
-                        <strong>
-                            ${escapeHTML(
-                                req.user.email
-                            )}
-                        </strong>
-                    </p>
-
-                    <div class="alert">
-                        Du hast vollständige
-                        Owner-Rechte.
-                    </div>
-
-                </div>
-
-                <div class="grid">
-
-                    <div class="card">
-                        <h3>
-                            👥 Benutzer
-                        </h3>
-
-                        <div class="stat">
-                            ${userList.length}
-                        </div>
-                    </div>
-
-                    <div class="card">
-                        <h3>
-                            🖥️ Server
-                        </h3>
-
-                        <div class="stat">
-                            ${serverList.length}
-                        </div>
-                    </div>
-
-                    <div class="card">
-                        <h3>
-                            📋 Logs
-                        </h3>
-
-                        <div class="stat">
-                            ${logs().length}
-                        </div>
-                    </div>
-
-                </div>
-
-                <div class="card">
-
-                    <h2>
-                        🛠️ Globale Verwaltung
-                    </h2>
-
-                    <p>
-                        Wartung:
-                        ${
-                            current.maintenance
-                                ? `
-                                <strong class="orange">
-                                    AKTIV
-                                </strong>
-                                `
-                                : `
-                                <strong class="online">
-                                    AUS
-                                </strong>
-                                `
-                        }
-                    </p>
-
-                    <form method="POST"
-                          action="/admin/maintenance">
-
-                        <label>
-                            Wartungstext
-                        </label>
-
-                        <input
-                            name="text"
-                            maxlength="300"
-                            value="${escapeHTML(
-                                current.maintenanceText
-                            )}"
-                        >
-
-                        <button
-                            class="orange"
-                            type="submit">
-
-                            ${
-                                current.maintenance
-                                    ? "🟢 Wartung beenden"
-                                    : "🛠️ Wartung aktivieren"
-                            }
-
-                        </button>
-
-                    </form>
-
-                    <hr>
-
-                    <h3>
-                        🔒 Globale Serversperre
-                    </h3>
-
-                    <p class="muted">
-                        Wenn aktiviert, können normale
-                        Benutzer keine Server starten.
-                    </p>
-
-                    <form method="POST"
-                          action="/admin/global-lock">
-
-                        <button class="orange">
-                            ${
-                                current.globalServerLock
-                                    ? "🔓 Globale Sperre deaktivieren"
-                                    : "🔒 Globale Sperre aktivieren"
-                            }
-                        </button>
-
-                    </form>
-
-                    <hr>
-
-                    <h3>
-                        🚨 Notfall
-                    </h3>
-
-                    <form method="POST"
-                          action="/admin/shutdown-all"
-                          onsubmit="return confirm('ALLE Server herunterfahren?')">
-
-                        <button class="red">
-                            🛑 ALLE SERVER HERUNTERFAHREN
-                        </button>
-
-                    </form>
-
-                    <br>
-
-                    <form method="POST"
-                          action="/admin/lock-all"
-                          onsubmit="return confirm('ALLE Server sperren?')">
-
-                        <button class="orange">
-                            🔒 ALLE SERVER SPERREN
-                        </button>
-
-                    </form>
-
-                    <br>
-
-                    <form method="POST"
-                          action="/admin/unlock-all">
-
-                        <button class="green">
-                            🔓 ALLE SERVER ENTSPERREN
-                        </button>
-
-                    </form>
-
-                </div>
-
-                <div class="card">
-
-                    <h2>
-                        🖥️ Alle Server
-                    </h2>
-
-                    <table>
-
-                        <tr>
-                            <th>Name</th>
-                            <th>Besitzer</th>
-                            <th>Status</th>
-                            <th>Aktionen</th>
-                        </tr>
-
-                        ${
-                            serverList.length
-                                ? serverList
-                                      .map(
-                                          server =>
-                                              `
-                                              <tr>
-
-                                                  <td>
-                                                      ${escapeHTML(
-                                                          server.name
-                                                      )}
-                                                  </td>
-
-                                                  <td>
-                                                      ${escapeHTML(
-                                                          server.ownerEmail
-                                                      )}
-                                                  </td>
-
-                                                  <td>
-                                                      ${
-                                                          server.locked
-                                                              ? "🔒 Gesperrt"
-                                                              : server.status ===
-                                                                "running"
-                                                              ? "🟢 Online"
-                                                              : "🔴 Offline"
-                                                      }
-                                                  </td>
-
-                                                  <td>
-
-                                                      <div class="actions">
-
-                                                          <a class="btn"
-                                                             href="/servers/${server.id}">
-                                                              Öffnen
-                                                          </a>
-
-                                                          <form method="POST"
-                                                                action="/admin/servers/${server.id}/toggle-lock">
-
-                                                              <button class="orange">
-                                                                  ${
-                                                                      server.locked
-                                                                          ? "Entsperren"
-                                                                          : "Sperren"
-                                                                  }
-                                                              </button>
-
-                                                          </form>
-
-                                                          <form method="POST"
-                                                                action="/admin/servers/${server.id}/stop">
-
-                                                              <button class="orange">
-                                                                  Stop
-                                                              </button>
-
-                                                          </form>
-
-                                                          <form method="POST"
-                                                                action="/admin/servers/${server.id}/delete"
-                                                                onsubmit="return confirm('Server wirklich löschen?')">
-
-                                                              <button class="red">
-                                                                  Löschen
-                                                              </button>
-
-                                                          </form>
-
-                                                      </div>
-
-                                                  </td>
-
-                                              </tr>
-                                              `
-                                      )
-                                      .join("")
-                                : `
-                                <tr>
-                                    <td colspan="4">
-                                        Keine Server.
-                                    </td>
-                                </tr>
-                                `
-                        }
-
-                    </table>
-
-                </div>
-
-                <div class="card">
-
-                    <h2>
-                        👥 Benutzerverwaltung
-                    </h2>
-
-                    <table>
-
-                        <tr>
-                            <th>Name</th>
-                            <th>E-Mail</th>
-                            <th>Rolle</th>
-                            <th>Coins</th>
-                            <th>Status</th>
-                            <th>Aktionen</th>
-                        </tr>
-
-                        ${
-                            userList
-                                .map(
-                                    user =>
-                                        `
-                                        <tr>
-
-                                            <td>
-                                                ${escapeHTML(
-                                                    user.name
-                                                )}
-                                            </td>
-
-                                            <td>
-                                                ${escapeHTML(
-                                                    user.email
-                                                )}
-                                            </td>
-
-                                            <td>
-                                                ${escapeHTML(
-                                                    user.role
-                                                )}
-                                            </td>
-
-                                            <td>
-                                                ${Number(
-                                                    user.coins || 0
-                                                )}
-                                            </td>
-
-                                            <td>
-                                                ${
-                                                    user.banned
-                                                        ? "🚫 Gebannt"
-                                                        : "✅ Aktiv"
-                                                }
-                                            </td>
-
-                                            <td>
-
-                                                ${
-                                                    isOwner(user)
-                                                        ? `
-                                                        <span class="badge">
-                                                            👑 OWNER
-                                                        </span>
-                                                        `
-                                                        : `
-                                                        <div class="actions">
-
-                                                            <form method="POST"
-                                                                  action="/admin/users/${user.id}/coins">
-
-                                                                <input
-                                                                    type="number"
-                                                                    name="amount"
-                                                                    min="1"
-                                                                    max="1000000"
-                                                                    required
-                                                                    placeholder="Coins"
-                                                                    style="width:100px;margin:0;"
-                                                                >
-
-                                                                <button class="green">
-                                                                    + Coins
-                                                                </button>
-
-                                                            </form>
-
-                                                            <form method="POST"
-                                                                  action="/admin/users/${user.id}/toggle-ban">
-
-                                                                <button class="red">
-                                                                    ${
-                                                                        user.banned
-                                                                            ? "Entbannen"
-                                                                            : "Bannen"
-                                                                    }
-                                                                </button>
-
-                                                            </form>
-
-                                                            <form method="POST"
-                                                                  action="/admin/users/${user.id}/role">
-
-                                                                <select
-                                                                    name="role"
-                                                                    style="width:130px;margin:0;"
-                                                                >
-
-                                                                    <option value="user"
-                                                                        ${
-                                                                            user.role ===
-                                                                            "user"
-                                                                                ? "selected"
-                                                                                : ""
-                                                                        }>
-                                                                        User
-                                                                    </option>
-
-                                                                    <option value="moderator"
-                                                                        ${
-                                                                            user.role ===
-                                                                            "moderator"
-                                                                                ? "selected"
-                                                                                : ""
-                                                                        }>
-                                                                        Moderator
-                                                                    </option>
-
-                                                                    <option value="developer"
-                                                                        ${
-                                                                            user.role ===
-                                                                            "developer"
-                                                                                ? "selected"
-                                                                                : ""
-                                                                        }>
-                                                                        Developer
-                                                                    </option>
-
-                                                                </select>
-
-                                                                <button>
-                                                                    Rolle
-                                                                </button>
-
-                                                            </form>
-
-                                                        </div>
-                                                        `
-                                                }
-
-                                            </td>
-
-                                        </tr>
-                                        `
-                                )
-                                .join("")
-                        }
-
-                    </table>
-
-                </div>
-
-                <div class="card">
-
-                    <h2>
-                        📋 Owner-Logs
-                    </h2>
-
-                    ${
-                        logList.length
-                            ? `
-                            <table>
-
-                                <tr>
-                                    <th>Zeit</th>
-                                    <th>Aktion</th>
-                                    <th>E-Mail</th>
-                                    <th>Details</th>
-                                </tr>
-
-                                ${logList
-                                    .map(
-                                        log =>
-                                            `
-                                            <tr>
-
-                                                <td>
-                                                    ${escapeHTML(
-                                                        log.time
-                                                    )}
-                                                </td>
-
-                                                <td>
-                                                    ${escapeHTML(
-                                                        log.action
-                                                    )}
-                                                </td>
-
-                                                <td>
-                                                    ${escapeHTML(
-                                                        log.email ||
-                                                        "-"
-                                                    )}
-                                                </td>
-
-                                                <td>
-                                                    ${escapeHTML(
-                                                        log.details ||
-                                                        ""
-                                                    )}
-                                                </td>
-
-                                            </tr>
-                                            `
-                                    )
-                                    .join("")}
-
-                            </table>
-                            `
-                            : `
-                            <p>
-                                Keine Logs.
-                            </p>
-                            `
-                    }
-
-                </div>
-                `,
-                req.user
-            )
-        );
-    }
-);
-
-/* =========================================================
-   ADMIN MAINTENANCE
-========================================================= */
-
-app.post(
-    "/admin/maintenance",
-    requireOwner,
-    (req, res) => {
-        const current =
-            settings();
-
-        current.maintenance =
-            !current.maintenance;
-
-        const text =
-            clean(
-                req.body.text,
-                300
-            );
-
-        if (text) {
-            current.maintenanceText =
-                text;
-        }
-
-        writeJSON(
-            SETTINGS_FILE,
-            current
-        );
-
-        addLog(
-            current.maintenance
-                ? "MAINTENANCE_ON"
-                : "MAINTENANCE_OFF",
-            req.user,
-            current.maintenanceText
-        );
-
-        res.redirect("/admin");
-    }
-);
-
-/* =========================================================
-   GLOBAL LOCK
-========================================================= */
-
-app.post(
-    "/admin/global-lock",
-    requireOwner,
-    (req, res) => {
-        const current =
-            settings();
-
-        current.globalServerLock =
-            !current.globalServerLock;
-
-        writeJSON(
-            SETTINGS_FILE,
-            current
-        );
-
-        addLog(
-            current.globalServerLock
-                ? "GLOBAL_SERVER_LOCK_ON"
-                : "GLOBAL_SERVER_LOCK_OFF",
-            req.user
-        );
-
-        res.redirect("/admin");
-    }
-);
-
-/* =========================================================
-   SHUTDOWN ALL
-========================================================= */
-
-app.post(
-    "/admin/shutdown-all",
-    requireOwner,
-    (req, res) => {
-        const list =
-            servers();
-
-        for (const server of list) {
-            server.status =
-                "offline";
-
-            server.updatedAt =
-                now();
-
-            server.console ||= [];
-
-            server.console.push(
-                `[${now()}] Owner: Alle Server wurden heruntergefahren.`
-            );
-        }
-
-        writeJSON(
-            SERVERS_FILE,
-            list
-        );
-
-        addLog(
-            "GLOBAL_SHUTDOWN",
-            req.user,
-            `${list.length} Server heruntergefahren`
-        );
-
-        res.redirect("/admin");
-    }
-);
-
-/* =========================================================
-   LOCK ALL
-========================================================= */
-
-app.post(
-    "/admin/lock-all",
-    requireOwner,
-    (req, res) => {
-        const list =
-            servers();
-
-        for (const server of list) {
-            server.locked =
-                true;
-
-            server.lockReason =
-                "Vom Owner gesperrt.";
-
-            server.status =
-                "offline";
-
-            server.updatedAt =
-                now();
-
-            server.console ||= [];
-
-            server.console.push(
-                `[${now()}] Owner: Server gesperrt.`
-            );
-        }
-
-        writeJSON(
-            SERVERS_FILE,
-            list
-        );
-
-        addLog(
-            "LOCK_ALL_SERVERS",
-            req.user,
-            `${list.length} Server gesperrt`
-        );
-
-        res.redirect("/admin");
-    }
-);
-
-/* =========================================================
-   UNLOCK ALL
-========================================================= */
-
-app.post(
-    "/admin/unlock-all",
-    requireOwner,
-    (req, res) => {
-        const list =
-            servers();
-
-        for (const server of list) {
-            server.locked =
-                false;
-
-            server.lockReason =
-                null;
-
-            server.updatedAt =
-                now();
-        }
-
-        writeJSON(
-            SERVERS_FILE,
-            list
-        );
-
-        addLog(
-            "UNLOCK_ALL_SERVERS",
-            req.user,
-            `${list.length} Server entsperrt`
-        );
-
-        res.redirect("/admin");
-    }
-);
-
-/* =========================================================
-   ADMIN SERVER LOCK
-========================================================= */
-
-app.post(
-    "/admin/servers/:id/toggle-lock",
-    requireOwner,
-    (req, res) => {
-        const list =
-            servers();
-
-        const server =
-            list.find(
-                x =>
-                    x.id ===
-                    req.params.id
-            );
-
-        if (!server) {
-            return res.status(404).send(
-                "Server nicht gefunden."
-            );
-        }
-
-        server.locked =
-            !server.locked;
-
-        server.lockReason =
-            server.locked
-                ? "Vom Owner gesperrt."
-                : null;
-
-        if (server.locked) {
-            server.status =
-                "offline";
-        }
-
-        server.updatedAt =
-            now();
-
-        writeJSON(
-            SERVERS_FILE,
-            list
-        );
-
-        addLog(
-            server.locked
-                ? "SERVER_LOCK"
-                : "SERVER_UNLOCK",
-            req.user,
-            server.name
-        );
-
-        res.redirect(
-            `/servers/${server.id}`
-        );
-    }
-);
-
-/* =========================================================
-   ADMIN SERVER STOP
-========================================================= */
-
-app.post(
-    "/admin/servers/:id/stop",
-    requireOwner,
-    (req, res) => {
-        const list =
-            servers();
-
-        const server =
-            list.find(
-                x =>
-                    x.id ===
-                    req.params.id
-            );
-
-        if (!server) {
-            return res.status(404).send(
-                "Server nicht gefunden."
-            );
-        }
-
-        server.status =
-            "offline";
-
-        server.updatedAt =
-            now();
-
-        server.console ||= [];
-
-        server.console.push(
-            `[${now()}] Owner hat den Server gestoppt.`
-        );
-
-        writeJSON(
-            SERVERS_FILE,
-            list
-        );
-
-        addLog(
-            "OWNER_SERVER_STOP",
-            req.user,
-            server.name
-        );
-
-        res.redirect("/admin");
-    }
-);
-
-/* =========================================================
-   ADMIN SERVER DELETE
-========================================================= */
-
-app.post(
-    "/admin/servers/:id/delete",
-    requireOwner,
-    (req, res) => {
-        const list =
-            servers();
-
-        const server =
-            list.find(
-                x =>
-                    x.id ===
-                    req.params.id
-            );
-
-        if (!server) {
-            return res.status(404).send(
-                "Server nicht gefunden."
-            );
-        }
-
-        const newList =
-            list.filter(
-                x =>
-                    x.id !==
-                    server.id
-            );
-
-        writeJSON(
-            SERVERS_FILE,
-            newList
-        );
-
-        addLog(
-            "OWNER_SERVER_DELETE",
-            req.user,
-            server.name
-        );
-
-        res.redirect("/admin");
-    }
-);
-
-/* =========================================================
-   ADMIN COINS
-========================================================= */
-
-app.post(
-    "/admin/users/:id/coins",
-    requireOwner,
-    (req, res) => {
-        const list =
-            users();
-
-        const user =
-            list.find(
-                x =>
-                    x.id ===
-                    req.params.id
-            );
-
-        if (!user) {
-            return res.status(404).send(
-                "Benutzer nicht gefunden."
-            );
-        }
-
-        if (isOwner(user)) {
-            return res.status(403).send(
-                "Owner kann nicht verändert werden."
-            );
-        }
-
-        const amount =
-            Number(
-                req.body.amount
-            );
-
-        if (
-            !Number.isInteger(
-                amount
-            ) ||
-            amount < 1 ||
-            amount > 1000000
-        ) {
-            return res.status(400).send(
-                "Ungültige Coin-Anzahl."
-            );
-        }
-
-        user.coins =
-            Number(
-                user.coins || 0
-            ) + amount;
-
-        writeJSON(
-            USERS_FILE,
-            list
-        );
-
-        addLog(
-            "ADD_COINS",
-            req.user,
-            `${user.email}: +${amount} Coins`
-        );
-
-        res.redirect("/admin");
-    }
-);
-
-/* =========================================================
-   ADMIN BAN
-========================================================= */
-
-app.post(
-    "/admin/users/:id/toggle-ban",
-    requireOwner,
-    (req, res) => {
-        const list =
-            users();
-
-        const user =
-            list.find(
-                x =>
-                    x.id ===
-                    req.params.id
-            );
-
-        if (!user) {
-            return res.status(404).send(
-                "Benutzer nicht gefunden."
-            );
-        }
-
-        if (isOwner(user)) {
-            return res.status(403).send(
-                "Der Owner kann nicht gebannt werden."
-            );
-        }
-
-        user.banned =
-            !user.banned;
-
-        writeJSON(
-            USERS_FILE,
-            list
-        );
-
-        addLog(
-            user.banned
-                ? "USER_BAN"
-                : "USER_UNBAN",
-            req.user,
-            user.email
-        );
-
-        res.redirect("/admin");
-    }
-);
-
-/* =========================================================
-   ADMIN ROLE
-========================================================= */
-
-app.post(
-    "/admin/users/:id/role",
-    requireOwner,
-    (req, res) => {
-        const list =
-            users();
-
-        const user =
-            list.find(
-                x =>
-                    x.id ===
-                    req.params.id
-            );
-
-        if (!user) {
-            return res.status(404).send(
-                "Benutzer nicht gefunden."
-            );
-        }
-
-        if (isOwner(user)) {
-            return res.status(403).send(
-                "Owner-Rolle kann nicht geändert werden."
-            );
-        }
-
-        const allowed = [
-            "user",
-            "moderator",
-            "developer"
-        ];
-
-        const role =
-            clean(
-                req.body.role,
-                30
-            );
-
-        if (
-            !allowed.includes(
-                role
-            )
-        ) {
-            return res.status(400).send(
-                "Ungültige Rolle."
-            );
-        }
-
-        user.role =
-            role;
-
-        writeJSON(
-            USERS_FILE,
-            list
-        );
-
-        addLog(
-            "ROLE_CHANGE",
-            req.user,
-            `${user.email}: ${role}`
-        );
-
-        res.redirect("/admin");
-    }
-);
-
-/* =========================================================
-   HEALTH
-========================================================= */
-
-app.get(
-    "/health",
-    (req, res) => {
-        res.json({
-            ok: true,
-            service:
-                "Florian/WeisserHai Minecraft Hosting",
-            time: now()
-        });
-    }
-);
-
-/* =========================================================
-   404
-========================================================= */
-
-app.use(
-    (req, res) => {
-        const user =
-            getCurrentUser(req);
-
-        res.status(404).send(
-            page(
-                "404",
-                `
-                <div class="card center">
-
-                    <div class="big">
-                        404
-                    </div>
-
-                    <h2>
-                        Seite nicht gefunden
-                    </h2>
-
-                    <a class="btn"
-                       href="/">
-                        Zur Startseite
-                    </a>
-
-                </div>
-                `,
-                user
-            )
-        );
-    }
-);
-
-/* =========================================================
-   ERROR
-========================================================= */
-
-app.use(
-    (error, req, res, next) => {
-        console.error(
-            "Webseitenfehler:",
-            error
-        );
-
-        res.status(500).send(
-            page(
-                "Fehler",
-                `
-                <div class="card center">
-
-                    <div class="big">
-                        ⚠️
-                    </div>
-
-                    <h1>
-                        Interner Fehler
-                    </h1>
-
-                    <p>
-                        Die Anfrage konnte
-                        nicht verarbeitet werden.
-                    </p>
-
-                    <a class="btn"
-                       href="/">
-                        Startseite
-                    </a>
-
-                </div>
-                `
-            )
-        );
-    }
-);
-
-/* =========================================================
-   START
-========================================================= */
-
-app.listen(
-    PORT,
-    "0.0.0.0",
+  server.close(
     () => {
-        console.log(
-            "======================================"
-        );
-
-        console.log(
-            " Florian/WeisserHai Minecraft Hosting"
-        );
-
-        console.log(
-            "======================================"
-        );
-
-        console.log(
-            `Server läuft auf Port: ${PORT}`
-        );
-
-        console.log(
-            `Owner: ${OWNER_EMAIL}`
-        );
-
-        console.log(
-            "======================================"
-        );
+      process.exit(0);
     }
+  );
+
+  setTimeout(
+    () => process.exit(0),
+    15000
+  );
+}
+
+process.on(
+  "SIGTERM",
+  shutdown
+);
+
+process.on(
+  "SIGINT",
+  shutdown
+);
+
+process.on(
+  "uncaughtException",
+  error => {
+    console.error(
+      "UNCAUGHT EXCEPTION:",
+      error
+    );
+  }
+);
+
+process.on(
+  "unhandledRejection",
+  error => {
+    console.error(
+      "UNHANDLED REJECTION:",
+      error
+    );
+  }
 );
