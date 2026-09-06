@@ -1,26 +1,453 @@
 const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
+const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 
 const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
-
 const PORT = process.env.PORT || 3000;
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 /*
 ====================================================
- MINECRAFT HOSTING – COMING SOON
- + ANIMIERTER HINTERGRUND
- + STERNE
- + MINECRAFT DESIGN
- + CHAT FÜR ALLE BESUCHER
+ MINECRAFT HOSTING WEBSITE
+ - Registrierung
+ - Anmeldung
+ - Abmelden
+ - Benutzerkonto
+ - Passwort-Hashing
+ - Chat
+ - Minecraft Design
+ - Mobile Design
+====================================================
+*/
+
+const DATA_DIR = path.join(__dirname, "data");
+const USERS_FILE = path.join(DATA_DIR, "users.json");
+const CHAT_FILE = path.join(DATA_DIR, "chat.json");
+
+if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+function readJSON(file, fallback) {
+    try {
+        if (!fs.existsSync(file)) {
+            fs.writeFileSync(
+                file,
+                JSON.stringify(fallback, null, 2)
+            );
+            return fallback;
+        }
+
+        return JSON.parse(
+            fs.readFileSync(file, "utf8")
+        );
+    } catch (error) {
+        console.error("JSON-LeseFehler:", error);
+        return fallback;
+    }
+}
+
+function writeJSON(file, data) {
+    try {
+        fs.writeFileSync(
+            file,
+            JSON.stringify(data, null, 2)
+        );
+        return true;
+    } catch (error) {
+        console.error("JSON-Schreibfehler:", error);
+        return false;
+    }
+}
+
+let users = readJSON(USERS_FILE, []);
+let chatMessages = readJSON(CHAT_FILE, []);
+
+const sessions = new Map();
+
+function hashPassword(password) {
+    const salt = crypto.randomBytes(16).toString("hex");
+
+    const hash = crypto
+        .scryptSync(password, salt, 64)
+        .toString("hex");
+
+    return `${salt}:${hash}`;
+}
+
+function checkPassword(password, stored) {
+    try {
+        const parts = stored.split(":");
+
+        if (parts.length !== 2) {
+            return false;
+        }
+
+        const salt = parts[0];
+        const originalHash = parts[1];
+
+        const hash = crypto
+            .scryptSync(password, salt, 64)
+            .toString("hex");
+
+        return crypto.timingSafeEqual(
+            Buffer.from(hash, "hex"),
+            Buffer.from(originalHash, "hex")
+        );
+    } catch {
+        return false;
+    }
+}
+
+function createToken() {
+    return crypto.randomBytes(32).toString("hex");
+}
+
+function getUserFromRequest(req) {
+    const token = req.headers.authorization?.replace(
+        "Bearer ",
+        ""
+    );
+
+    if (!token) {
+        return null;
+    }
+
+    const username = sessions.get(token);
+
+    if (!username) {
+        return null;
+    }
+
+    return users.find(
+        user => user.username === username
+    ) || null;
+}
+
+/*
+====================================================
+ REGISTRIERUNG
+====================================================
+*/
+
+app.post("/api/register", (req, res) => {
+    const username = String(
+        req.body.username || ""
+    ).trim();
+
+    const email = String(
+        req.body.email || ""
+    ).trim()
+    .toLowerCase();
+
+    const password = String(
+        req.body.password || ""
+    );
+
+    if (!username || !email || !password) {
+        return res.status(400).json({
+            success: false,
+            message: "Bitte alle Felder ausfüllen."
+        });
+    }
+
+    if (!/^[a-zA-Z0-9_]{3,24}$/.test(username)) {
+        return res.status(400).json({
+            success: false,
+            message:
+                "Der Benutzername muss 3–24 Zeichen haben."
+        });
+    }
+
+    if (password.length < 8) {
+        return res.status(400).json({
+            success: false,
+            message:
+                "Das Passwort muss mindestens 8 Zeichen haben."
+        });
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({
+            success: false,
+            message:
+                "Bitte eine gültige E-Mail-Adresse eingeben."
+        });
+    }
+
+    const existingUsername = users.find(
+        user =>
+            user.username.toLowerCase() ===
+            username.toLowerCase()
+    );
+
+    if (existingUsername) {
+        return res.status(409).json({
+            success: false,
+            message:
+                "Dieser Benutzername ist bereits vergeben."
+        });
+    }
+
+    const existingEmail = users.find(
+        user =>
+            user.email.toLowerCase() === email
+    );
+
+    if (existingEmail) {
+        return res.status(409).json({
+            success: false,
+            message:
+                "Diese E-Mail-Adresse ist bereits registriert."
+        });
+    }
+
+    const newUser = {
+        id: crypto.randomUUID(),
+        username,
+        email,
+        password: hashPassword(password),
+        createdAt: new Date().toISOString()
+    };
+
+    users.push(newUser);
+
+    if (!writeJSON(USERS_FILE, users)) {
+        users = users.filter(
+            user => user.id !== newUser.id
+        );
+
+        return res.status(500).json({
+            success: false,
+            message:
+                "Benutzer konnte nicht gespeichert werden."
+        });
+    }
+
+    console.log(
+        `👤 Neuer Benutzer registriert: ${username}`
+    );
+
+    return res.json({
+        success: true,
+        message:
+            "Registrierung erfolgreich. Du kannst dich jetzt anmelden."
+    });
+});
+
+/*
+====================================================
+ ANMELDUNG
+====================================================
+*/
+
+app.post("/api/login", (req, res) => {
+    const login = String(
+        req.body.login || ""
+    ).trim();
+
+    const password = String(
+        req.body.password || ""
+    );
+
+    if (!login || !password) {
+        return res.status(400).json({
+            success: false,
+            message:
+                "Bitte Benutzername/E-Mail und Passwort eingeben."
+        });
+    }
+
+    const user = users.find(
+        item =>
+            item.username.toLowerCase() ===
+                login.toLowerCase() ||
+            item.email.toLowerCase() ===
+                login.toLowerCase()
+    );
+
+    if (!user) {
+        return res.status(401).json({
+            success: false,
+            message:
+                "Benutzername/E-Mail oder Passwort ist falsch."
+        });
+    }
+
+    if (!checkPassword(password, user.password)) {
+        return res.status(401).json({
+            success: false,
+            message:
+                "Benutzername/E-Mail oder Passwort ist falsch."
+        });
+    }
+
+    const token = createToken();
+
+    sessions.set(
+        token,
+        user.username
+    );
+
+    console.log(
+        `🔐 Anmeldung: ${user.username}`
+    );
+
+    return res.json({
+        success: true,
+        message: "Erfolgreich angemeldet.",
+        token,
+        user: {
+            username: user.username,
+            email: user.email
+        }
+    });
+});
+
+/*
+====================================================
+ ABMELDEN
+====================================================
+*/
+
+app.post("/api/logout", (req, res) => {
+    const token =
+        req.headers.authorization?.replace(
+            "Bearer ",
+            ""
+        );
+
+    if (token) {
+        sessions.delete(token);
+    }
+
+    res.json({
+        success: true,
+        message: "Abgemeldet."
+    });
+});
+
+/*
+====================================================
+ BENUTZER
+====================================================
+*/
+
+app.get("/api/me", (req, res) => {
+    const user =
+        getUserFromRequest(req);
+
+    if (!user) {
+        return res.status(401).json({
+            success: false,
+            message: "Nicht angemeldet."
+        });
+    }
+
+    res.json({
+        success: true,
+        user: {
+            username: user.username,
+            email: user.email,
+            createdAt: user.createdAt
+        }
+    });
+});
+
+/*
+====================================================
+ CHAT NACHRICHTEN LADEN
+====================================================
+*/
+
+app.get("/api/chat", (req, res) => {
+    res.json({
+        success: true,
+        messages: chatMessages.slice(-100)
+    });
+});
+
+/*
+====================================================
+ CHAT NACHRICHT SENDEN
+
+ Für den Chat muss man angemeldet sein.
+====================================================
+*/
+
+app.post("/api/chat", (req, res) => {
+    const user =
+        getUserFromRequest(req);
+
+    if (!user) {
+        return res.status(401).json({
+            success: false,
+            message:
+                "Du musst angemeldet sein, um zu schreiben."
+        });
+    }
+
+    const text = String(
+        req.body.text || ""
+    ).trim();
+
+    if (!text) {
+        return res.status(400).json({
+            success: false,
+            message:
+                "Die Nachricht darf nicht leer sein."
+        });
+    }
+
+    if (text.length > 300) {
+        return res.status(400).json({
+            success: false,
+            message:
+                "Die Nachricht darf maximal 300 Zeichen haben."
+        });
+    }
+
+    const message = {
+        id: crypto.randomUUID(),
+        username: user.username,
+        text,
+        createdAt: new Date().toISOString()
+    };
+
+    chatMessages.push(message);
+
+    if (chatMessages.length > 500) {
+        chatMessages =
+            chatMessages.slice(-500);
+    }
+
+    writeJSON(
+        CHAT_FILE,
+        chatMessages
+    );
+
+    console.log(
+        `💬 ${user.username}: ${text}`
+    );
+
+    res.json({
+        success: true,
+        message
+    });
+});
+
+/*
+====================================================
+ WEBSITE
 ====================================================
 */
 
 app.get("/", (req, res) => {
-    res.send(`
-<!DOCTYPE html>
+
+res.send(`<!DOCTYPE html>
 <html lang="de">
 
 <head>
@@ -41,10 +468,6 @@ app.get("/", (req, res) => {
 
 <style>
 
-/* =========================================
-   GRUNDLAYOUT
-========================================= */
-
 * {
     box-sizing: border-box;
     margin: 0;
@@ -61,8 +484,6 @@ body {
     min-height: 100vh;
     min-height: 100dvh;
 
-    overflow: hidden;
-
     font-family:
         Arial,
         Helvetica,
@@ -72,16 +493,27 @@ body {
 
     background:
         radial-gradient(
-            circle at 50% 35%,
-            rgba(40, 130, 50, 0.22),
+            circle at 50% 30%,
+            rgba(44, 135, 52, .25),
             transparent 45%
         ),
         linear-gradient(
             180deg,
-            #02050a 0%,
+            #02050a,
             #071209 55%,
-            #020602 100%
+            #020602
         );
+
+    overflow-x: hidden;
+}
+
+button,
+input {
+    font: inherit;
+}
+
+button {
+    cursor: pointer;
 }
 
 /* =========================================
@@ -90,14 +522,10 @@ body {
 
 #stars {
     position: fixed;
-
     inset: 0;
-
     width: 100%;
     height: 100%;
-
     z-index: 0;
-
     pointer-events: none;
 }
 
@@ -111,22 +539,22 @@ body {
     width: 85px;
     height: 85px;
 
-    top: 8%;
     right: 9%;
+    top: 8%;
 
     border-radius: 50%;
 
     background:
         radial-gradient(
             circle at 35% 30%,
-            #ffffff,
-            #dddddd 55%,
-            #888888 100%
+            #fff,
+            #ddd 55%,
+            #888
         );
 
     box-shadow:
-        0 0 30px rgba(255,255,255,.3),
-        0 0 80px rgba(255,255,255,.08);
+        0 0 30px
+        rgba(255,255,255,.3);
 
     opacity: .85;
 
@@ -149,67 +577,13 @@ body {
 }
 
 /* =========================================
-   GRÜNER GLOW
-========================================= */
-
-.greenGlow {
-    position: fixed;
-
-    width: 500px;
-    height: 500px;
-
-    left: 50%;
-    top: 50%;
-
-    transform:
-        translate(-50%, -50%);
-
-    background:
-        radial-gradient(
-            circle,
-            rgba(50,200,60,.14),
-            transparent 70%
-        );
-
-    filter: blur(35px);
-
-    z-index: 1;
-
-    pointer-events: none;
-
-    animation:
-        glowPulse 5s ease-in-out infinite;
-}
-
-@keyframes glowPulse {
-
-    0%,
-    100% {
-        opacity: .5;
-        transform:
-            translate(-50%, -50%)
-            scale(1);
-    }
-
-    50% {
-        opacity: 1;
-        transform:
-            translate(-50%, -50%)
-            scale(1.2);
-    }
-}
-
-/* =========================================
    PARTIKEL
 ========================================= */
 
 #particles {
     position: fixed;
-
     inset: 0;
-
-    z-index: 2;
-
+    z-index: 1;
     pointer-events: none;
 }
 
@@ -233,34 +607,141 @@ body {
 
     from {
         transform:
-            translateY(105vh)
-            translateX(0);
+            translateY(105vh);
 
         opacity: 0;
     }
 
-    15% {
+    20% {
         opacity: .8;
     }
 
-    85% {
+    80% {
         opacity: .8;
     }
 
     to {
         transform:
             translateY(-20vh)
-            translateX(80px);
+            translateX(70px);
 
         opacity: 0;
     }
 }
 
 /* =========================================
-   HAUPTBOX
+   NAVIGATION
+========================================= */
+
+.navbar {
+
+    position: relative;
+
+    z-index: 20;
+
+    width: 100%;
+
+    min-height: 70px;
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    padding:
+        12px 25px;
+
+    border-bottom:
+        1px solid
+        rgba(85,190,80,.2);
+
+    background:
+        rgba(2,8,3,.78);
+
+    backdrop-filter:
+        blur(12px);
+}
+
+.logo {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 10px;
+
+    font-size: 20px;
+
+    font-weight: 900;
+}
+
+.logoIcon {
+
+    width: 38px;
+    height: 38px;
+
+    display: flex;
+
+    align-items: center;
+    justify-content: center;
+
+    background:
+        linear-gradient(
+            135deg,
+            #55b947,
+            #26772c
+        );
+
+    border:
+        3px solid
+        #183b1b;
+
+    font-size: 20px;
+}
+
+.navButtons {
+
+    display: flex;
+
+    gap: 8px;
+}
+
+.navButton {
+
+    padding:
+        10px 15px;
+
+    border:
+        1px solid
+        rgba(90,190,80,.3);
+
+    border-radius: 6px;
+
+    background:
+        rgba(40,100,42,.35);
+
+    color: white;
+
+    transition:
+        .2s;
+}
+
+.navButton:hover {
+
+    background:
+        rgba(70,150,65,.5);
+
+    transform:
+        translateY(-2px);
+}
+
+/* =========================================
+   HAUPTBEREICH
 ========================================= */
 
 .container {
+
     position: relative;
 
     z-index: 5;
@@ -271,11 +752,11 @@ body {
             850px
         );
 
-    padding:
-        55px 35px;
-
     margin:
-        20px auto;
+        8vh auto 40px;
+
+    padding:
+        50px 35px;
 
     text-align: center;
 
@@ -301,48 +782,20 @@ body {
 
     backdrop-filter:
         blur(12px);
-
-    -webkit-backdrop-filter:
-        blur(12px);
-
-    animation:
-        containerAppear 1.2s ease;
 }
-
-@keyframes containerAppear {
-
-    from {
-        opacity: 0;
-
-        transform:
-            translateY(35px)
-            scale(.92);
-    }
-
-    to {
-        opacity: 1;
-
-        transform:
-            translateY(0)
-            scale(1);
-    }
-}
-
-/* =========================================
-   MINECRAFT BLOCK
-========================================= */
 
 .minecraftIcon {
-
-    display: inline-flex;
-
-    align-items: center;
-    justify-content: center;
 
     width: 100px;
     height: 100px;
 
-    margin-bottom: 20px;
+    margin:
+        0 auto 20px;
+
+    display: flex;
+
+    align-items: center;
+    justify-content: center;
 
     background:
         linear-gradient(
@@ -356,7 +809,6 @@ body {
         #163d18;
 
     box-shadow:
-
         inset 0 8px 0
         rgba(255,255,255,.12),
 
@@ -371,14 +823,7 @@ body {
 }
 
 .minecraftIcon span {
-
     font-size: 48px;
-
-    filter:
-        drop-shadow(
-            3px 3px 0
-            rgba(0,0,0,.5)
-        );
 }
 
 @keyframes iconFloat {
@@ -386,26 +831,20 @@ body {
     0%,
     100% {
         transform:
-            translateY(0)
-            rotate(0deg);
+            translateY(0);
     }
 
     50% {
         transform:
-            translateY(-10px)
-            rotate(2deg);
+            translateY(-10px);
     }
 }
-
-/* =========================================
-   TITEL
-========================================= */
 
 h1 {
 
     font-size:
         clamp(
-            32px,
+            34px,
             7vw,
             68px
         );
@@ -414,41 +853,11 @@ h1 {
 
     font-weight: 900;
 
-    letter-spacing: -2px;
-
     text-shadow:
-
-        4px 4px 0
-        #183b1b,
-
-        0 0 25px
+        4px 4px 0 #183b1b,
+        0 0 30px
         rgba(76,220,82,.25);
-
-    animation:
-        titleGlow 3s ease-in-out infinite;
 }
-
-@keyframes titleGlow {
-
-    0%,
-    100% {
-        text-shadow:
-            4px 4px 0 #183b1b,
-            0 0 20px
-            rgba(76,220,82,.15);
-    }
-
-    50% {
-        text-shadow:
-            4px 4px 0 #183b1b,
-            0 0 35px
-            rgba(76,220,82,.35);
-    }
-}
-
-/* =========================================
-   TEXT
-========================================= */
 
 .description {
 
@@ -467,62 +876,307 @@ h1 {
 }
 
 /* =========================================
-   LOADER
+   LOGIN / REGISTER MODAL
 ========================================= */
 
-.loader {
+.modal {
 
-    width: 100%;
+    position: fixed;
 
-    max-width: 550px;
+    inset: 0;
 
-    height: 22px;
+    z-index: 200;
 
-    margin:
-        35px auto 0;
+    display: none;
 
-    padding: 3px;
+    align-items: center;
+    justify-content: center;
 
-    background: #101510;
+    padding: 15px;
+
+    background:
+        rgba(0,0,0,.72);
+
+    backdrop-filter:
+        blur(8px);
+}
+
+.modal.active {
+    display: flex;
+}
+
+.modalBox {
+
+    width:
+        min(
+            100%,
+            430px
+        );
+
+    padding: 28px;
 
     border:
         2px solid
-        #263a27;
-}
+        rgba(85,185,71,.45);
 
-.loaderBar {
-
-    width: 0%;
-
-    height: 100%;
+    border-radius: 10px;
 
     background:
-        repeating-linear-gradient(
-            90deg,
-            #55c64b 0px,
-            #55c64b 16px,
-            #42a83c 16px,
-            #42a83c 32px
-        );
+        #071008;
+
+    box-shadow:
+        0 25px 80px
+        rgba(0,0,0,.8);
 
     animation:
-        loading 5s
-        ease-in-out infinite;
+        modalOpen .2s ease;
 }
 
-@keyframes loading {
+@keyframes modalOpen {
 
-    0% {
-        width: 0%;
+    from {
+        opacity: 0;
+        transform:
+            scale(.94)
+            translateY(15px);
     }
 
-    70% {
-        width: 82%;
+    to {
+        opacity: 1;
+        transform:
+            scale(1)
+            translateY(0);
     }
+}
 
-    100% {
-        width: 100%;
-    }
+.modalHeader {
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    margin-bottom: 20px;
+}
+
+.modalHeader h2 {
+    font-size: 24px;
+}
+
+.close {
+
+    width: 35px;
+    height: 35px;
+
+    border: 0;
+
+    border-radius: 5px;
+
+    background:
+        rgba(255,255,255,.08);
+
+    color: white;
+
+    font-size: 22px;
+}
+
+.formGroup {
+    margin-bottom: 14px;
+}
+
+.formGroup label {
+
+    display: block;
+
+    margin-bottom: 6px;
+
+    color: #b8c5b8;
+
+    font-size: 13px;
+}
+
+.formGroup input {
+
+    width: 100%;
+
+    height: 45px;
+
+    padding:
+        0 12px;
+
+    border:
+        1px solid
+        rgba(255,255,255,.14);
+
+    border-radius: 5px;
+
+    outline: none;
+
+    background:
+        #111a12;
+
+    color: white;
+}
+
+.formGroup input:focus {
+
+    border-color:
+        #55b947;
+
+    box-shadow:
+        0 0 10px
+        rgba(85,185,71,.15);
+}
+
+.primaryButton {
+
+    width: 100%;
+
+    min-height: 46px;
+
+    border: 0;
+
+    border-radius: 5px;
+
+    background:
+        linear-gradient(
+            135deg,
+            #55b947,
+            #2f8434
+        );
+
+    color: white;
+
+    font-weight: 800;
+
+    transition:
+        .2s;
+}
+
+.primaryButton:hover {
+
+    filter:
+        brightness(1.12);
+
+    transform:
+        translateY(-1px);
+}
+
+.switchText {
+
+    margin-top: 15px;
+
+    text-align: center;
+
+    color: #98a498;
+
+    font-size: 13px;
+}
+
+.switchText button {
+
+    border: 0;
+
+    background: transparent;
+
+    color: #66d45d;
+
+    font-weight: bold;
+}
+
+.message {
+
+    display: none;
+
+    margin-bottom: 15px;
+
+    padding: 10px;
+
+    border-radius: 5px;
+
+    background:
+        rgba(255,255,255,.06);
+
+    color: #d7e2d7;
+
+    font-size: 13px;
+}
+
+.message.show {
+    display: block;
+}
+
+/* =========================================
+   USER PANEL
+========================================= */
+
+.userPanel {
+
+    display: none;
+
+    position: fixed;
+
+    top: 80px;
+    right: 20px;
+
+    z-index: 150;
+
+    width:
+        min(
+            calc(100% - 40px),
+            300px
+        );
+
+    padding: 20px;
+
+    border:
+        2px solid
+        rgba(85,185,71,.35);
+
+    border-radius: 8px;
+
+    background:
+        rgba(5,14,7,.97);
+
+    box-shadow:
+        0 20px 60px
+        rgba(0,0,0,.7);
+}
+
+.userPanel.active {
+    display: block;
+}
+
+.userPanel h3 {
+    margin-bottom: 8px;
+}
+
+.userEmail {
+
+    color: #8fa08f;
+
+    font-size: 13px;
+
+    margin-bottom: 15px;
+}
+
+.logoutButton {
+
+    width: 100%;
+
+    padding: 10px;
+
+    border:
+        1px solid
+        rgba(255,80,80,.3);
+
+    border-radius: 5px;
+
+    background:
+        rgba(120,20,20,.3);
+
+    color: white;
 }
 
 /* =========================================
@@ -533,15 +1187,17 @@ h1 {
 
     position: fixed;
 
-    right: 22px;
-    bottom: 22px;
+    right: 20px;
+    bottom: 20px;
 
     z-index: 100;
 
     width: 62px;
     height: 62px;
 
-    border: 3px solid #183b1b;
+    border:
+        3px solid
+        #183b1b;
 
     border-radius: 8px;
 
@@ -556,49 +1212,37 @@ h1 {
 
     font-size: 27px;
 
-    cursor: pointer;
-
     box-shadow:
         0 8px 25px
         rgba(0,0,0,.55);
 
     transition:
-        transform .2s ease,
-        filter .2s ease;
+        .2s;
 }
 
 .chatButton:hover {
 
     transform:
         scale(1.08);
-
-    filter:
-        brightness(1.15);
-}
-
-.chatButton:active {
-
-    transform:
-        scale(.95);
 }
 
 /* =========================================
-   CHAT FENSTER
+   CHAT
 ========================================= */
 
 .chat {
 
     position: fixed;
 
-    right: 22px;
-    bottom: 96px;
+    right: 20px;
+    bottom: 95px;
 
     z-index: 99;
 
     width:
         min(
             calc(100% - 30px),
-            380px
+            390px
         );
 
     height: 500px;
@@ -616,46 +1260,16 @@ h1 {
     border-radius: 10px;
 
     background:
-        rgba(5,12,7,.97);
+        rgba(5,12,7,.98);
 
     box-shadow:
         0 20px 70px
         rgba(0,0,0,.75);
-
-    backdrop-filter:
-        blur(15px);
-
-    animation:
-        chatOpen .25s ease;
 }
 
 .chat.active {
-
     display: flex;
 }
-
-@keyframes chatOpen {
-
-    from {
-        opacity: 0;
-
-        transform:
-            translateY(20px)
-            scale(.95);
-    }
-
-    to {
-        opacity: 1;
-
-        transform:
-            translateY(0)
-            scale(1);
-    }
-}
-
-/* =========================================
-   CHAT HEADER
-========================================= */
 
 .chatHeader {
 
@@ -675,16 +1289,9 @@ h1 {
             #1d5c25,
             #2f8735
         );
-
-    border-bottom:
-        2px solid
-        rgba(255,255,255,.08);
 }
 
 .chatTitle {
-
-    font-size: 18px;
-
     font-weight: 800;
 }
 
@@ -692,25 +1299,8 @@ h1 {
 
     color: #b9ffae;
 
-    font-size: 12px;
+    font-size: 11px;
 }
-
-.closeChat {
-
-    border: 0;
-
-    background: transparent;
-
-    color: white;
-
-    font-size: 24px;
-
-    cursor: pointer;
-}
-
-/* =========================================
-   NACHRICHTEN
-========================================= */
 
 .messages {
 
@@ -725,50 +1315,24 @@ h1 {
     flex-direction: column;
 
     gap: 9px;
-
-    scrollbar-width: thin;
-
-    scrollbar-color:
-        #397f39
-        transparent;
 }
 
-.message {
-
-    max-width: 88%;
+.chatMessage {
 
     padding:
         9px 11px;
-
-    border-radius: 6px;
-
-    background:
-        rgba(255,255,255,.06);
 
     border-left:
         3px solid
         #4fae47;
 
-    word-wrap: break-word;
+    border-radius: 6px;
 
-    animation:
-        messageIn .2s ease;
+    background:
+        rgba(255,255,255,.06);
 }
 
-@keyframes messageIn {
-
-    from {
-        opacity: 0;
-        transform: translateY(5px);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-.messageName {
+.chatName {
 
     color: #73d96b;
 
@@ -779,29 +1343,23 @@ h1 {
     margin-bottom: 3px;
 }
 
-.messageText {
+.chatText {
 
-    color: #eeeeee;
+    color: #eee;
 
     font-size: 14px;
 
-    line-height: 1.4;
+    word-break: break-word;
 }
 
-.systemMessage {
+.chatDate {
 
-    text-align: center;
+    margin-top: 4px;
 
-    color: #788578;
+    color: #6f7d70;
 
-    font-size: 12px;
-
-    padding: 5px;
+    font-size: 9px;
 }
-
-/* =========================================
-   CHAT EINGABE
-========================================= */
 
 .chatInputArea {
 
@@ -814,9 +1372,6 @@ h1 {
     border-top:
         2px solid
         rgba(255,255,255,.08);
-
-    background:
-        rgba(0,0,0,.25);
 }
 
 .chatInput {
@@ -842,18 +1397,6 @@ h1 {
         #111a12;
 
     color: white;
-
-    font-size: 14px;
-}
-
-.chatInput:focus {
-
-    border-color:
-        #55b947;
-
-    box-shadow:
-        0 0 10px
-        rgba(85,185,71,.15);
 }
 
 .sendButton {
@@ -870,14 +1413,6 @@ h1 {
     color: white;
 
     font-size: 19px;
-
-    cursor: pointer;
-}
-
-.sendButton:hover {
-
-    background:
-        #51aa4a;
 }
 
 /* =========================================
@@ -886,26 +1421,47 @@ h1 {
 
 @media (max-width: 600px) {
 
-    body {
-        padding: 10px;
+    .navbar {
+
+        padding:
+            10px 12px;
+    }
+
+    .logo {
+
+        font-size: 16px;
+    }
+
+    .logoIcon {
+
+        width: 34px;
+        height: 34px;
+    }
+
+    .navButton {
+
+        padding:
+            8px 10px;
+
+        font-size: 12px;
     }
 
     .container {
 
-        width: 100%;
+        width:
+            calc(100% - 20px);
+
+        margin-top:
+            7vh;
 
         padding:
             38px 18px;
-
-        margin: 10px auto;
     }
 
     .minecraftIcon {
 
         width: 78px;
         height: 78px;
-
-        border-width: 4px;
     }
 
     .minecraftIcon span {
@@ -916,30 +1472,19 @@ h1 {
         letter-spacing: -1px;
     }
 
-    .description {
-        font-size: 15px;
-    }
-
-    .loader {
-
-        margin-top: 25px;
-
-        height: 18px;
-    }
-
     .moon {
 
         width: 55px;
         height: 55px;
 
-        top: 5%;
-        right: 7%;
+        top: 9%;
+        right: 5%;
     }
 
     .chat {
 
         right: 10px;
-        bottom: 85px;
+        bottom: 84px;
 
         width:
             calc(100% - 20px);
@@ -958,70 +1503,62 @@ h1 {
     }
 }
 
-/* =========================================
-   SEHR KLEINE HANDYS
-========================================= */
-
-@media (max-height: 650px) {
-
-    .container {
-        padding:
-            25px 16px;
-    }
-
-    .minecraftIcon {
-
-        width: 65px;
-        height: 65px;
-
-        margin-bottom: 10px;
-    }
-
-    .minecraftIcon span {
-        font-size: 30px;
-    }
-
-    h1 {
-        font-size: 32px;
-    }
-
-    .description {
-        margin-top: 10px;
-    }
-
-    .loader {
-        margin-top: 18px;
-    }
-
-    .chat {
-        height: 65vh;
-    }
-}
-
 </style>
 
 </head>
 
 <body>
 
-<!-- STERNE -->
-
 <canvas id="stars"></canvas>
 
-<!-- MOND -->
-
 <div class="moon"></div>
-
-<!-- GLOW -->
-
-<div class="greenGlow"></div>
-
-<!-- PARTIKEL -->
 
 <div id="particles"></div>
 
 
-<!-- HAUPTBOX -->
+<!-- =========================================
+     NAVIGATION
+========================================= -->
+
+<nav class="navbar">
+
+    <div class="logo">
+
+        <div class="logoIcon">
+            ⛏️
+        </div>
+
+        Minecraft Hosting
+
+    </div>
+
+    <div
+        class="navButtons"
+        id="navButtons"
+    >
+
+        <button
+            class="navButton"
+            onclick="openLogin()"
+        >
+            🔑 Anmeldung
+        </button>
+
+        <button
+            class="navButton"
+            onclick="openRegister()"
+        >
+            📝 Registrierung
+        </button>
+
+    </div>
+
+</nav>
+
+
+<!-- =========================================
+     HAUPTBOX
+========================================= -->
 
 <main class="container">
 
@@ -1039,26 +1576,256 @@ h1 {
         Schau bald wieder vorbei!
     </p>
 
-    <div class="loader">
-        <div class="loaderBar"></div>
-    </div>
-
 </main>
 
 
-<!-- CHAT BUTTON -->
+<!-- =========================================
+     USER PANEL
+========================================= -->
+
+<div
+    class="userPanel"
+    id="userPanel"
+>
+
+    <h3 id="userName">
+        Benutzer
+    </h3>
+
+    <div
+        class="userEmail"
+        id="userEmail"
+    ></div>
+
+    <button
+        class="logoutButton"
+        onclick="logout()"
+    >
+        🚪 Abmelden
+    </button>
+
+</div>
+
+
+<!-- =========================================
+     LOGIN MODAL
+========================================= -->
+
+<div
+    class="modal"
+    id="loginModal"
+>
+
+    <div class="modalBox">
+
+        <div class="modalHeader">
+
+            <h2>
+                🔑 Anmeldung
+            </h2>
+
+            <button
+                class="close"
+                onclick="closeModals()"
+            >
+                ×
+            </button>
+
+        </div>
+
+        <div
+            class="message"
+            id="loginMessage"
+        ></div>
+
+        <form
+            id="loginForm"
+        >
+
+            <div class="formGroup">
+
+                <label>
+                    Benutzername oder E-Mail
+                </label>
+
+                <input
+                    id="loginUser"
+                    type="text"
+                    required
+                    autocomplete="username"
+                    placeholder="Benutzername oder E-Mail"
+                >
+
+            </div>
+
+            <div class="formGroup">
+
+                <label>
+                    Passwort
+                </label>
+
+                <input
+                    id="loginPassword"
+                    type="password"
+                    required
+                    autocomplete="current-password"
+                    placeholder="Passwort"
+                >
+
+            </div>
+
+            <button
+                class="primaryButton"
+                type="submit"
+            >
+                🔐 Anmelden
+            </button>
+
+        </form>
+
+        <div class="switchText">
+
+            Noch kein Konto?
+
+            <button
+                onclick="switchToRegister()"
+            >
+                Jetzt registrieren
+            </button>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<!-- =========================================
+     REGISTER MODAL
+========================================= -->
+
+<div
+    class="modal"
+    id="registerModal"
+>
+
+    <div class="modalBox">
+
+        <div class="modalHeader">
+
+            <h2>
+                📝 Registrierung
+            </h2>
+
+            <button
+                class="close"
+                onclick="closeModals()"
+            >
+                ×
+            </button>
+
+        </div>
+
+        <div
+            class="message"
+            id="registerMessage"
+        ></div>
+
+        <form
+            id="registerForm"
+        >
+
+            <div class="formGroup">
+
+                <label>
+                    Benutzername
+                </label>
+
+                <input
+                    id="registerUser"
+                    type="text"
+                    required
+                    maxlength="24"
+                    autocomplete="username"
+                    placeholder="z.B. Steve"
+                >
+
+            </div>
+
+            <div class="formGroup">
+
+                <label>
+                    E-Mail
+                </label>
+
+                <input
+                    id="registerEmail"
+                    type="email"
+                    required
+                    autocomplete="email"
+                    placeholder="name@example.com"
+                >
+
+            </div>
+
+            <div class="formGroup">
+
+                <label>
+                    Passwort
+                </label>
+
+                <input
+                    id="registerPassword"
+                    type="password"
+                    required
+                    minlength="8"
+                    autocomplete="new-password"
+                    placeholder="Mindestens 8 Zeichen"
+                >
+
+            </div>
+
+            <button
+                class="primaryButton"
+                type="submit"
+            >
+                🚀 Konto erstellen
+            </button>
+
+        </form>
+
+        <div class="switchText">
+
+            Bereits registriert?
+
+            <button
+                onclick="switchToLogin()"
+            >
+                Jetzt anmelden
+            </button>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<!-- =========================================
+     CHAT BUTTON
+========================================= -->
 
 <button
     class="chatButton"
-    id="chatButton"
     onclick="toggleChat()"
-    aria-label="Chat öffnen"
 >
     💬
 </button>
 
 
-<!-- CHAT -->
+<!-- =========================================
+     CHAT
+========================================= -->
 
 <section
     class="chat"
@@ -1080,7 +1847,7 @@ h1 {
         </div>
 
         <button
-            class="closeChat"
+            class="close"
             onclick="toggleChat()"
         >
             ×
@@ -1088,18 +1855,10 @@ h1 {
 
     </header>
 
-
     <div
         class="messages"
         id="messages"
-    >
-
-        <div class="systemMessage">
-            Willkommen im Community-Chat! 👋
-        </div>
-
-    </div>
-
+    ></div>
 
     <form
         class="chatInputArea"
@@ -1109,7 +1868,6 @@ h1 {
         <input
             id="chatInput"
             class="chatInput"
-            type="text"
             maxlength="300"
             placeholder="Nachricht schreiben..."
             autocomplete="off"
@@ -1127,91 +1885,467 @@ h1 {
 </section>
 
 
-<script src="/socket.io/socket.io.js"></script>
-
 <script>
+
+/* =========================================
+   LOGIN TOKEN
+========================================= */
+
+let token =
+    localStorage.getItem(
+        "minecraftHostingToken"
+    );
+
+
+/* =========================================
+   MODALS
+========================================= */
+
+function openLogin() {
+
+    document
+        .getElementById("registerModal")
+        .classList.remove("active");
+
+    document
+        .getElementById("loginModal")
+        .classList.add("active");
+
+    clearMessages();
+}
+
+function openRegister() {
+
+    document
+        .getElementById("loginModal")
+        .classList.remove("active");
+
+    document
+        .getElementById("registerModal")
+        .classList.add("active");
+
+    clearMessages();
+}
+
+function closeModals() {
+
+    document
+        .getElementById("loginModal")
+        .classList.remove("active");
+
+    document
+        .getElementById("registerModal")
+        .classList.remove("active");
+}
+
+function switchToRegister() {
+    openRegister();
+}
+
+function switchToLogin() {
+    openLogin();
+}
+
+function clearMessages() {
+
+    document
+        .getElementById("loginMessage")
+        .classList.remove("show");
+
+    document
+        .getElementById("registerMessage")
+        .classList.remove("show");
+}
+
+function showMessage(
+    elementId,
+    text
+) {
+
+    const element =
+        document.getElementById(
+            elementId
+        );
+
+    element.textContent = text;
+
+    element.classList.add(
+        "show"
+    );
+}
+
+
+/* =========================================
+   REGISTRIERUNG
+========================================= */
+
+document
+    .getElementById("registerForm")
+    .addEventListener(
+        "submit",
+        async event => {
+
+            event.preventDefault();
+
+            const username =
+                document
+                    .getElementById(
+                        "registerUser"
+                    )
+                    .value
+                    .trim();
+
+            const email =
+                document
+                    .getElementById(
+                        "registerEmail"
+                    )
+                    .value
+                    .trim();
+
+            const password =
+                document
+                    .getElementById(
+                        "registerPassword"
+                    )
+                    .value;
+
+            try {
+
+                const response =
+                    await fetch(
+                        "/api/register",
+                        {
+                            method: "POST",
+
+                            headers: {
+                                "Content-Type":
+                                    "application/json"
+                            },
+
+                            body:
+                                JSON.stringify({
+                                    username,
+                                    email,
+                                    password
+                                })
+                        }
+                    );
+
+                const data =
+                    await response.json();
+
+                if (!data.success) {
+
+                    showMessage(
+                        "registerMessage",
+                        data.message
+                    );
+
+                    return;
+                }
+
+                showMessage(
+                    "registerMessage",
+                    "✅ " + data.message
+                );
+
+                document
+                    .getElementById(
+                        "registerForm"
+                    )
+                    .reset();
+
+                setTimeout(
+                    openLogin,
+                    1200
+                );
+
+            } catch (error) {
+
+                showMessage(
+                    "registerMessage",
+                    "❌ Serverfehler. Bitte später erneut versuchen."
+                );
+
+                console.error(
+                    error
+                );
+            }
+        }
+    );
+
+
+/* =========================================
+   ANMELDUNG
+========================================= */
+
+document
+    .getElementById("loginForm")
+    .addEventListener(
+        "submit",
+        async event => {
+
+            event.preventDefault();
+
+            const login =
+                document
+                    .getElementById(
+                        "loginUser"
+                    )
+                    .value
+                    .trim();
+
+            const password =
+                document
+                    .getElementById(
+                        "loginPassword"
+                    )
+                    .value;
+
+            try {
+
+                const response =
+                    await fetch(
+                        "/api/login",
+                        {
+                            method: "POST",
+
+                            headers: {
+                                "Content-Type":
+                                    "application/json"
+                            },
+
+                            body:
+                                JSON.stringify({
+                                    login,
+                                    password
+                                })
+                        }
+                    );
+
+                const data =
+                    await response.json();
+
+                if (!data.success) {
+
+                    showMessage(
+                        "loginMessage",
+                        "❌ " + data.message
+                    );
+
+                    return;
+                }
+
+                token =
+                    data.token;
+
+                localStorage.setItem(
+                    "minecraftHostingToken",
+                    token
+                );
+
+                document
+                    .getElementById(
+                        "loginForm"
+                    )
+                    .reset();
+
+                closeModals();
+
+                updateUserInterface();
+
+                loadChat();
+
+            } catch (error) {
+
+                showMessage(
+                    "loginMessage",
+                    "❌ Serverfehler."
+                );
+
+                console.error(
+                    error
+                );
+            }
+        }
+    );
+
+
+/* =========================================
+   BENUTZER UI
+========================================= */
+
+async function updateUserInterface() {
+
+    if (!token) {
+
+        document
+            .getElementById(
+                "navButtons"
+            )
+            .style.display = "flex";
+
+        document
+            .getElementById(
+                "userPanel"
+            )
+            .classList.remove(
+                "active"
+            );
+
+        return;
+    }
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/me",
+                {
+                    headers: {
+                        Authorization:
+                            "Bearer " +
+                            token
+                    }
+                }
+            );
+
+        if (!response.ok) {
+
+            token = null;
+
+            localStorage.removeItem(
+                "minecraftHostingToken"
+            );
+
+            updateUserInterface();
+
+            return;
+        }
+
+        const data =
+            await response.json();
+
+        document
+            .getElementById(
+                "navButtons"
+            )
+            .innerHTML = \`
+                <button
+                    class="navButton"
+                    onclick="toggleUserPanel()"
+                >
+                    👤 \${escapeHtml(data.user.username)}
+                </button>
+            \`;
+
+        document
+            .getElementById(
+                "userName"
+            )
+            .textContent =
+                "👤 " +
+                data.user.username;
+
+        document
+            .getElementById(
+                "userEmail"
+            )
+            .textContent =
+                data.user.email;
+
+    } catch {
+
+        console.error(
+            "Benutzer konnte nicht geladen werden."
+        );
+    }
+}
+
+function toggleUserPanel() {
+
+    document
+        .getElementById(
+            "userPanel"
+        )
+        .classList.toggle(
+            "active"
+        );
+}
+
+
+/* =========================================
+   LOGOUT
+========================================= */
+
+async function logout() {
+
+    try {
+
+        await fetch(
+            "/api/logout",
+            {
+                method: "POST",
+
+                headers: {
+                    Authorization:
+                        "Bearer " +
+                        token
+                }
+            }
+        );
+
+    } catch {}
+
+    token = null;
+
+    localStorage.removeItem(
+        "minecraftHostingToken"
+    );
+
+    document
+        .getElementById(
+            "userPanel"
+        )
+        .classList.remove(
+            "active"
+        );
+
+    document
+        .getElementById(
+            "navButtons"
+        )
+        .innerHTML = \`
+            <button
+                class="navButton"
+                onclick="openLogin()"
+            >
+                🔑 Anmeldung
+            </button>
+
+            <button
+                class="navButton"
+                onclick="openRegister()"
+            >
+                📝 Registrierung
+            </button>
+        \`;
+
+    loadChat();
+}
+
 
 /* =========================================
    CHAT
 ========================================= */
 
-const socket =
-    io();
-
-const chat =
-    document.getElementById(
-        "chat"
-    );
-
-const chatButton =
-    document.getElementById(
-        "chatButton"
-    );
-
-const messages =
-    document.getElementById(
-        "messages"
-    );
-
-const chatInput =
-    document.getElementById(
-        "chatInput"
-    );
-
-const chatForm =
-    document.getElementById(
-        "chatForm"
-    );
-
-
-/*
-   Zufälliger Besuchername
-*/
-
-const names = [
-    "Steve",
-    "Alex",
-    "Creeper",
-    "Builder",
-    "Miner",
-    "Player",
-    "Explorer"
-];
-
-let username =
-    localStorage.getItem(
-        "minecraftChatName"
-    );
-
-if (!username) {
-
-    const randomName =
-        names[
-            Math.floor(
-                Math.random() *
-                names.length
-            )
-        ];
-
-    username =
-        randomName +
-        "_" +
-        Math.floor(
-            Math.random() * 9999
-        );
-
-    localStorage.setItem(
-        "minecraftChatName",
-        username
-    );
-}
-
-
-/*
-   Chat öffnen
-*/
-
 function toggleChat() {
+
+    const chat =
+        document.getElementById(
+            "chat"
+        );
 
     chat.classList.toggle(
         "active"
@@ -1223,121 +2357,256 @@ function toggleChat() {
         )
     ) {
 
-        setTimeout(
-            () => {
-                chatInput.focus();
-            },
-            100
+        loadChat();
+
+        document
+            .getElementById(
+                "chatInput"
+            )
+            .focus();
+    }
+}
+
+async function loadChat() {
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/chat"
+            );
+
+        const data =
+            await response.json();
+
+        const messages =
+            document.getElementById(
+                "messages"
+            );
+
+        messages.innerHTML = "";
+
+        if (
+            !data.messages.length
+        ) {
+
+            messages.innerHTML =
+                \`
+                <div class="chatMessage">
+                    <div class="chatName">
+                        System
+                    </div>
+                    <div class="chatText">
+                        Noch keine Nachrichten. 👋
+                    </div>
+                </div>
+                \`;
+
+            return;
+        }
+
+        for (
+            const message
+            of data.messages
+        ) {
+
+            addChatMessage(
+                message
+            );
+        }
+
+    } catch (error) {
+
+        console.error(
+            "Chat konnte nicht geladen werden:",
+            error
         );
     }
 }
 
+function addChatMessage(
+    message
+) {
 
-/*
-   Nachricht senden
-*/
+    const container =
+        document.getElementById(
+            "messages"
+        );
 
-chatForm.addEventListener(
-    "submit",
-    function(event) {
+    const element =
+        document.createElement(
+            "div"
+        );
 
-        event.preventDefault();
+    element.className =
+        "chatMessage";
 
-        const text =
-            chatInput.value.trim();
+    element.innerHTML = \`
+        <div class="chatName">
+            \${escapeHtml(message.username)}
+        </div>
 
-        if (!text) {
-            return;
+        <div class="chatText">
+            \${escapeHtml(message.text)}
+        </div>
+
+        <div class="chatDate">
+            \${formatDate(message.createdAt)}
+        </div>
+    \`;
+
+    container.appendChild(
+        element
+    );
+
+    container.scrollTop =
+        container.scrollHeight;
+}
+
+
+/* =========================================
+   CHAT SENDEN
+========================================= */
+
+document
+    .getElementById("chatForm")
+    .addEventListener(
+        "submit",
+        async event => {
+
+            event.preventDefault();
+
+            if (!token) {
+
+                openLogin();
+
+                showMessage(
+                    "loginMessage",
+                    "🔐 Bitte melde dich an, um im Chat zu schreiben."
+                );
+
+                return;
+            }
+
+            const input =
+                document.getElementById(
+                    "chatInput"
+                );
+
+            const text =
+                input.value.trim();
+
+            if (!text) {
+                return;
+            }
+
+            try {
+
+                const response =
+                    await fetch(
+                        "/api/chat",
+                        {
+                            method: "POST",
+
+                            headers: {
+                                "Content-Type":
+                                    "application/json",
+
+                                Authorization:
+                                    "Bearer " +
+                                    token
+                            },
+
+                            body:
+                                JSON.stringify({
+                                    text
+                                })
+                        }
+                    );
+
+                const data =
+                    await response.json();
+
+                if (!data.success) {
+
+                    if (
+                        response.status === 401
+                    ) {
+
+                        token = null;
+
+                        localStorage.removeItem(
+                            "minecraftHostingToken"
+                        );
+
+                        openLogin();
+
+                    } else {
+
+                        alert(
+                            data.message
+                        );
+                    }
+
+                    return;
+                }
+
+                input.value = "";
+
+                addChatMessage(
+                    data.message
+                );
+
+            } catch (error) {
+
+                console.error(
+                    error
+                );
+
+                alert(
+                    "❌ Nachricht konnte nicht gesendet werden."
+                );
+            }
         }
+    );
 
-        socket.emit(
-            "chatMessage",
+
+/* =========================================
+   HTML SICHER MACHEN
+========================================= */
+
+function escapeHtml(
+    value
+) {
+
+    return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
+
+function formatDate(
+    date
+) {
+
+    try {
+
+        return new Date(
+            date
+        ).toLocaleString(
+            "de-DE",
             {
-                name: username,
-                text: text
+                dateStyle: "short",
+                timeStyle: "short"
             }
         );
 
-        chatInput.value = "";
+    } catch {
 
-        chatInput.focus();
+        return "";
     }
-);
-
-
-/*
-   Nachricht empfangen
-*/
-
-socket.on(
-    "chatMessage",
-    function(message) {
-
-        addMessage(
-            message.name,
-            message.text
-        );
-    }
-);
-
-
-/*
-   Nachricht anzeigen
-*/
-
-function addMessage(
-    name,
-    text
-) {
-
-    const wrapper =
-        document.createElement(
-            "div"
-        );
-
-    wrapper.className =
-        "message";
-
-
-    const nameElement =
-        document.createElement(
-            "div"
-        );
-
-    nameElement.className =
-        "messageName";
-
-    nameElement.textContent =
-        name;
-
-
-    const textElement =
-        document.createElement(
-            "div"
-        );
-
-    textElement.className =
-        "messageText";
-
-    textElement.textContent =
-        text;
-
-
-    wrapper.appendChild(
-        nameElement
-    );
-
-    wrapper.appendChild(
-        textElement
-    );
-
-    messages.appendChild(
-        wrapper
-    );
-
-
-    messages.scrollTop =
-        messages.scrollHeight;
 }
 
 
@@ -1359,7 +2628,6 @@ let stars = [];
 
 let width = 0;
 let height = 0;
-
 
 function resizeCanvas() {
 
@@ -1399,7 +2667,6 @@ function resizeCanvas() {
     createStars();
 }
 
-
 function createStars() {
 
     stars = [];
@@ -1408,8 +2675,7 @@ function createStars() {
         Math.min(
             180,
             Math.floor(
-                (width * height) /
-                7500
+                width * height / 7500
             )
         );
 
@@ -1447,7 +2713,6 @@ function createStars() {
         });
     }
 }
-
 
 function animateStars() {
 
@@ -1515,7 +2780,6 @@ function animateStars() {
     );
 }
 
-
 window.addEventListener(
     "resize",
     resizeCanvas
@@ -1552,154 +2816,97 @@ for (
         "particle";
 
     particle.style.left =
-        Math.random() * 100 + "%";
+        Math.random() * 100 +
+        "%";
 
     particle.style.animationDuration =
         (
             Math.random() * 12 + 8
-        ) + "s";
+        ) +
+        "s";
 
     particle.style.animationDelay =
         -(
             Math.random() * 15
-        ) + "s";
+        ) +
+        "s";
 
     particleContainer.appendChild(
         particle
     );
 }
 
+
+/* =========================================
+   START
+========================================= */
+
+updateUserInterface();
+
+loadChat();
+
 </script>
 
 </body>
 
-</html>
-    `);
+</html>`);
+
 });
 
 
-/* =========================================
-   CHAT SERVER
-========================================= */
+/*
+====================================================
+ SERVER START
+====================================================
+*/
 
-io.on(
-    "connection",
-    (socket) => {
-
-        console.log(
-            "💬 Besucher verbunden:",
-            socket.id
-        );
-
-
-        socket.on(
-            "chatMessage",
-            (data) => {
-
-                if (!data) {
-                    return;
-                }
-
-                let name =
-                    String(
-                        data.name || "Player"
-                    )
-                    .trim()
-                    .slice(0, 24);
-
-                let text =
-                    String(
-                        data.text || ""
-                    )
-                    .trim()
-                    .slice(0, 300);
-
-                if (!text) {
-                    return;
-                }
-
-                if (!name) {
-                    name = "Player";
-                }
-
-                /*
-                 * Nachricht an alle
-                 */
-
-                io.emit(
-                    "chatMessage",
-                    {
-                        name: name,
-                        text: text
-                    }
-                );
-
-                console.log(
-                    "💬 " +
-                    name +
-                    ": " +
-                    text
-                );
-            }
-        );
-
-
-        socket.on(
-            "disconnect",
-            () => {
-
-                console.log(
-                    "👋 Besucher getrennt:",
-                    socket.id
-                );
-            }
-        );
-
-    }
-);
-
-
-/* =========================================
-   SERVER START
-========================================= */
-
-server.listen(
+app.listen(
     PORT,
     "0.0.0.0",
     () => {
 
-        console.log("");
         console.log(
             "======================================"
         );
+
         console.log(
             "⛏️ Minecraft Hosting Webseite"
         );
+
         console.log(
             "======================================"
         );
+
         console.log(
             "🌐 Port: " + PORT
         );
+
+        console.log(
+            "🔐 Anmeldung: AKTIV"
+        );
+
+        console.log(
+            "📝 Registrierung: AKTIV"
+        );
+
+        console.log(
+            "💬 Chat: AKTIV"
+        );
+
         console.log(
             "⭐ Sterne: AKTIV"
         );
-        console.log(
-            "✨ Partikel: AKTIV"
-        );
-        console.log(
-            "🌙 Mond: AKTIV"
-        );
-        console.log(
-            "💬 Community Chat: AKTIV"
-        );
+
         console.log(
             "📱 Mobile: AKTIV"
         );
+
+        console.log(
+            "🎵 Musik: DEAKTIVIERT"
+        );
+
         console.log(
             "======================================"
         );
-        console.log("");
-
     }
 );
