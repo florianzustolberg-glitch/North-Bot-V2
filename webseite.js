@@ -1,684 +1,947 @@
 const express = require("express");
-const fs = require("fs");
-const path = require("path");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const MUSIC_DIR = path.join(__dirname, "music");
-
-if (!fs.existsSync(MUSIC_DIR)) {
-    fs.mkdirSync(MUSIC_DIR, { recursive: true });
-}
-
-app.use("/music", express.static(MUSIC_DIR));
-
 app.get("/", (req, res) => {
-    res.send(`
-<!DOCTYPE html>
+    res.send(`<!DOCTYPE html>
 <html lang="de">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport"
-      content="width=device-width, initial-scale=1.0,
-               maximum-scale=1.0, user-scalable=no">
+    <meta charset="UTF-8">
 
-<title>Webseite kommt bald</title>
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
 
-<style>
-* {
-    box-sizing: border-box;
-    -webkit-tap-highlight-color: transparent;
-}
+    <meta
+        name="theme-color"
+        content="#07120a"
+    >
 
-html,
-body {
-    width: 100%;
-    min-height: 100%;
-    margin: 0;
-}
+    <title>Minecraft Hosting</title>
 
-body {
-    min-height: 100vh;
-    min-height: 100dvh;
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
 
-    display: flex;
-    align-items: center;
-    justify-content: center;
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+        }
 
-    overflow: hidden;
+        body {
+            min-height: 100vh;
+            min-height: 100dvh;
 
-    font-family:
-        Arial,
-        Helvetica,
-        sans-serif;
+            overflow: hidden;
 
-    color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
 
-    background:
-        radial-gradient(
-            circle at 15% 20%,
-            rgba(88, 101, 242, .35),
-            transparent 35%
-        ),
-        radial-gradient(
-            circle at 85% 80%,
-            rgba(139, 92, 246, .35),
-            transparent 35%
-        ),
-        #05070d;
-}
+            font-family:
+                Arial,
+                Helvetica,
+                sans-serif;
 
-/* Hintergrund */
+            color: #ffffff;
 
-.background {
-    position: fixed;
-    inset: 0;
-    overflow: hidden;
-    pointer-events: none;
-}
+            background:
+                radial-gradient(
+                    circle at 50% 35%,
+                    rgba(45, 120, 55, 0.22),
+                    transparent 45%
+                ),
+                linear-gradient(
+                    180deg,
+                    #02050a 0%,
+                    #071209 55%,
+                    #020602 100%
+                );
+        }
 
-.glow {
-    position: absolute;
-    border-radius: 50%;
-    filter: blur(70px);
-    opacity: .35;
-    animation: floating 9s ease-in-out infinite;
-}
+        /* =========================================
+           STERNE
+        ========================================= */
 
-.glow1 {
-    width: 280px;
-    height: 280px;
-    left: -100px;
-    top: -80px;
-    background: #5865f2;
-}
+        #stars {
+            position: fixed;
+            inset: 0;
 
-.glow2 {
-    width: 320px;
-    height: 320px;
-    right: -120px;
-    bottom: -100px;
-    background: #8b5cf6;
-    animation-delay: -3s;
-}
+            width: 100%;
+            height: 100%;
 
-.glow3 {
-    width: 180px;
-    height: 180px;
-    left: 50%;
-    top: 50%;
-    background: #00bfff;
-    animation-delay: -6s;
-}
+            z-index: 0;
 
-@keyframes floating {
-    0%,
-    100% {
-        transform: translate(0, 0) scale(1);
-    }
+            pointer-events: none;
+        }
 
-    50% {
-        transform: translate(35px, -25px) scale(1.15);
-    }
-}
+        /* =========================================
+           MOND
+        ========================================= */
 
-/* Hauptbox */
+        .moon {
+            position: fixed;
 
-.container {
-    position: relative;
-    z-index: 2;
+            width: 85px;
+            height: 85px;
 
-    width: calc(100% - 32px);
-    max-width: 850px;
+            top: 9%;
+            right: 10%;
 
-    padding: 55px 30px;
+            border-radius: 50%;
 
-    text-align: center;
+            background:
+                radial-gradient(
+                    circle at 35% 30%,
+                    #ffffff,
+                    #d8d8d8 55%,
+                    #898989 100%
+                );
 
-    border: 1px solid rgba(255,255,255,.13);
-    border-radius: 28px;
+            box-shadow:
+                0 0 30px rgba(255,255,255,.25),
+                0 0 90px rgba(255,255,255,.08);
 
-    background: rgba(10,13,22,.70);
+            opacity: .85;
 
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+            z-index: 1;
 
-    box-shadow:
-        0 30px 100px rgba(0,0,0,.55);
+            animation:
+                moonFloat 6s ease-in-out infinite;
+        }
 
-    animation: appear 1.2s ease;
-}
+        @keyframes moonFloat {
+            0%,
+            100% {
+                transform: translateY(0);
+            }
 
-@keyframes appear {
-    from {
-        opacity: 0;
-        transform:
-            translateY(35px)
-            scale(.94);
-    }
+            50% {
+                transform: translateY(10px);
+            }
+        }
 
-    to {
-        opacity: 1;
-        transform:
-            translateY(0)
-            scale(1);
-    }
-}
+        /* =========================================
+           WOLKEN
+        ========================================= */
 
-/* Icon */
+        .cloud {
+            position: fixed;
 
-.icon {
-    font-size: clamp(48px, 12vw, 82px);
+            height: 18px;
 
-    animation:
-        rocket 3s ease-in-out infinite,
-        glowIcon 2s ease-in-out infinite alternate;
-}
+            background:
+                rgba(255,255,255,.045);
 
-@keyframes rocket {
-    0%,
-    100% {
-        transform: translateY(0);
-    }
+            z-index: 1;
 
-    50% {
-        transform: translateY(-12px);
-    }
-}
+            pointer-events: none;
 
-@keyframes glowIcon {
-    from {
-        filter:
-            drop-shadow(
-                0 0 5px
-                rgba(88,101,242,.5)
-            );
-    }
+            animation:
+                cloudMove linear infinite;
+        }
 
-    to {
-        filter:
-            drop-shadow(
+        .cloud::before,
+        .cloud::after {
+            content: "";
+
+            position: absolute;
+
+            background:
+                rgba(255,255,255,.045);
+        }
+
+        .cloud::before {
+            width: 35px;
+            height: 22px;
+
+            left: 18px;
+            bottom: 0;
+        }
+
+        .cloud::after {
+            width: 50px;
+            height: 28px;
+
+            left: 55px;
+            bottom: 0;
+        }
+
+        .cloud1 {
+            width: 120px;
+
+            top: 20%;
+            left: -160px;
+
+            animation-duration: 45s;
+        }
+
+        .cloud2 {
+            width: 150px;
+
+            top: 34%;
+            left: -220px;
+
+            animation-duration: 65s;
+            animation-delay: -20s;
+        }
+
+        @keyframes cloudMove {
+            from {
+                transform: translateX(0);
+            }
+
+            to {
+                transform:
+                    translateX(
+                        calc(100vw + 450px)
+                    );
+            }
+        }
+
+        /* =========================================
+           GRÜNER HINTERGRUND-GLOW
+        ========================================= */
+
+        .greenGlow {
+            position: fixed;
+
+            width: 500px;
+            height: 500px;
+
+            left: 50%;
+            top: 50%;
+
+            transform:
+                translate(-50%, -50%);
+
+            background:
+                radial-gradient(
+                    circle,
+                    rgba(46,204,64,.14),
+                    transparent 70%
+                );
+
+            filter: blur(30px);
+
+            z-index: 1;
+
+            pointer-events: none;
+
+            animation:
+                glowPulse 5s ease-in-out infinite;
+        }
+
+        @keyframes glowPulse {
+            0%,
+            100% {
+                opacity: .5;
+
+                transform:
+                    translate(-50%, -50%)
+                    scale(1);
+            }
+
+            50% {
+                opacity: 1;
+
+                transform:
+                    translate(-50%, -50%)
+                    scale(1.2);
+            }
+        }
+
+        /* =========================================
+           PARTIKEL
+        ========================================= */
+
+        #particles {
+            position: fixed;
+
+            inset: 0;
+
+            z-index: 2;
+
+            pointer-events: none;
+        }
+
+        .particle {
+            position: absolute;
+
+            width: 4px;
+            height: 4px;
+
+            background: #58c957;
+
+            box-shadow:
+                0 0 8px
+                rgba(88,201,87,.8);
+
+            animation:
+                particleMove linear infinite;
+        }
+
+        @keyframes particleMove {
+            from {
+                transform:
+                    translateY(105vh)
+                    translateX(0);
+
+                opacity: 0;
+            }
+
+            15% {
+                opacity: .8;
+            }
+
+            85% {
+                opacity: .8;
+            }
+
+            to {
+                transform:
+                    translateY(-20vh)
+                    translateX(80px);
+
+                opacity: 0;
+            }
+        }
+
+        /* =========================================
+           HAUPTBOX
+        ========================================= */
+
+        .container {
+            position: relative;
+
+            z-index: 5;
+
+            width:
+                min(
+                    calc(100% - 30px),
+                    850px
+                );
+
+            padding:
+                55px 35px;
+
+            text-align: center;
+
+            border:
+                3px solid
+                rgba(82,180,74,.35);
+
+            border-radius: 8px;
+
+            background:
+                linear-gradient(
+                    145deg,
+                    rgba(7,15,8,.94),
+                    rgba(10,22,12,.84)
+                );
+
+            box-shadow:
+                0 30px 100px
+                rgba(0,0,0,.7),
+
+                0 0 60px
+                rgba(50,180,70,.08);
+
+            backdrop-filter:
+                blur(12px);
+
+            -webkit-backdrop-filter:
+                blur(12px);
+
+            animation:
+                containerAppear 1.2s ease forwards;
+        }
+
+        @keyframes containerAppear {
+            from {
+                opacity: 0;
+
+                transform:
+                    translateY(35px)
+                    scale(.92);
+            }
+
+            to {
+                opacity: 1;
+
+                transform:
+                    translateY(0)
+                    scale(1);
+            }
+        }
+
+        /* =========================================
+           MINECRAFT BLOCK
+        ========================================= */
+
+        .minecraftIcon {
+            display: inline-flex;
+
+            align-items: center;
+            justify-content: center;
+
+            width: 100px;
+            height: 100px;
+
+            margin-bottom: 20px;
+
+            background:
+                linear-gradient(
+                    135deg,
+                    #55b947,
+                    #26772c
+                );
+
+            border:
+                5px solid
+                #163d18;
+
+            box-shadow:
+                inset 0 8px 0
+                rgba(255,255,255,.12),
+
+                inset 0 -8px 0
+                rgba(0,0,0,.25),
+
+                0 12px 25px
+                rgba(0,0,0,.5);
+
+            image-rendering: pixelated;
+
+            animation:
+                iconFloat 3s ease-in-out infinite;
+        }
+
+        .minecraftIcon span {
+            font-size: 48px;
+
+            filter:
+                drop-shadow(
+                    3px 3px 0
+                    rgba(0,0,0,.5)
+                );
+        }
+
+        @keyframes iconFloat {
+            0%,
+            100% {
+                transform:
+                    translateY(0)
+                    rotate(0deg);
+            }
+
+            50% {
+                transform:
+                    translateY(-10px)
+                    rotate(2deg);
+            }
+        }
+
+        /* =========================================
+           TITEL
+        ========================================= */
+
+        h1 {
+            font-size:
+                clamp(
+                    32px,
+                    7vw,
+                    68px
+                );
+
+            line-height: 1.05;
+
+            font-weight: 900;
+
+            letter-spacing: -2px;
+
+            color: #ffffff;
+
+            text-shadow:
+                4px 4px 0 #183b1b,
                 0 0 25px
-                rgba(139,92,246,.9)
-            );
-    }
-}
+                rgba(76,220,82,.25);
+
+            animation:
+                titleGlow 3s ease-in-out infinite;
+        }
+
+        @keyframes titleGlow {
+            0%,
+            100% {
+                text-shadow:
+                    4px 4px 0 #183b1b,
+                    0 0 20px
+                    rgba(76,220,82,.15);
+            }
+
+            50% {
+                text-shadow:
+                    4px 4px 0 #183b1b,
+                    0 0 35px
+                    rgba(76,220,82,.35);
+            }
+        }
+
+        /* =========================================
+           BESCHREIBUNG
+        ========================================= */
+
+        .description {
+            margin-top: 20px;
+
+            color: #b8c5b8;
 
-/* Überschrift */
+            font-size:
+                clamp(
+                    15px,
+                    3vw,
+                    19px
+                );
+
+            line-height: 1.7;
+        }
+
+        /* =========================================
+           LOADER
+        ========================================= */
 
-h1 {
-    margin: 20px 0 12px;
+        .loader {
+            width: 100%;
 
-    font-size:
-        clamp(32px, 7vw, 70px);
+            max-width: 550px;
 
-    line-height: 1.05;
+            height: 22px;
 
-    font-weight: 900;
+            margin:
+                35px auto 0;
 
-    background:
-        linear-gradient(
-            90deg,
-            #fff,
-            #8b9cff,
-            #c084fc,
-            #fff
-        );
+            padding: 3px;
 
-    background-size: 300%;
+            background: #101510;
 
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+            border:
+                2px solid
+                #263a27;
 
-    animation:
-        gradientMove 5s linear infinite;
-}
+            box-shadow:
+                inset 0 3px 5px
+                rgba(0,0,0,.6);
+        }
 
-@keyframes gradientMove {
-    0% {
-        background-position: 0%;
-    }
+        .loaderBar {
+            width: 0%;
+            height: 100%;
 
-    100% {
-        background-position: 300%;
-    }
-}
+            background:
+                repeating-linear-gradient(
+                    90deg,
+                    #55c64b 0px,
+                    #55c64b 16px,
+                    #42a83c 16px,
+                    #42a83c 32px
+                );
 
-.description {
-    margin: 0 auto;
+            box-shadow:
+                0 0 12px
+                rgba(70,200,70,.3);
 
-    max-width: 650px;
+            animation:
+                loading 5s
+                ease-in-out infinite;
+        }
 
-    color: #aeb6c9;
+        @keyframes loading {
+            0% {
+                width: 0%;
+            }
 
-    font-size:
-        clamp(15px, 3vw, 19px);
+            70% {
+                width: 82%;
+            }
 
-    line-height: 1.7;
-}
+            100% {
+                width: 100%;
+            }
+        }
 
-/* Ladebalken */
+        /* =========================================
+           MOBILE
+        ========================================= */
 
-.loader {
-    width: 100%;
-    max-width: 520px;
+        @media (max-width: 600px) {
 
-    height: 8px;
+            body {
+                padding: 12px;
+            }
 
-    margin: 35px auto 0;
+            .container {
+                width: 100%;
 
-    overflow: hidden;
+                padding:
+                    38px 18px;
 
-    border-radius: 50px;
+                border-radius: 6px;
+            }
 
-    background: rgba(255,255,255,.08);
-}
+            .minecraftIcon {
+                width: 78px;
+                height: 78px;
 
-.loaderBar {
-    width: 0%;
-    height: 100%;
+                border-width: 4px;
+            }
 
-    border-radius: 50px;
+            .minecraftIcon span {
+                font-size: 38px;
+            }
 
-    background:
-        linear-gradient(
-            90deg,
-            #5865f2,
-            #8b5cf6,
-            #00bfff
-        );
+            h1 {
+                letter-spacing: -1px;
+            }
 
-    animation:
-        loading 5s ease-in-out infinite;
-}
+            .description {
+                margin-top: 16px;
 
-@keyframes loading {
-    0% {
-        width: 0%;
-    }
+                font-size: 15px;
+            }
 
-    70% {
-        width: 85%;
-    }
+            .loader {
+                margin-top: 25px;
 
-    100% {
-        width: 100%;
-    }
-}
+                height: 18px;
+            }
 
-/* Musik */
+            .moon {
+                width: 55px;
+                height: 55px;
 
-.musicPanel {
-    position: fixed;
+                top: 5%;
+                right: 7%;
+            }
+        }
 
-    right: 18px;
-    bottom: 18px;
+        /* =========================================
+           KLEINE HANDYS
+        ========================================= */
 
-    z-index: 10;
+        @media (max-height: 650px) {
 
-    display: flex;
-    align-items: center;
-    gap: 10px;
+            .container {
+                padding:
+                    25px 16px;
+            }
 
-    padding: 10px 12px;
+            .minecraftIcon {
+                width: 65px;
+                height: 65px;
 
-    border:
-        1px solid
-        rgba(255,255,255,.13);
+                margin-bottom: 10px;
+            }
 
-    border-radius: 16px;
+            .minecraftIcon span {
+                font-size: 30px;
+            }
 
-    background:
-        rgba(15,18,28,.85);
+            h1 {
+                font-size: 32px;
+            }
 
-    backdrop-filter: blur(15px);
-    -webkit-backdrop-filter: blur(15px);
-}
+            .description {
+                margin-top: 10px;
+            }
 
-.musicButton {
-    width: 48px;
-    height: 48px;
-
-    border: 0;
-    border-radius: 50%;
-
-    background: #5865f2;
-
-    color: white;
-
-    font-size: 20px;
-
-    cursor: pointer;
-
-    transition:
-        transform .2s ease,
-        background .2s ease;
-}
-
-.musicButton:hover {
-    transform: scale(1.08);
-    background: #6975ff;
-}
-
-.musicButton:active {
-    transform: scale(.94);
-}
-
-.volume {
-    width: 80px;
-    accent-color: #5865f2;
-}
-
-.musicText {
-    display: none;
-
-    color: #aeb6c9;
-
-    font-size: 12px;
-}
-
-/* Handy */
-
-@media (max-width: 600px) {
-
-    .container {
-        width: calc(100% - 24px);
-        padding: 42px 18px;
-        border-radius: 22px;
-    }
-
-    h1 {
-        margin-top: 16px;
-    }
-
-    .description {
-        font-size: 15px;
-    }
-
-    .loader {
-        margin-top: 28px;
-    }
-
-    .musicPanel {
-        right: 12px;
-        bottom: 12px;
-    }
-
-    .volume {
-        width: 65px;
-    }
-}
-
-/* Sehr kleine Handys */
-
-@media (max-height: 650px) {
-
-    .container {
-        padding: 28px 18px;
-    }
-
-    .icon {
-        font-size: 48px;
-    }
-
-    h1 {
-        font-size: 34px;
-        margin: 12px 0 8px;
-    }
-
-    .loader {
-        margin-top: 20px;
-    }
-}
-</style>
+            .loader {
+                margin-top: 18px;
+            }
+        }
+    </style>
 </head>
 
 <body>
 
-<div class="background">
-    <div class="glow glow1"></div>
-    <div class="glow glow2"></div>
-    <div class="glow glow3"></div>
-</div>
+    <canvas id="stars"></canvas>
 
-<div class="container">
+    <div class="moon"></div>
 
-    <div class="icon">
-        🚀
-    </div>
+    <div class="cloud cloud1"></div>
+    <div class="cloud cloud2"></div>
 
-    <h1>
-        Die Webseite kommt bald!
-    </h1>
+    <div class="greenGlow"></div>
 
-    <p class="description">
-        Wir arbeiten gerade an etwas Neuem.
-        <br>
-        Schau bald wieder vorbei!
-    </p>
+    <div id="particles"></div>
 
-    <div class="loader">
-        <div class="loaderBar"></div>
-    </div>
+    <main class="container">
 
-</div>
+        <div class="minecraftIcon">
+            <span>⛏️</span>
+        </div>
 
-<div class="musicPanel">
+        <h1>
+            Die Webseite kommt bald!
+        </h1>
 
-    <button
-        id="musicButton"
-        class="musicButton"
-        onclick="toggleMusic()"
-        aria-label="Musik starten">
-        ▶️
-    </button>
+        <p class="description">
+            Unser Minecraft-Projekt wird gerade aufgebaut.
+            <br>
+            Schau bald wieder vorbei!
+        </p>
 
-    <input
-        id="volume"
-        class="volume"
-        type="range"
-        min="0"
-        max="0.25"
-        step="0.01"
-        value="0.08"
-        aria-label="Lautstärke">
+        <div class="loader">
+            <div class="loaderBar"></div>
+        </div>
 
-</div>
+    </main>
 
-<audio id="audio" preload="auto"></audio>
+    <script>
 
-<script>
+        /* =========================================
+           ANIMIERTE STERNE
+        ========================================= */
 
-const audio =
-    document.getElementById("audio");
+        const canvas =
+            document.getElementById("stars");
 
-const button =
-    document.getElementById("musicButton");
+        const ctx =
+            canvas.getContext("2d");
 
-const volume =
-    document.getElementById("volume");
+        let stars = [];
 
-/*
- * Die Musikdateien kommen aus:
- *
- * /music/
- *
- * Beispiel:
- *
- * music/lied1.mp3
- * music/lied2.mp3
- * music/lied3.mp3
- *
- * Neue MP3-Dateien werden automatisch
- * in die zufällige Auswahl aufgenommen.
- */
+        let width = 0;
+        let height = 0;
 
-const musicFiles = [
-    ${JSON.stringify(
-        fs.readdirSync(MUSIC_DIR)
-            .filter(file =>
-                /\\.(mp3|wav|ogg|m4a)$/i.test(file)
-            )
-            .map(file =>
-                "/music/" +
-                encodeURIComponent(file)
-            )
-    ).slice(1, -1)}
-];
+        function resizeCanvas() {
 
-let currentSong = -1;
-let playing = false;
+            width =
+                window.innerWidth;
 
-audio.volume =
-    Number(volume.value);
+            height =
+                window.innerHeight;
 
-/* Zufälliges Lied */
+            const dpr =
+                Math.min(
+                    window.devicePixelRatio || 1,
+                    2
+                );
 
-function randomSong() {
+            canvas.width =
+                width * dpr;
 
-    if (musicFiles.length === 0) {
-        return null;
-    }
+            canvas.height =
+                height * dpr;
 
-    if (musicFiles.length === 1) {
-        currentSong = 0;
-        return musicFiles[0];
-    }
+            canvas.style.width =
+                width + "px";
 
-    let next;
+            canvas.style.height =
+                height + "px";
 
-    do {
-        next =
-            Math.floor(
-                Math.random() *
-                musicFiles.length
+            ctx.setTransform(
+                dpr,
+                0,
+                0,
+                dpr,
+                0,
+                0
             );
-    }
-    while (
-        next === currentSong
-    );
 
-    currentSong = next;
+            createStars();
+        }
 
-    return musicFiles[next];
-}
+        function createStars() {
 
-/* Musik starten */
+            stars = [];
 
-async function startMusic() {
+            const amount =
+                Math.min(
+                    180,
+                    Math.floor(
+                        (width * height) / 7500
+                    )
+                );
 
-    if (musicFiles.length === 0) {
+            for (
+                let i = 0;
+                i < amount;
+                i++
+            ) {
 
-        alert(
-            "Lege MP3-Dateien in den Ordner 'music'."
+                stars.push({
+
+                    x:
+                        Math.random() *
+                        width,
+
+                    y:
+                        Math.random() *
+                        height,
+
+                    size:
+                        Math.random() *
+                        1.8 + .3,
+
+                    speed:
+                        Math.random() *
+                        .35 + .05,
+
+                    opacity:
+                        Math.random() *
+                        .7 + .2,
+
+                    twinkle:
+                        Math.random() *
+                        Math.PI * 2
+                });
+            }
+        }
+
+        function animateStars() {
+
+            ctx.clearRect(
+                0,
+                0,
+                width,
+                height
+            );
+
+            for (
+                const star of stars
+            ) {
+
+                star.y +=
+                    star.speed;
+
+                star.twinkle +=
+                    .015;
+
+                if (
+                    star.y >
+                    height + 5
+                ) {
+
+                    star.y = -5;
+
+                    star.x =
+                        Math.random() *
+                        width;
+                }
+
+                const alpha =
+                    Math.max(
+                        .1,
+                        Math.min(
+                            1,
+                            star.opacity +
+                            Math.sin(
+                                star.twinkle
+                            ) * .15
+                        )
+                    );
+
+                ctx.beginPath();
+
+                ctx.fillStyle =
+                    "rgba(255,255,255," +
+                    alpha +
+                    ")";
+
+                ctx.arc(
+                    star.x,
+                    star.y,
+                    star.size,
+                    0,
+                    Math.PI * 2
+                );
+
+                ctx.fill();
+            }
+
+            requestAnimationFrame(
+                animateStars
+            );
+        }
+
+        window.addEventListener(
+            "resize",
+            resizeCanvas
         );
 
-        return;
-    }
+        resizeCanvas();
 
-    const song =
-        randomSong();
-
-    if (!song) {
-        return;
-    }
-
-    audio.src = song;
-
-    audio.volume =
-        Number(volume.value);
-
-    try {
-
-        await audio.play();
-
-        playing = true;
-
-        button.textContent = "⏸️";
-
-    } catch (error) {
-
-        console.log(
-            "Musik konnte nicht gestartet werden:",
-            error
+        requestAnimationFrame(
+            animateStars
         );
 
-        playing = false;
 
-        button.textContent = "▶️";
-    }
-}
+        /* =========================================
+           GRÜNE PARTIKEL
+        ========================================= */
 
-/* Pause / Start */
+        const particleContainer =
+            document.getElementById(
+                "particles"
+            );
 
-async function toggleMusic() {
+        for (
+            let i = 0;
+            i < 35;
+            i++
+        ) {
 
-    if (!playing) {
+            const particle =
+                document.createElement(
+                    "div"
+                );
 
-        await startMusic();
+            particle.className =
+                "particle";
 
-        return;
-    }
+            particle.style.left =
+                Math.random() * 100 + "%";
 
-    audio.pause();
+            particle.style.animationDuration =
+                (
+                    Math.random() * 12 + 8
+                ) + "s";
 
-    playing = false;
+            particle.style.animationDelay =
+                -(
+                    Math.random() * 15
+                ) + "s";
 
-    button.textContent = "▶️";
-}
+            particle.style.opacity =
+                Math.random() * .7;
 
-/* Wenn Lied fertig ist:
-   automatisch anderes zufälliges Lied */
+            particleContainer.appendChild(
+                particle
+            );
+        }
 
-audio.addEventListener(
-    "ended",
-    () => {
-
-        playing = false;
-
-        button.textContent = "▶️";
-
-        startMusic();
-    }
-);
-
-/* Lautstärke */
-
-volume.addEventListener(
-    "input",
-    () => {
-
-        audio.volume =
-            Number(volume.value);
-    }
-);
-
-/*
- * Auf Handys verhindert der Browser
- * automatische Audio-Wiedergabe.
- *
- * Deshalb starten wir Musik erst,
- * wenn der Benutzer auf den Button tippt.
- */
-
-</script>
+    </script>
 
 </body>
-</html>
-    `);
+</html>`);
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-
-    console.log("");
     console.log("======================================");
-    console.log("🚀 Florian / WeisserHai Webseite");
-    console.log("======================================");
+    console.log("⛏️ Minecraft Webseite gestartet");
     console.log("🌐 Port: " + PORT);
-    console.log("🎵 Musikordner: " + MUSIC_DIR);
-    console.log("📱 Mobile optimiert");
+    console.log("⭐ Animierte Sterne: AKTIV");
+    console.log("✨ Partikel: AKTIV");
+    console.log("🌙 Mond: AKTIV");
+    console.log("☁️ Wolken: AKTIV");
+    console.log("🎵 Musik: DEAKTIVIERT");
+    console.log("📱 Mobile: AKTIV");
     console.log("======================================");
-    console.log("");
-
 });
