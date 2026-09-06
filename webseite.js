@@ -8,51 +8,26 @@ const crypto = require("crypto");
 const { spawn } = require("child_process");
 
 const app = express();
-
 const PORT = Number(process.env.PORT || 3000);
 
-/*
-========================================================
- MINECRAFT HOSTING
-========================================================
-
- Admin:
-   florianzustolberg@gmail.com
-
- WICHTIG:
- Das Admin-Passwort NICHT hier eintragen.
- ADMIN_PASSWORD muss als Environment Variable gesetzt werden.
-
- Beispiel:
- ADMIN_PASSWORD=DEIN_SICHERES_PASSWORT
-
- Minecraft:
- Jeder Server bekommt einen eigenen Ordner.
- In diesem Ordner muss eine server.jar liegen.
-
-========================================================
-*/
+// ======================================================
+// KONFIGURATION
+// ======================================================
 
 const ADMIN_EMAIL = "florianzustolberg@gmail.com";
 
 const DATA_DIR = path.join(__dirname, "data");
 const SERVERS_DIR = path.join(__dirname, "minecraft-servers");
 
-const USERS_FILE = path.join(DATA_DIR, "users.json");
 const SERVERS_FILE = path.join(DATA_DIR, "servers.json");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(SERVERS_DIR, { recursive: true });
 
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true }));
-
-/*
-========================================================
- DATEIEN
-========================================================
-*/
+// ======================================================
+// DATEN
+// ======================================================
 
 function readJSON(file, fallback) {
     try {
@@ -68,264 +43,91 @@ function readJSON(file, fallback) {
             fs.readFileSync(file, "utf8")
         );
     } catch (error) {
-        console.error(
-            "JSON Fehler:",
-            file,
-            error.message
-        );
-
+        console.error("Dateifehler:", error.message);
         return fallback;
     }
 }
 
 function saveJSON(file, data) {
-    try {
-        fs.writeFileSync(
-            file,
-            JSON.stringify(data, null, 2)
-        );
-
-        return true;
-    } catch (error) {
-        console.error(
-            "Speicherfehler:",
-            file,
-            error.message
-        );
-
-        return false;
-    }
+    fs.writeFileSync(
+        file,
+        JSON.stringify(data, null, 2)
+    );
 }
 
-let users = readJSON(
-    USERS_FILE,
-    []
-);
-
-let servers = readJSON(
-    SERVERS_FILE,
-    []
-);
+let servers = readJSON(SERVERS_FILE, []);
 
 let settings = readJSON(
     SETTINGS_FILE,
     {
         maintenance: false,
         outage: false,
-        outageText:
-            "Aktuell liegt eine Störung vor."
+        outageText: "Keine Störung."
     }
 );
 
-/*
-========================================================
- RUNTIME
-========================================================
-*/
+// ======================================================
+// MINECRAFT PROZESSE
+// ======================================================
 
-const runningProcesses = new Map();
+const processes = new Map();
 
-const sessions = new Map();
+// ======================================================
+// HILFSFUNKTIONEN
+// ======================================================
 
-/*
-========================================================
- PASSWORT
-========================================================
-*/
-
-function hashPassword(password) {
-    const salt =
-        crypto.randomBytes(16).toString("hex");
-
-    const hash =
-        crypto.scryptSync(
-            password,
-            salt,
-            64
-        ).toString("hex");
-
-    return `${salt}:${hash}`;
-}
-
-function verifyPassword(
-    password,
-    stored
-) {
-    try {
-        const [salt, original] =
-            stored.split(":");
-
-        const hash =
-            crypto.scryptSync(
-                password,
-                salt,
-                64
-            ).toString("hex");
-
-        const a =
-            Buffer.from(hash, "hex");
-
-        const b =
-            Buffer.from(original, "hex");
-
-        if (a.length !== b.length) {
-            return false;
-        }
-
-        return crypto.timingSafeEqual(
-            a,
-            b
-        );
-    } catch {
-        return false;
-    }
-}
-
-/*
-========================================================
- SESSION
-========================================================
-*/
-
-function createSession(email) {
-    const token =
-        crypto.randomBytes(48)
-            .toString("hex");
-
-    sessions.set(
-        token,
-        {
-            email,
-            createdAt: Date.now()
-        }
-    );
-
-    return token;
-}
-
-function getSession(req) {
-    const header =
-        req.headers.authorization || "";
-
-    if (!header.startsWith("Bearer ")) {
-        return null;
-    }
-
-    const token =
-        header.substring(7);
-
-    return sessions.get(token) || null;
-}
-
-function requireLogin(req, res, next) {
-    const session =
-        getSession(req);
-
-    if (!session) {
-        return res.status(401).json({
-            success: false,
-            message:
-                "Du musst angemeldet sein."
-        });
-    }
-
-    req.session = session;
-
-    next();
-}
-
-function requireAdmin(req, res, next) {
-    const session =
-        getSession(req);
-
-    if (!session) {
-        return res.status(401).json({
-            success: false,
-            message:
-                "Nicht angemeldet."
-        });
-    }
-
-    if (
-        session.email.toLowerCase() !==
-        ADMIN_EMAIL.toLowerCase()
-    ) {
-        return res.status(403).json({
-            success: false,
-            message:
-                "Kein Zugriff auf das Admin-Panel."
-        });
-    }
-
-    req.session = session;
-
-    next();
-}
-
-/*
-========================================================
- HILFSFUNKTIONEN
-========================================================
-*/
-
-function cleanName(value) {
-    return String(value || "")
+function cleanName(name) {
+    return String(name || "")
         .trim()
         .replace(/[^a-zA-Z0-9_-]/g, "")
         .slice(0, 32);
 }
 
-function serverDirectory(id) {
+function getServer(id) {
+    return servers.find(
+        server => server.id === id
+    );
+}
+
+function getServerFolder(id) {
     return path.join(
         SERVERS_DIR,
         id
     );
 }
 
-function serverLogDirectory(id) {
+function getLogFolder(id) {
     return path.join(
-        serverDirectory(id),
+        getServerFolder(id),
         "logs"
     );
 }
 
-function serverLogFile(id) {
+function getLogFile(id) {
     return path.join(
-        serverLogDirectory(id),
+        getLogFolder(id),
         "console.log"
     );
 }
 
-function appendLog(
-    server,
-    text
-) {
-    try {
-        const dir =
-            serverLogDirectory(
-                server.id
-            );
+function writeLog(server, text) {
+    const folder = getLogFolder(server.id);
 
-        fs.mkdirSync(
-            dir,
-            { recursive: true }
-        );
+    fs.mkdirSync(
+        folder,
+        {
+            recursive: true
+        }
+    );
 
-        const line =
-            `[${new Date().toISOString()}] ${text}\n`;
+    fs.appendFileSync(
+        getLogFile(server.id),
+        `[${new Date().toISOString()}] ${text}\n`
+    );
+}
 
-        fs.appendFileSync(
-            serverLogFile(
-                server.id
-            ),
-            line
-        );
-    } catch (error) {
-        console.error(
-            "Log Fehler:",
-            error.message
-        );
-    }
+function isRunning(id) {
+    return processes.has(id);
 }
 
 function publicServer(server) {
@@ -333,555 +135,228 @@ function publicServer(server) {
         id: server.id,
         name: server.name,
         port: server.port,
-        status:
-            runningProcesses.has(
-                server.id
-            )
-                ? "online"
-                : "offline",
-        createdAt: server.createdAt
+        owner: server.owner,
+        createdAt: server.createdAt,
+        status: isRunning(server.id)
+            ? "online"
+            : "offline"
     };
 }
 
-function getServer(id) {
-    return servers.find(
-        server =>
-            server.id === id
-    );
-}
+// ======================================================
+// EXPRESS
+// ======================================================
 
-/*
-========================================================
- REGISTRIERUNG
-========================================================
-*/
+app.use(
+    express.json({
+        limit: "2mb"
+    })
+);
 
-app.post(
-    "/api/register",
-    (req, res) => {
+app.use(
+    express.urlencoded({
+        extended: true
+    })
+);
 
-        const username =
-            String(
-                req.body.username || ""
-            ).trim();
+// ======================================================
+// STATUS
+// ======================================================
 
-        const email =
-            String(
-                req.body.email || ""
-            ).trim()
-            .toLowerCase();
+app.get("/api/status", (req, res) => {
+    res.json({
+        success: true,
+        maintenance: settings.maintenance,
+        outage: settings.outage,
+        outageText: settings.outageText,
+        serverCount: servers.length,
+        onlineServers: servers.filter(
+            server => isRunning(server.id)
+        ).length
+    });
+});
 
-        const password =
-            String(
-                req.body.password || ""
-            );
+// ======================================================
+// DEMO USER
+// ======================================================
 
-        if (
-            !username ||
-            !email ||
-            !password
-        ) {
-            return res.status(400).json({
-                success: false,
-                message:
-                    "Bitte alle Felder ausfüllen."
-            });
-        }
+app.post("/api/login", (req, res) => {
+    const email = String(
+        req.body.email || ""
+    )
+        .trim()
+        .toLowerCase();
 
-        if (
-            !/^[a-zA-Z0-9_]{3,24}$/
-                .test(username)
-        ) {
-            return res.status(400).json({
-                success: false,
-                message:
-                    "Benutzername: 3–24 Zeichen."
-            });
-        }
+    if (!email) {
+        return res.status(400).json({
+            success: false,
+            message: "Bitte E-Mail eingeben."
+        });
+    }
 
-        if (password.length < 8) {
-            return res.status(400).json({
-                success: false,
-                message:
-                    "Passwort muss mindestens 8 Zeichen haben."
-            });
-        }
-
-        if (
-            !/^[^\s@]+@[^\s@]+\.[^\s@]+$/
-                .test(email)
-        ) {
-            return res.status(400).json({
-                success: false,
-                message:
-                    "Ungültige E-Mail-Adresse."
-            });
-        }
-
-        if (
-            users.some(
-                user =>
-                    user.username.toLowerCase() ===
-                    username.toLowerCase()
-            )
-        ) {
-            return res.status(409).json({
-                success: false,
-                message:
-                    "Benutzername bereits vorhanden."
-            });
-        }
-
-        if (
-            users.some(
-                user =>
-                    user.email.toLowerCase() ===
-                    email
-            )
-        ) {
-            return res.status(409).json({
-                success: false,
-                message:
-                    "E-Mail bereits registriert."
-            });
-        }
-
-        const user = {
-            id: crypto.randomUUID(),
-            username,
+    res.json({
+        success: true,
+        user: {
             email,
-            password: hashPassword(
-                password
-            ),
-            createdAt:
-                new Date().toISOString()
-        };
+            admin:
+                email === ADMIN_EMAIL.toLowerCase()
+        }
+    });
+});
 
-        users.push(user);
+// ======================================================
+// SERVER LISTE
+// ======================================================
 
-        saveJSON(
-            USERS_FILE,
-            users
-        );
+app.get("/api/servers", (req, res) => {
+    res.json({
+        success: true,
+        servers: servers.map(publicServer)
+    });
+});
 
-        console.log(
-            `👤 Registrierung: ${email}`
-        );
+// ======================================================
+// SERVER ERSTELLEN
+// ======================================================
 
-        res.json({
-            success: true,
+app.post("/api/servers", (req, res) => {
+    const name = cleanName(req.body.name);
+    const port = Number(req.body.port);
+    const owner = String(
+        req.body.owner || "Gast"
+    ).trim();
+
+    if (!name) {
+        return res.status(400).json({
+            success: false,
+            message: "Ungültiger Servername."
+        });
+    }
+
+    if (
+        !Number.isInteger(port) ||
+        port < 1024 ||
+        port > 65535
+    ) {
+        return res.status(400).json({
+            success: false,
             message:
-                "Registrierung erfolgreich."
+                "Port muss zwischen 1024 und 65535 liegen."
         });
     }
-);
 
-/*
-========================================================
- LOGIN
-========================================================
-*/
-
-app.post(
-    "/api/login",
-    (req, res) => {
-
-        const login =
-            String(
-                req.body.login || ""
-            ).trim()
-            .toLowerCase();
-
-        const password =
-            String(
-                req.body.password || ""
-            );
-
-        /*
-        Admin kann sich nur anmelden,
-        wenn ADMIN_PASSWORD gesetzt wurde.
-        */
-
-        const adminPassword =
-            process.env.ADMIN_PASSWORD;
-
-        if (
-            login ===
-                ADMIN_EMAIL.toLowerCase() &&
-            adminPassword &&
-            password === adminPassword
-        ) {
-            const token =
-                createSession(
-                    ADMIN_EMAIL
-                );
-
-            return res.json({
-                success: true,
-                token,
-                user: {
-                    email:
-                        ADMIN_EMAIL,
-                    username:
-                        "Florian",
-                    admin: true
-                }
-            });
-        }
-
-        const user =
-            users.find(
-                item =>
-                    item.email.toLowerCase() ===
-                        login ||
-                    item.username.toLowerCase() ===
-                        login
-            );
-
-        if (!user) {
-            return res.status(401).json({
-                success: false,
-                message:
-                    "Login-Daten falsch."
-            });
-        }
-
-        if (
-            !verifyPassword(
-                password,
-                user.password
-            )
-        ) {
-            return res.status(401).json({
-                success: false,
-                message:
-                    "Login-Daten falsch."
-            });
-        }
-
-        const token =
-            createSession(
-                user.email
-            );
-
-        res.json({
-            success: true,
-            token,
-            user: {
-                email: user.email,
-                username: user.username,
-                admin:
-                    user.email.toLowerCase() ===
-                    ADMIN_EMAIL.toLowerCase()
-            }
+    if (
+        servers.some(
+            server =>
+                server.name.toLowerCase() ===
+                name.toLowerCase()
+        )
+    ) {
+        return res.status(409).json({
+            success: false,
+            message: "Servername existiert bereits."
         });
     }
-);
 
-/*
-========================================================
- LOGOUT
-========================================================
-*/
-
-app.post(
-    "/api/logout",
-    requireLogin,
-    (req, res) => {
-
-        const token =
-            req.headers.authorization
-                .substring(7);
-
-        sessions.delete(token);
-
-        res.json({
-            success: true
+    if (
+        servers.some(
+            server => server.port === port
+        )
+    ) {
+        return res.status(409).json({
+            success: false,
+            message: "Port wird bereits verwendet."
         });
     }
-);
 
-/*
-========================================================
- USER
-========================================================
-*/
+    const id = crypto.randomUUID();
 
-app.get(
-    "/api/me",
-    requireLogin,
-    (req, res) => {
+    const folder = getServerFolder(id);
 
-        if (
-            req.session.email.toLowerCase() ===
-            ADMIN_EMAIL.toLowerCase()
-        ) {
-            return res.json({
-                success: true,
-                user: {
-                    email:
-                        ADMIN_EMAIL,
-                    username:
-                        "Florian",
-                    admin: true
-                }
-            });
+    fs.mkdirSync(folder, {
+        recursive: true
+    });
+
+    fs.mkdirSync(
+        getLogFolder(id),
+        {
+            recursive: true
         }
+    );
 
-        const user =
-            users.find(
-                item =>
-                    item.email.toLowerCase() ===
-                    req.session.email.toLowerCase()
-            );
+    const server = {
+        id,
+        name,
+        port,
+        owner,
+        createdAt:
+            new Date().toISOString()
+    };
 
-        if (!user) {
-            return res.status(404).json({
-                success: false
-            });
-        }
+    servers.push(server);
 
-        res.json({
-            success: true,
-            user: {
-                email: user.email,
-                username: user.username,
-                admin: false
-            }
-        });
-    }
-);
+    saveJSON(
+        SERVERS_FILE,
+        servers
+    );
 
-/*
-========================================================
- STATUS
-========================================================
-*/
+    writeLog(
+        server,
+        `Server ${name} wurde erstellt.`
+    );
 
-app.get(
-    "/api/status",
-    (req, res) => {
+    res.json({
+        success: true,
+        server: publicServer(server)
+    });
+});
 
-        res.json({
-            success: true,
-            maintenance:
-                settings.maintenance,
-            outage:
-                settings.outage,
-            outageText:
-                settings.outageText
-        });
-    }
-);
-
-/*
-========================================================
- SERVER LISTE
-========================================================
-*/
-
-app.get(
-    "/api/servers",
-    requireLogin,
-    (req, res) => {
-
-        res.json({
-            success: true,
-            servers:
-                servers.map(
-                    publicServer
-                )
-        });
-    }
-);
-
-/*
-========================================================
- SERVER ERSTELLEN
-========================================================
-*/
-
-app.post(
-    "/api/servers",
-    requireLogin,
-    (req, res) => {
-
-        const name =
-            cleanName(
-                req.body.name
-            );
-
-        const port =
-            Number(
-                req.body.port
-            );
-
-        if (!name) {
-            return res.status(400).json({
-                success: false,
-                message:
-                    "Ungültiger Servername."
-            });
-        }
-
-        if (
-            !Number.isInteger(port) ||
-            port < 1024 ||
-            port > 65535
-        ) {
-            return res.status(400).json({
-                success: false,
-                message:
-                    "Port muss zwischen 1024 und 65535 liegen."
-            });
-        }
-
-        if (
-            servers.some(
-                server =>
-                    server.name.toLowerCase() ===
-                    name.toLowerCase()
-            )
-        ) {
-            return res.status(409).json({
-                success: false,
-                message:
-                    "Servername bereits vorhanden."
-            });
-        }
-
-        if (
-            servers.some(
-                server =>
-                    server.port === port
-            )
-        ) {
-            return res.status(409).json({
-                success: false,
-                message:
-                    "Dieser Port wird bereits verwendet."
-            });
-        }
-
-        const id =
-            crypto.randomUUID();
-
-        const directory =
-            serverDirectory(id);
-
-        fs.mkdirSync(
-            directory,
-            { recursive: true }
-        );
-
-        fs.mkdirSync(
-            serverLogDirectory(id),
-            { recursive: true }
-        );
-
-        const server = {
-            id,
-            name,
-            port,
-            owner:
-                req.session.email,
-            createdAt:
-                new Date().toISOString()
-        };
-
-        servers.push(server);
-
-        saveJSON(
-            SERVERS_FILE,
-            servers
-        );
-
-        appendLog(
-            server,
-            `Server "${name}" wurde erstellt.`
-        );
-
-        res.json({
-            success: true,
-            server:
-                publicServer(server),
-            message:
-                "Server erstellt."
-        });
-    }
-);
-
-/*
-========================================================
- SERVER START
-========================================================
-*/
+// ======================================================
+// SERVER START
+// ======================================================
 
 app.post(
     "/api/servers/:id/start",
-    requireLogin,
     (req, res) => {
 
         const server =
-            getServer(
-                req.params.id
-            );
+            getServer(req.params.id);
 
         if (!server) {
             return res.status(404).json({
                 success: false,
-                message:
-                    "Server nicht gefunden."
+                message: "Server nicht gefunden."
             });
         }
 
-        if (
-            runningProcesses.has(
-                server.id
-            )
-        ) {
+        if (isRunning(server.id)) {
             return res.json({
                 success: true,
-                message:
-                    "Server läuft bereits."
+                message: "Server läuft bereits."
             });
         }
 
-        const directory =
-            serverDirectory(
-                server.id
-            );
+        const folder =
+            getServerFolder(server.id);
 
         const jar =
-            path.join(
-                directory,
-                "server.jar"
-            );
+            path.join(folder, "server.jar");
 
         if (!fs.existsSync(jar)) {
-            appendLog(
+            writeLog(
                 server,
-                "START ABGEBROCHEN: server.jar fehlt."
+                "START FEHLER: server.jar fehlt."
             );
 
             return res.status(400).json({
                 success: false,
                 message:
-                    "server.jar fehlt im Serverordner."
+                    "server.jar wurde nicht gefunden."
             });
         }
 
-        /*
-        EULA automatisch akzeptieren,
-        damit der Server nach dem Erstellen
-        gestartet werden kann.
-        */
-
         const eula =
-            path.join(
-                directory,
-                "eula.txt"
-            );
+            path.join(folder, "eula.txt");
 
         if (!fs.existsSync(eula)) {
             fs.writeFileSync(
@@ -890,30 +365,27 @@ app.post(
             );
         }
 
-        appendLog(
+        writeLog(
             server,
-            "Minecraft-Server wird gestartet."
+            "Minecraft wird gestartet."
         );
 
-        const child =
-            spawn(
-                "java",
-                [
-                    "-Xms1G",
-                    "-Xmx2G",
-                    "-jar",
-                    "server.jar",
-                    "nogui"
-                ],
-                {
-                    cwd: directory,
-                    env: {
-                        ...process.env
-                    }
-                }
-            );
+        const child = spawn(
+            "java",
+            [
+                "-Xms1G",
+                "-Xmx2G",
+                "-jar",
+                "server.jar",
+                "nogui"
+            ],
+            {
+                cwd: folder,
+                env: process.env
+            }
+        );
 
-        runningProcesses.set(
+        processes.set(
             server.id,
             child
         );
@@ -929,7 +401,7 @@ app.post(
                     `[${server.name}] ${text}`
                 );
 
-                appendLog(
+                writeLog(
                     server,
                     text.trim()
                 );
@@ -947,7 +419,7 @@ app.post(
                     `[${server.name}] ${text}`
                 );
 
-                appendLog(
+                writeLog(
                     server,
                     "ERROR: " +
                     text.trim()
@@ -956,85 +428,72 @@ app.post(
         );
 
         child.on(
-            "close",
-            code => {
+            "error",
+            error => {
 
-                runningProcesses.delete(
-                    server.id
-                );
-
-                appendLog(
+                writeLog(
                     server,
-                    `Minecraft-Prozess beendet. Exit-Code: ${code}`
+                    "PROZESS FEHLER: " +
+                    error.message
                 );
 
-                console.log(
-                    `⛏️ ${server.name} beendet.`
+                processes.delete(
+                    server.id
                 );
             }
         );
 
         child.on(
-            "error",
-            error => {
+            "close",
+            code => {
 
-                runningProcesses.delete(
+                processes.delete(
                     server.id
                 );
 
-                appendLog(
+                writeLog(
                     server,
-                    `Prozessfehler: ${error.message}`
+                    `Minecraft beendet. Exit-Code: ${code}`
                 );
             }
         );
 
         res.json({
             success: true,
-            message:
-                "Server wird gestartet."
+            message: "Server wird gestartet."
         });
     }
 );
 
-/*
-========================================================
- SERVER STOP
-========================================================
-*/
+// ======================================================
+// SERVER STOP
+// ======================================================
 
 app.post(
     "/api/servers/:id/stop",
-    requireLogin,
     (req, res) => {
 
         const server =
-            getServer(
-                req.params.id
-            );
+            getServer(req.params.id);
 
         if (!server) {
             return res.status(404).json({
                 success: false,
-                message:
-                    "Server nicht gefunden."
+                message: "Server nicht gefunden."
             });
         }
 
         const child =
-            runningProcesses.get(
-                server.id
-            );
+            processes.get(server.id);
 
         if (!child) {
             return res.json({
                 success: true,
-                message:
-                    "Server ist bereits offline."
+                message: "Server ist bereits offline."
             });
         }
 
-        appendLog(
+        writeLog(
             server,
             "Stop-Befehl gesendet."
         );
@@ -1049,73 +508,42 @@ app.post(
             } catch {}
         }
 
-        setTimeout(
-            () => {
-
-                if (
-                    runningProcesses.has(
-                        server.id
-                    )
-                ) {
-                    try {
-                        child.kill();
-                    } catch {}
-
-                    runningProcesses.delete(
-                        server.id
-                    );
-                }
-
-            },
-            15000
-        );
-
         res.json({
             success: true,
-            message:
-                "Server wird gestoppt."
+            message: "Server wird gestoppt."
         });
     }
 );
 
-/*
-========================================================
- SERVER RESTART
-========================================================
-*/
+// ======================================================
+// RESTART
+// ======================================================
 
 app.post(
     "/api/servers/:id/restart",
-    requireLogin,
     async (req, res) => {
 
         const server =
-            getServer(
-                req.params.id
-            );
+            getServer(req.params.id);
 
         if (!server) {
             return res.status(404).json({
                 success: false,
-                message:
-                    "Server nicht gefunden."
+                message: "Server nicht gefunden."
             });
         }
 
         const child =
-            runningProcesses.get(
-                server.id
-            );
+            processes.get(server.id);
 
         if (!child) {
             return res.status(400).json({
                 success: false,
-                message:
-                    "Server ist offline."
+                message: "Server ist offline."
             });
         }
 
-        appendLog(
+        writeLog(
             server,
             "Neustart angefordert."
         );
@@ -1126,136 +554,105 @@ app.post(
             );
         } catch {}
 
-        setTimeout(
-            () => {
+        setTimeout(() => {
 
-                if (
-                    !runningProcesses.has(
-                        server.id
-                    )
-                ) {
+            if (!isRunning(server.id)) {
 
-                    /*
-                    Start über interne
-                    HTTP-Funktion wäre möglich.
-                    Hier direkt erneut starten.
-                    */
+                const folder =
+                    getServerFolder(server.id);
 
-                    const directory =
-                        serverDirectory(
+                const newChild =
+                    spawn(
+                        "java",
+                        [
+                            "-Xms1G",
+                            "-Xmx2G",
+                            "-jar",
+                            "server.jar",
+                            "nogui"
+                        ],
+                        {
+                            cwd: folder,
+                            env: process.env
+                        }
+                    );
+
+                processes.set(
+                    server.id,
+                    newChild
+                );
+
+                newChild.stdout.on(
+                    "data",
+                    data => {
+
+                        writeLog(
+                            server,
+                            data
+                                .toString()
+                                .trim()
+                        );
+                    }
+                );
+
+                newChild.stderr.on(
+                    "data",
+                    data => {
+
+                        writeLog(
+                            server,
+                            "ERROR: " +
+                            data
+                                .toString()
+                                .trim()
+                        );
+                    }
+                );
+
+                newChild.on(
+                    "close",
+                    code => {
+
+                        processes.delete(
                             server.id
                         );
 
-                    const jar =
-                        path.join(
-                            directory,
-                            "server.jar"
-                        );
-
-                    if (
-                        fs.existsSync(jar)
-                    ) {
-
-                        const newChild =
-                            spawn(
-                                "java",
-                                [
-                                    "-Xms1G",
-                                    "-Xmx2G",
-                                    "-jar",
-                                    "server.jar",
-                                    "nogui"
-                                ],
-                                {
-                                    cwd:
-                                        directory,
-                                    env: {
-                                        ...process.env
-                                    }
-                                }
-                            );
-
-                        runningProcesses.set(
-                            server.id,
-                            newChild
-                        );
-
-                        newChild.stdout.on(
-                            "data",
-                            data => {
-
-                                appendLog(
-                                    server,
-                                    data
-                                        .toString()
-                                        .trim()
-                                );
-                            }
-                        );
-
-                        newChild.stderr.on(
-                            "data",
-                            data => {
-
-                                appendLog(
-                                    server,
-                                    "ERROR: " +
-                                    data
-                                        .toString()
-                                        .trim()
-                                );
-                            }
-                        );
-
-                        newChild.on(
-                            "close",
-                            () => {
-                                runningProcesses.delete(
-                                    server.id
-                                );
-                            }
-                        );
-
-                        appendLog(
+                        writeLog(
                             server,
-                            "Server wurde neu gestartet."
+                            `Restart-Prozess beendet: ${code}`
                         );
                     }
-                }
+                );
 
-            },
-            8000
-        );
+                writeLog(
+                    server,
+                    "Server wurde neu gestartet."
+                );
+            }
+
+        }, 8000);
 
         res.json({
             success: true,
-            message:
-                "Server wird neu gestartet."
+            message: "Neustart gestartet."
         });
     }
 );
 
-/*
-========================================================
- KONSOLE
-========================================================
-*/
+// ======================================================
+// KONSOLE
+// ======================================================
 
 app.post(
     "/api/servers/:id/command",
-    requireLogin,
     (req, res) => {
 
         const server =
-            getServer(
-                req.params.id
-            );
+            getServer(req.params.id);
 
         if (!server) {
             return res.status(404).json({
-                success: false,
-                message:
-                    "Server nicht gefunden."
+                success: false
             });
         }
 
@@ -1267,31 +664,17 @@ app.post(
         if (!command) {
             return res.status(400).json({
                 success: false,
-                message:
-                    "Kein Befehl."
-            });
-        }
-
-        if (
-            command.length > 500
-        ) {
-            return res.status(400).json({
-                success: false,
-                message:
-                    "Befehl zu lang."
+                message: "Kein Befehl."
             });
         }
 
         const child =
-            runningProcesses.get(
-                server.id
-            );
+            processes.get(server.id);
 
         if (!child) {
             return res.status(400).json({
                 success: false,
-                message:
-                    "Server ist offline."
+                message: "Server ist offline."
             });
         }
 
@@ -1301,9 +684,9 @@ app.post(
                 command + "\n"
             );
 
-            appendLog(
+            writeLog(
                 server,
-                `COMMAND: ${command}`
+                "COMMAND: " + command
             );
 
             res.json({
@@ -1314,28 +697,22 @@ app.post(
 
             res.status(500).json({
                 success: false,
-                message:
-                    error.message
+                message: error.message
             });
         }
     }
 );
 
-/*
-========================================================
- LOGS
-========================================================
-*/
+// ======================================================
+// LOGS
+// ======================================================
 
 app.get(
     "/api/servers/:id/logs",
-    requireLogin,
     (req, res) => {
 
         const server =
-            getServer(
-                req.params.id
-            );
+            getServer(req.params.id);
 
         if (!server) {
             return res.status(404).json({
@@ -1344,9 +721,7 @@ app.get(
         }
 
         const file =
-            serverLogFile(
-                server.id
-            );
+            getLogFile(server.id);
 
         if (!fs.existsSync(file)) {
             return res.json({
@@ -1361,17 +736,9 @@ app.get(
                 "utf8"
             );
 
-        /*
-        Nur die letzten 100.000 Zeichen.
-        */
-
-        if (
-            logs.length > 100000
-        ) {
+        if (logs.length > 100000) {
             logs =
-                logs.slice(
-                    -100000
-                );
+                logs.slice(-100000);
         }
 
         res.json({
@@ -1381,36 +748,29 @@ app.get(
     }
 );
 
-/*
-========================================================
- SERVER LÖSCHEN
-========================================================
-*/
+// ======================================================
+// SERVER LÖSCHEN
+// ======================================================
 
 app.delete(
     "/api/servers/:id",
-    requireLogin,
     (req, res) => {
 
         const server =
-            getServer(
-                req.params.id
-            );
+            getServer(req.params.id);
 
         if (!server) {
             return res.status(404).json({
                 success: false,
-                message:
-                    "Server nicht gefunden."
+                message: "Server nicht gefunden."
             });
         }
 
         const child =
-            runningProcesses.get(
-                server.id
-            );
+            processes.get(server.id);
 
         if (child) {
+
             try {
                 child.stdin.write(
                     "stop\n"
@@ -1421,7 +781,7 @@ app.delete(
                 child.kill();
             } catch {}
 
-            runningProcesses.delete(
+            processes.delete(
                 server.id
             );
         }
@@ -1429,8 +789,7 @@ app.delete(
         servers =
             servers.filter(
                 item =>
-                    item.id !==
-                    server.id
+                    item.id !== server.id
             );
 
         saveJSON(
@@ -1438,14 +797,9 @@ app.delete(
             servers
         );
 
-        const directory =
-            serverDirectory(
-                server.id
-            );
-
         try {
             fs.rmSync(
-                directory,
+                getServerFolder(server.id),
                 {
                     recursive: true,
                     force: true
@@ -1453,28 +807,52 @@ app.delete(
             );
         } catch (error) {
             console.error(
-                "Ordner konnte nicht gelöscht werden:",
+                "Löschen:",
                 error.message
             );
         }
 
         res.json({
             success: true,
-            message:
-                "Server gelöscht."
+            message: "Server gelöscht."
         });
     }
 );
 
-/*
-========================================================
- ADMIN: ALLE SERVER
-========================================================
-*/
+// ======================================================
+// ADMIN
+// ======================================================
+
+function adminOnly(req, res, next) {
+
+    const email =
+        String(
+            req.headers["x-admin-email"] || ""
+        )
+            .trim()
+            .toLowerCase();
+
+    if (
+        email !==
+        ADMIN_EMAIL.toLowerCase()
+    ) {
+        return res.status(403).json({
+            success: false,
+            message:
+                "Kein Zugriff auf das Admin-Panel."
+        });
+    }
+
+    next();
+}
+
+// ======================================================
+// ADMIN SERVER
+// ======================================================
 
 app.get(
     "/api/admin/servers",
-    requireAdmin,
+    adminOnly,
     (req, res) => {
 
         res.json({
@@ -1487,28 +865,23 @@ app.get(
     }
 );
 
-/*
-========================================================
- ADMIN: ALLE SERVER STOPPEN
-========================================================
-*/
+// ======================================================
+// ADMIN ALLE STOPPEN
+// ======================================================
 
 app.post(
     "/api/admin/stop-all",
-    requireAdmin,
+    adminOnly,
     (req, res) => {
 
         let stopped = 0;
 
         for (
-            const server
-            of servers
+            const server of servers
         ) {
 
             const child =
-                runningProcesses.get(
-                    server.id
-                );
+                processes.get(server.id);
 
             if (!child) {
                 continue;
@@ -1524,9 +897,9 @@ app.post(
                 } catch {}
             }
 
-            appendLog(
+            writeLog(
                 server,
-                "ADMIN: Alle Server werden heruntergefahren."
+                "ADMIN: Server gestoppt."
             );
 
             stopped++;
@@ -1539,15 +912,13 @@ app.post(
     }
 );
 
-/*
-========================================================
- ADMIN: WARTUNG
-========================================================
-*/
+// ======================================================
+// ADMIN WARTUNG
+// ======================================================
 
 app.post(
     "/api/admin/maintenance",
-    requireAdmin,
+    adminOnly,
     (req, res) => {
 
         settings.maintenance =
@@ -1560,11 +931,6 @@ app.post(
             settings
         );
 
-        console.log(
-            "🛠️ Wartung:",
-            settings.maintenance
-        );
-
         res.json({
             success: true,
             maintenance:
@@ -1573,15 +939,13 @@ app.post(
     }
 );
 
-/*
-========================================================
- ADMIN: STÖRUNG
-========================================================
-*/
+// ======================================================
+// ADMIN STÖRUNG
+// ======================================================
 
 app.post(
     "/api/admin/outage",
-    requireAdmin,
+    adminOnly,
     (req, res) => {
 
         settings.outage =
@@ -1591,8 +955,7 @@ app.post(
 
         if (
             typeof req.body.text ===
-            "string" &&
-            req.body.text.trim()
+            "string"
         ) {
             settings.outageText =
                 req.body.text
@@ -1605,11 +968,6 @@ app.post(
             settings
         );
 
-        console.log(
-            "🚨 Störung:",
-            settings.outage
-        );
-
         res.json({
             success: true,
             outage:
@@ -1620,78 +978,14 @@ app.post(
     }
 );
 
-/*
-========================================================
- ADMIN: ALLE LOGS
-========================================================
-*/
+// ======================================================
+// WEBSITE
+// ======================================================
 
-app.get(
-    "/api/admin/logs",
-    requireAdmin,
-    (req, res) => {
+app.get("/", (req, res) => {
 
-        const result = [];
-
-        for (
-            const server
-            of servers
-        ) {
-
-            const file =
-                serverLogFile(
-                    server.id
-                );
-
-            let logs = "";
-
-            if (
-                fs.existsSync(file)
-            ) {
-                logs =
-                    fs.readFileSync(
-                        file,
-                        "utf8"
-                    );
-
-                if (
-                    logs.length >
-                    20000
-                ) {
-                    logs =
-                        logs.slice(
-                            -20000
-                        );
-                }
-            }
-
-            result.push({
-                id:
-                    server.id,
-                name:
-                    server.name,
-                logs
-            });
-        }
-
-        res.json({
-            success: true,
-            logs: result
-        });
-    }
-);
-
-/*
-========================================================
- WEBSITE
-========================================================
-*/
-
-app.get(
-    "*",
-    (req, res) => {
-
-        res.send(`<!DOCTYPE html>
+    res.send(`
+<!DOCTYPE html>
 
 <html lang="de">
 
@@ -1701,7 +995,7 @@ app.get(
 
 <meta
     name="viewport"
-    content="width=device-width,initial-scale=1.0"
+    content="width=device-width, initial-scale=1.0"
 >
 
 <title>Minecraft Hosting</title>
@@ -1714,210 +1008,158 @@ app.get(
 
 body {
     margin: 0;
+    font-family: Arial, sans-serif;
+    color: white;
 
     min-height: 100vh;
-
-    font-family:
-        Arial,
-        Helvetica,
-        sans-serif;
-
-    color: white;
 
     background:
         radial-gradient(
             circle at top,
-            #17391c,
-            #050805 55%,
+            #1c4522,
+            #071008 45%,
             #020302
         );
 }
 
-button,
-input,
-textarea {
-    font: inherit;
-}
-
-button {
-    cursor: pointer;
-}
-
-.nav {
+nav {
     position: sticky;
     top: 0;
 
-    z-index: 20;
+    z-index: 10;
+
+    padding: 16px 22px;
 
     display: flex;
-
+    justify-content: space-between;
     align-items: center;
 
-    justify-content: space-between;
-
-    gap: 15px;
-
-    padding: 15px 22px;
-
     background:
-        rgba(3,8,4,.9);
+        rgba(2,7,3,.92);
 
     border-bottom:
         1px solid
         rgba(100,220,90,.2);
-
-    backdrop-filter:
-        blur(12px);
 }
 
 .logo {
+    font-size: 21px;
     font-weight: 900;
-    font-size: 20px;
 }
 
-.navButtons {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
-button {
-    border: 0;
-    border-radius: 7px;
-    padding: 10px 14px;
-}
-
-.green {
-    background: #48a83e;
-    color: white;
-}
-
-.dark {
-    background: #182019;
-    color: white;
-    border:
-        1px solid
-        #314235;
-}
-
-.red {
-    background: #a93636;
-    color: white;
-}
-
-.orange {
-    background: #a66b2e;
-    color: white;
-}
-
-.page {
+.container {
     width:
-        min(1200px, calc(100% - 24px));
+        min(1100px, calc(100% - 24px));
 
     margin:
-        35px auto 80px;
+        25px auto 80px;
 }
 
 .hero {
-    padding:
-        55px 25px;
-
     text-align: center;
 
-    border:
-        1px solid
-        rgba(100,220,90,.25);
+    padding:
+        65px 20px;
 
-    border-radius: 15px;
-
-    background:
-        rgba(8,18,9,.82);
-
-    box-shadow:
-        0 25px 80px
-        rgba(0,0,0,.4);
-}
-
-.hero h1 {
-    margin: 0;
-
-    font-size:
-        clamp(35px, 8vw, 75px);
-}
-
-.hero p {
-    color: #aebaae;
-    line-height: 1.7;
-}
-
-.status {
-    margin-top: 20px;
-
-    display: inline-block;
-
-    padding: 8px 13px;
-
-    border-radius: 20px;
+    border-radius: 18px;
 
     background:
-        rgba(65,170,60,.15);
-
-    color: #8de884;
-}
-
-.section {
-    margin-top: 25px;
-
-    padding: 22px;
+        rgba(7,15,8,.85);
 
     border:
         1px solid
         rgba(100,220,90,.2);
+}
 
-    border-radius: 12px;
+.hero h1 {
+    font-size:
+        clamp(35px, 8vw, 75px);
+
+    margin: 0;
+}
+
+.hero p {
+    color: #aeb8ae;
+}
+
+.status {
+    display: inline-block;
+
+    margin-top: 15px;
+
+    padding: 8px 14px;
+
+    border-radius: 20px;
 
     background:
-        rgba(7,14,8,.88);
+        rgba(70,170,60,.15);
+
+    color: #82df78;
 }
 
-.section h2 {
-    margin-top: 0;
+.box {
+    margin-top: 20px;
+
+    padding: 22px;
+
+    border-radius: 13px;
+
+    background:
+        rgba(7,15,8,.9);
+
+    border:
+        1px solid
+        rgba(100,220,90,.15);
 }
 
-.form {
-    display: grid;
-
-    gap: 10px;
-
-    max-width: 500px;
-}
-
-input,
-textarea {
+input {
     width: 100%;
 
     padding: 12px;
 
+    margin-bottom: 9px;
+
     border-radius: 7px;
 
     border:
-        1px solid
-        #314235;
+        1px solid #304332;
 
-    background:
-        #0c120d;
+    background: #0a100b;
+
+    color: white;
+}
+
+button {
+    border: 0;
+
+    padding: 11px 15px;
+
+    border-radius: 7px;
+
+    cursor: pointer;
 
     color: white;
 
-    outline: none;
+    background: #398d35;
 }
 
-input:focus,
-textarea:focus {
-    border-color: #55bd4b;
+button:hover {
+    filter: brightness(1.15);
 }
 
-.serverGrid {
+.red {
+    background: #a53636;
+}
+
+.orange {
+    background: #a46b2c;
+}
+
+.dark {
+    background: #172018;
+}
+
+.grid {
     display: grid;
 
     grid-template-columns:
@@ -1926,7 +1168,7 @@ textarea:focus {
             minmax(260px, 1fr)
         );
 
-    gap: 15px;
+    gap: 14px;
 }
 
 .server {
@@ -1934,20 +1176,14 @@ textarea:focus {
 
     border-radius: 10px;
 
-    background:
-        #0c130d;
+    background: #0b130c;
 
     border:
-        1px solid
-        #263829;
-}
-
-.server h3 {
-    margin-top: 0;
+        1px solid #273829;
 }
 
 .online {
-    color: #72df67;
+    color: #76dc6c;
 }
 
 .offline {
@@ -1960,154 +1196,66 @@ textarea:focus {
     gap: 7px;
 
     flex-wrap: wrap;
-
-    margin-top: 12px;
 }
 
 .console {
-    width: 100%;
+    margin-top: 12px;
 
-    min-height: 280px;
+    padding: 14px;
 
-    padding: 15px;
+    min-height: 220px;
+
+    max-height: 450px;
 
     overflow: auto;
 
     white-space: pre-wrap;
 
-    word-break: break-word;
-
-    border-radius: 8px;
-
-    background:
-        #020402;
-
-    color:
-        #9fe79a;
-
-    font-family:
-        Consolas,
-        monospace;
+    font-family: monospace;
 
     font-size: 12px;
-}
 
-.modal {
-    position: fixed;
+    background: #020402;
 
-    inset: 0;
+    color: #9fe999;
 
-    z-index: 100;
-
-    display: none;
-
-    align-items: center;
-
-    justify-content: center;
-
-    padding: 15px;
-
-    background:
-        rgba(0,0,0,.75);
-
-    backdrop-filter:
-        blur(8px);
-}
-
-.modal.show {
-    display: flex;
-}
-
-.modalBox {
-    width:
-        min(440px, 100%);
-
-    padding: 25px;
-
-    border-radius: 12px;
-
-    background:
-        #081009;
-
-    border:
-        1px solid
-        #315534;
-
-    box-shadow:
-        0 30px 100px
-        rgba(0,0,0,.7);
-}
-
-.modalTop {
-    display: flex;
-
-    justify-content:
-        space-between;
-
-    align-items: center;
-}
-
-.close {
-    background: transparent;
-    color: white;
-    font-size: 25px;
+    border-radius: 8px;
 }
 
 .hidden {
-    display: none !important;
+    display: none;
 }
 
 .admin {
-    border:
-        1px solid
-        rgba(220,170,60,.4);
-
-    background:
-        rgba(40,28,7,.5);
+    border-color:
+        rgba(230,170,60,.35);
 }
 
-.warning {
-    padding: 15px;
+@media(max-width:600px) {
 
-    margin-bottom: 15px;
-
-    border-radius: 8px;
-
-    background:
-        rgba(170,50,40,.2);
-
-    border:
-        1px solid
-        rgba(220,80,60,.35);
-}
-
-@media (max-width: 600px) {
-
-    .nav {
+    nav {
         align-items: flex-start;
         flex-direction: column;
+        gap: 10px;
     }
 
-    .page {
+    .container {
         width:
-            calc(100% - 14px);
-
-        margin-top: 15px;
+            calc(100% - 12px);
     }
 
     .hero {
         padding:
-            40px 15px;
+            45px 15px;
     }
 
-    .section {
+    .box {
         padding: 15px;
     }
 
     .actions button {
-        flex: 1 1 auto;
+        flex: 1;
     }
-
 }
 
 </style>
@@ -2116,345 +1264,177 @@ textarea:focus {
 
 <body>
 
-<nav class="nav">
+<nav>
 
-    <div class="logo">
-        ⛏️ Minecraft Hosting
-    </div>
+<div class="logo">
+⛏️ Minecraft Hosting
+</div>
 
-    <div
-        class="navButtons"
-        id="navButtons"
-    >
+<div>
 
-        <button
-            class="dark"
-            onclick="openModal('login')"
-        >
-            🔑 Anmelden
-        </button>
+<button onclick="login()">
+🔑 Anmeldung
+</button>
 
-        <button
-            class="green"
-            onclick="openModal('register')"
-        >
-            📝 Registrieren
-        </button>
-
-    </div>
+</div>
 
 </nav>
 
-<main class="page">
+<div class="container">
 
 <section class="hero">
 
-    <h1>
-        Minecraft Hosting
-    </h1>
+<h1>
+Minecraft Hosting
+</h1>
 
-    <p>
-        Deine Minecraft-Server.
-        Deine Kontrolle.
-    </p>
-
-    <div
-        class="status"
-        id="status"
-    >
-        🟢 System online
-    </div>
-
-</section>
-
-<section
-    class="section"
-    id="welcome"
->
-
-    <h2>
-        ⛏️ Server Hosting
-    </h2>
-
-    <p>
-        Erstelle deine eigenen Minecraft-Server
-        und verwalte sie direkt über diese Webseite.
-    </p>
-
-</section>
-
-<section
-    class="section hidden"
-    id="userArea"
->
-
-    <h2>
-        👤 Mein Bereich
-    </h2>
-
-    <p id="userInfo"></p>
-
-    <div
-        class="form"
-    >
-
-        <input
-            id="serverName"
-            placeholder="Servername"
-            maxlength="32"
-        >
-
-        <input
-            id="serverPort"
-            type="number"
-            min="1024"
-            max="65535"
-            placeholder="Port z.B. 25565"
-        >
-
-        <button
-            class="green"
-            onclick="createServer()"
-        >
-            ➕ Minecraft-Server erstellen
-        </button>
-
-    </div>
-
-    <br>
-
-    <div
-        class="serverGrid"
-        id="servers"
-    ></div>
-
-</section>
-
-<section
-    class="section admin hidden"
-    id="adminArea"
->
-
-    <h2>
-        👑 Admin Panel
-    </h2>
-
-    <p>
-        Nur für den Administrator.
-    </p>
-
-    <div class="actions">
-
-        <button
-            class="orange"
-            onclick="setMaintenance(true)"
-        >
-            🛠️ Wartung AN
-        </button>
-
-        <button
-            class="dark"
-            onclick="setMaintenance(false)"
-        >
-            🟢 Wartung AUS
-        </button>
-
-        <button
-            class="red"
-            onclick="stopAll()"
-        >
-            ⛔ ALLE SERVER STOPPEN
-        </button>
-
-        <button
-            class="orange"
-            onclick="setOutage(true)"
-        >
-            🚨 Störung AN
-        </button>
-
-        <button
-            class="dark"
-            onclick="setOutage(false)"
-        >
-            🟢 Störung AUS
-        </button>
-
-    </div>
-
-    <br>
-
-    <textarea
-        id="outageText"
-        rows="3"
-        placeholder="Text der Störungsmeldung"
-    ></textarea>
-
-    <br><br>
-
-    <h3>
-        📜 Alle Server
-    </h3>
-
-    <div
-        id="adminServers"
-        class="serverGrid"
-    ></div>
-
-    <h3>
-        📟 System-Logs
-    </h3>
-
-    <div
-        id="adminLogs"
-    ></div>
-
-</section>
-
-</main>
-
-
-<!-- LOGIN -->
+<p>
+Erstelle und verwalte deine Minecraft-Server.
+</p>
 
 <div
-    class="modal"
-    id="login"
+    class="status"
+    id="status"
 >
+🟢 System online
+</div>
 
-<div class="modalBox">
+</section>
 
-<div class="modalTop">
+<section class="box">
 
 <h2>
 🔑 Anmeldung
 </h2>
 
-<button
-    class="close"
-    onclick="closeModals()"
->
-×
-</button>
-
-</div>
-
-<div class="form">
-
 <input
-    id="loginName"
-    placeholder="Benutzername oder E-Mail"
+    id="email"
+    type="email"
+    placeholder="E-Mail-Adresse"
 >
 
-<input
-    id="loginPassword"
-    type="password"
-    placeholder="Passwort"
->
-
-<button
-    class="green"
-    onclick="login()"
->
+<button onclick="login()">
 Anmelden
 </button>
 
-</div>
-
 <p id="loginMessage"></p>
 
-</div>
+</section>
 
-</div>
-
-
-<!-- REGISTER -->
-
-<div
-    class="modal"
-    id="register"
+<section
+    class="box hidden"
+    id="hosting"
 >
-
-<div class="modalBox">
-
-<div class="modalTop">
 
 <h2>
-📝 Registrierung
+⛏️ Server erstellen
 </h2>
 
-<button
-    class="close"
-    onclick="closeModals()"
+<input
+    id="serverName"
+    placeholder="Servername"
 >
-×
+
+<input
+    id="serverPort"
+    type="number"
+    placeholder="Port, z.B. 25565"
+>
+
+<button onclick="createServer()">
+➕ Server erstellen
+</button>
+
+<h2>
+Meine Server
+</h2>
+
+<div
+    class="grid"
+    id="servers"
+></div>
+
+</section>
+
+<section
+    class="box admin hidden"
+    id="admin"
+>
+
+<h2>
+👑 Admin Panel
+</h2>
+
+<p>
+Admin: ${ADMIN_EMAIL}
+</p>
+
+<div class="actions">
+
+<button
+    class="orange"
+    onclick="maintenance(true)"
+>
+🛠️ Wartung AN
+</button>
+
+<button
+    class="dark"
+    onclick="maintenance(false)"
+>
+🟢 Wartung AUS
+</button>
+
+<button
+    class="red"
+    onclick="stopAll()"
+>
+⛔ ALLE SERVER STOPPEN
 </button>
 
 </div>
 
-<div class="form">
+<br>
 
 <input
-    id="registerUsername"
-    placeholder="Benutzername"
-    maxlength="24"
+    id="outageText"
+    placeholder="Störungstext"
 >
 
-<input
-    id="registerEmail"
-    type="email"
-    placeholder="E-Mail"
->
-
-<input
-    id="registerPassword"
-    type="password"
-    placeholder="Passwort"
->
+<div class="actions">
 
 <button
-    class="green"
-    onclick="register()"
+    class="red"
+    onclick="outage(true)"
 >
-Konto erstellen
+🚨 Störung AN
+</button>
+
+<button
+    class="dark"
+    onclick="outage(false)"
+>
+🟢 Störung AUS
 </button>
 
 </div>
 
-<p id="registerMessage"></p>
+<h3>
+📊 Server
+</h3>
+
+<div
+    class="grid"
+    id="adminServers"
+></div>
+
+</section>
 
 </div>
-
-</div>
-
 
 <script>
 
-let token =
-    localStorage.getItem(
-        "minecraftHostingToken"
-    );
-
-let currentUser = null;
-
-function openModal(id) {
-
-    closeModals();
-
-    document
-        .getElementById(id)
-        .classList.add("show");
-}
-
-function closeModals() {
-
-    document
-        .querySelectorAll(".modal")
-        .forEach(
-            modal =>
-                modal.classList
-                    .remove("show")
-        );
-}
+let email = "";
 
 async function api(
     url,
@@ -2469,11 +1449,13 @@ async function api(
     ] =
         "application/json";
 
-    if (token) {
+    if (
+        email
+    ) {
         options.headers[
-            "Authorization"
+            "x-admin-email"
         ] =
-            "Bearer " + token;
+            email;
     }
 
     const response =
@@ -2482,265 +1464,71 @@ async function api(
             options
         );
 
-    const data =
-        await response.json();
-
-    if (
-        response.status === 401
-    ) {
-        token = null;
-
-        localStorage.removeItem(
-            "minecraftHostingToken"
-        );
-    }
-
-    return {
-        response,
-        data
-    };
+    return await response.json();
 }
 
-async function register() {
+function login() {
 
-    const username =
+    const value =
         document
-            .getElementById(
-                "registerUsername"
-            )
+            .getElementById("email")
             .value
-            .trim();
+            .trim()
+            .toLowerCase();
 
-    const email =
-        document
-            .getElementById(
-                "registerEmail"
-            )
-            .value
-            .trim();
+    if (!value) {
 
-    const password =
-        document
-            .getElementById(
-                "registerPassword"
-            )
-            .value;
-
-    const result =
-        await api(
-            "/api/register",
-            {
-                method: "POST",
-                body:
-                    JSON.stringify({
-                        username,
-                        email,
-                        password
-                    })
-            }
-        );
-
-    const message =
-        document
-            .getElementById(
-                "registerMessage"
-            );
-
-    message.textContent =
-        result.data.message;
-
-    if (
-        result.data.success
-    ) {
-        setTimeout(
-            () => {
-                closeModals();
-                openModal("login");
-            },
-            1000
-        );
-    }
-}
-
-async function login() {
-
-    const login =
-        document
-            .getElementById(
-                "loginName"
-            )
-            .value
-            .trim();
-
-    const password =
-        document
-            .getElementById(
-                "loginPassword"
-            )
-            .value;
-
-    const result =
-        await api(
-            "/api/login",
-            {
-                method: "POST",
-                body:
-                    JSON.stringify({
-                        login,
-                        password
-                    })
-            }
-        );
-
-    const message =
         document
             .getElementById(
                 "loginMessage"
-            );
-
-    if (
-        !result.data.success
-    ) {
-        message.textContent =
-            "❌ " +
-            result.data.message;
+            )
+            .textContent =
+                "Bitte E-Mail eingeben.";
 
         return;
     }
 
-    token =
-        result.data.token;
+    email = value;
 
     localStorage.setItem(
-        "minecraftHostingToken",
-        token
+        "hostingEmail",
+        email
     );
 
-    currentUser =
-        result.data.user;
-
-    closeModals();
-
-    await loadUser();
-
-    await loadServers();
-
-    if (
-        currentUser.admin
-    ) {
-        await loadAdmin();
-    }
-}
-
-async function loadUser() {
-
-    if (!token) {
-        return;
-    }
-
-    const result =
-        await api(
-            "/api/me"
-        );
-
-    if (
-        !result.data.success
-    ) {
-        return;
-    }
-
-    currentUser =
-        result.data.user;
-
     document
         .getElementById(
-            "welcome"
-        )
-        .classList
-        .add("hidden");
-
-    document
-        .getElementById(
-            "userArea"
+            "hosting"
         )
         .classList
         .remove("hidden");
 
-    document
-        .getElementById(
-            "userInfo"
-        )
-        .textContent =
-            "Angemeldet als: " +
-            currentUser.username +
-            " (" +
-            currentUser.email +
-            ")";
-
-    document
-        .getElementById(
-            "navButtons"
-        )
-        .innerHTML = \`
-            <button
-                class="dark"
-                onclick="logout()"
-            >
-                🚪 Abmelden
-            </button>
-        \`;
-
     if (
-        currentUser.admin
+        email ===
+        "${ADMIN_EMAIL.toLowerCase()}"
     ) {
 
         document
             .getElementById(
-                "adminArea"
+                "admin"
             )
             .classList
             .remove("hidden");
 
-        document
-            .getElementById(
-                "navButtons"
-            )
-            .innerHTML += \`
-                <button
-                    class="orange"
-                    onclick="scrollAdmin()"
-                >
-                    👑 Admin
-                </button>
-            \`;
+        loadAdmin();
     }
-}
 
-async function logout() {
+    loadServers();
 
-    await api(
-        "/api/logout",
-        {
-            method: "POST"
-        }
-    );
-
-    token = null;
-    currentUser = null;
-
-    localStorage.removeItem(
-        "minecraftHostingToken"
-    );
-
-    location.reload();
+    document
+        .getElementById(
+            "loginMessage"
+        )
+        .textContent =
+            "✅ Angemeldet als " +
+            email;
 }
 
 async function createServer() {
-
-    if (!token) {
-        openModal("login");
-        return;
-    }
 
     const name =
         document
@@ -2766,198 +1554,151 @@ async function createServer() {
                 body:
                     JSON.stringify({
                         name,
-                        port
+                        port,
+                        owner: email
                     })
             }
         );
 
     alert(
-        result.data.message ||
+        result.message ||
         "Server erstellt."
     );
 
     if (
-        result.data.success
+        result.success
     ) {
-        document
-            .getElementById(
-                "serverName"
-            )
-            .value = "";
-
-        document
-            .getElementById(
-                "serverPort"
-            )
-            .value = "";
-
-        await loadServers();
+        loadServers();
+        loadAdmin();
     }
 }
 
 async function loadServers() {
-
-    if (!token) {
-        return;
-    }
 
     const result =
         await api(
             "/api/servers"
         );
 
-    if (
-        !result.data.success
-    ) {
-        return;
-    }
-
     const container =
-        document.getElementById(
-            "servers"
-        );
+        document
+            .getElementById(
+                "servers"
+            );
 
     container.innerHTML = "";
 
-    if (
-        result.data.servers.length === 0
-    ) {
-
-        container.innerHTML =
-            "<p>Noch keine Server.</p>";
-
-        return;
-    }
-
-    result.data.servers.forEach(
+    result.servers.forEach(
         server => {
 
-            const element =
+            const div =
                 document.createElement(
                     "div"
                 );
 
-            element.className =
+            div.className =
                 "server";
 
-            const online =
-                server.status ===
-                "online";
+            div.innerHTML = \`
+<h3>
+⛏️ \${escapeHtml(server.name)}
+</h3>
 
-            element.innerHTML = \`
-                <h3>
-                    ⛏️ \${escapeHtml(server.name)}
-                </h3>
+<p>
+Status:
+<strong class="\${
+    server.status === "online"
+        ? "online"
+        : "offline"
+}">
+\${server.status}
+</strong>
+</p>
 
-                <p>
-                    Status:
-                    <strong
-                        class="\${online ? "online" : "offline"}"
-                    >
-                        \${online ? "🟢 Online" : "🔴 Offline"}
-                    </strong>
-                </p>
+<p>
+Port: \${server.port}
+</p>
 
-                <p>
-                    Port:
-                    <strong>
-                        \${server.port}
-                    </strong>
-                </p>
+<div class="actions">
 
-                <div class="actions">
+<button onclick="serverAction(
+'\${server.id}',
+'start'
+)">
+▶️ Start
+</button>
 
-                    <button
-                        class="green"
-                        onclick="serverAction(
-                            '\${server.id}',
-                            'start'
-                        )"
-                    >
-                        ▶️ Start
-                    </button>
+<button
+class="red"
+onclick="serverAction(
+'\${server.id}',
+'stop'
+)"
+>
+⏹️ Stop
+</button>
 
-                    <button
-                        class="red"
-                        onclick="serverAction(
-                            '\${server.id}',
-                            'stop'
-                        )"
-                    >
-                        ⏹️ Stop
-                    </button>
+<button
+class="orange"
+onclick="serverAction(
+'\${server.id}',
+'restart'
+)"
+>
+🔄 Restart
+</button>
 
-                    <button
-                        class="orange"
-                        onclick="serverAction(
-                            '\${server.id}',
-                            'restart'
-                        )"
-                    >
-                        🔄 Restart
-                    </button>
+<button
+class="dark"
+onclick="showConsole(
+'\${server.id}'
+)"
+>
+📟 Konsole
+</button>
 
-                    <button
-                        class="dark"
-                        onclick="showConsole(
-                            '\${server.id}',
-                            '\${escapeHtml(server.name)}'
-                        )"
-                    >
-                        📟 Konsole
-                    </button>
+<button
+class="red"
+onclick="deleteServer(
+'\${server.id}'
+)"
+>
+🗑️ Löschen
+</button>
 
-                    <button
-                        class="red"
-                        onclick="deleteServer(
-                            '\${server.id}'
-                        )"
-                    >
-                        🗑️ Löschen
-                    </button>
+</div>
 
-                </div>
+<div
+id="console-\${server.id}"
+class="hidden"
+>
 
-                <div
-                    id="console-\${server.id}"
-                    class="hidden"
-                >
+<div
+class="console"
+id="logs-\${server.id}"
+>
+</div>
 
-                    <br>
+<br>
 
-                    <div
-                        class="console"
-                        id="logs-\${server.id}"
-                    >
-                    </div>
+<input
+id="command-\${server.id}"
+placeholder="Minecraft-Befehl"
+>
 
-                    <br>
+<button
+onclick="sendCommand(
+'\${server.id}'
+)"
+>
+➤ Senden
+</button>
 
-                    <div
-                        class="actions"
-                    >
-
-                        <input
-                            id="command-\${server.id}"
-                            placeholder="Minecraft-Befehl z.B. say Hallo"
-                        >
-
-                        <button
-                            class="green"
-                            onclick="sendCommand(
-                                '\${server.id}'
-                            )"
-                        >
-                            ➤ Senden
-                        </button>
-
-                    </div>
-
-                </div>
-            \`;
+</div>
+\`;
 
             container.appendChild(
-                element
+                div
             );
         }
     );
@@ -2980,26 +1721,24 @@ async function serverAction(
         );
 
     if (
-        !result.data.success
+        !result.success
     ) {
         alert(
-            result.data.message
+            result.message
         );
     }
 
     setTimeout(
         loadServers,
-        1000
+        1200
     );
 }
 
-async function deleteServer(
-    id
-) {
+async function deleteServer(id) {
 
     if (
         !confirm(
-            "Diesen Server wirklich löschen?"
+            "Server wirklich löschen?"
         )
     ) {
         return;
@@ -3015,41 +1754,26 @@ async function deleteServer(
         );
 
     alert(
-        result.data.message
+        result.message
     );
 
-    await loadServers();
+    loadServers();
+    loadAdmin();
 }
 
-async function showConsole(
-    id,
-    name
-) {
+async function showConsole(id) {
 
-    document
-        .getElementById(
-            "console-" + id
-        )
-        .classList
-        .toggle("hidden");
+    const box =
+        document
+            .getElementById(
+                "console-" + id
+            );
 
-    await loadLogs(id);
-
-    if (
-        !window.consoleTimers
-    ) {
-        window.consoleTimers = {};
-    }
-
-    clearInterval(
-        window.consoleTimers[id]
+    box.classList.toggle(
+        "hidden"
     );
 
-    window.consoleTimers[id] =
-        setInterval(
-            () => loadLogs(id),
-            3000
-        );
+    await loadLogs(id);
 }
 
 async function loadLogs(id) {
@@ -3061,23 +1785,18 @@ async function loadLogs(id) {
             "/logs"
         );
 
-    if (
-        !result.data.success
-    ) {
-        return;
-    }
-
     const element =
-        document.getElementById(
-            "logs-" + id
-        );
+        document
+            .getElementById(
+                "logs-" + id
+            );
 
     if (!element) {
         return;
     }
 
     element.textContent =
-        result.data.logs ||
+        result.logs ||
         "Noch keine Logs.";
 
     element.scrollTop =
@@ -3087,9 +1806,10 @@ async function loadLogs(id) {
 async function sendCommand(id) {
 
     const input =
-        document.getElementById(
-            "command-" + id
-        );
+        document
+            .getElementById(
+                "command-" + id
+            );
 
     const command =
         input.value.trim();
@@ -3113,10 +1833,10 @@ async function sendCommand(id) {
         );
 
     if (
-        !result.data.success
+        !result.success
     ) {
         alert(
-            result.data.message
+            result.message
         );
 
         return;
@@ -3133,8 +1853,8 @@ async function sendCommand(id) {
 async function loadAdmin() {
 
     if (
-        !currentUser ||
-        !currentUser.admin
+        email !==
+        "${ADMIN_EMAIL.toLowerCase()}"
     ) {
         return;
     }
@@ -3144,94 +1864,84 @@ async function loadAdmin() {
             "/api/admin/servers"
         );
 
-    if (
-        !result.data.success
-    ) {
-        return;
-    }
-
     const container =
-        document.getElementById(
-            "adminServers"
-        );
+        document
+            .getElementById(
+                "adminServers"
+            );
 
     container.innerHTML = "";
 
-    result.data.servers.forEach(
+    result.servers.forEach(
         server => {
 
-            const element =
+            const div =
                 document.createElement(
                     "div"
                 );
 
-            element.className =
+            div.className =
                 "server";
 
-            element.innerHTML = \`
-                <h3>
-                    ⛏️ \${escapeHtml(server.name)}
-                </h3>
+            div.innerHTML = \`
+<h3>
+⛏️ \${escapeHtml(server.name)}
+</h3>
 
-                <p>
-                    Status:
-                    \${server.status}
-                </p>
+<p>
+Status: \${server.status}
+</p>
 
-                <p>
-                    Port:
-                    \${server.port}
-                </p>
+<p>
+Port: \${server.port}
+</p>
 
-                <div class="actions">
+<div class="actions">
 
-                    <button
-                        class="green"
-                        onclick="serverAction(
-                            '\${server.id}',
-                            'start'
-                        )"
-                    >
-                        ▶️ Start
-                    </button>
+<button
+onclick="serverAction(
+'\${server.id}',
+'start'
+)"
+>
+▶️
+</button>
 
-                    <button
-                        class="red"
-                        onclick="serverAction(
-                            '\${server.id}',
-                            'stop'
-                        )"
-                    >
-                        ⏹️ Stop
-                    </button>
+<button
+class="red"
+onclick="serverAction(
+'\${server.id}',
+'stop'
+)"
+>
+⏹️
+</button>
 
-                    <button
-                        class="orange"
-                        onclick="serverAction(
-                            '\${server.id}',
-                            'restart'
-                        )"
-                    >
-                        🔄 Restart
-                    </button>
+<button
+class="orange"
+onclick="serverAction(
+'\${server.id}',
+'restart'
+)"
+>
+🔄
+</button>
 
-                </div>
-            \`;
+</div>
+\`;
 
             container.appendChild(
-                element
+                div
             );
         }
     );
-
-    await loadAdminLogs();
 }
 
 async function stopAll() {
 
     if (
         !confirm(
-            "ALLE laufenden Minecraft-Server stoppen?"
+            "ALLE Server stoppen?"
         )
     ) {
         return;
@@ -3246,8 +1956,8 @@ async function stopAll() {
         );
 
     alert(
-        "Gestoppte Server: " +
-        (result.data.stopped || 0)
+        "Gestoppt: " +
+        result.stopped
     );
 
     setTimeout(
@@ -3256,7 +1966,7 @@ async function stopAll() {
     );
 }
 
-async function setMaintenance(
+async function maintenance(
     enabled
 ) {
 
@@ -3272,20 +1982,16 @@ async function setMaintenance(
             }
         );
 
-    if (
-        result.data.success
-    ) {
-        alert(
-            enabled
-                ? "Wartung aktiviert."
-                : "Wartung deaktiviert."
-        );
+    alert(
+        enabled
+            ? "Wartung aktiviert."
+            : "Wartung deaktiviert."
+    );
 
-        updateStatus();
-    }
+    updateStatus();
 }
 
-async function setOutage(
+async function outage(
     enabled
 ) {
 
@@ -3309,65 +2015,13 @@ async function setOutage(
             }
         );
 
-    if (
-        result.data.success
-    ) {
-        alert(
-            enabled
-                ? "Störungsmodus aktiviert."
-                : "Störungsmodus deaktiviert."
-        );
-
-        updateStatus();
-    }
-}
-
-async function loadAdminLogs() {
-
-    const result =
-        await api(
-            "/api/admin/logs"
-        );
-
-    if (
-        !result.data.success
-    ) {
-        return;
-    }
-
-    const container =
-        document.getElementById(
-            "adminLogs"
-        );
-
-    container.innerHTML = "";
-
-    result.data.logs.forEach(
-        item => {
-
-            const wrapper =
-                document.createElement(
-                    "div"
-                );
-
-            wrapper.className =
-                "section";
-
-            wrapper.innerHTML = \`
-                <h3>
-                    📜 \${escapeHtml(item.name)}
-                </h3>
-
-                <div class="console">
-                    \${escapeHtml(item.logs || "Keine Logs.")}
-                </div>
-            \`;
-
-            container.appendChild(
-                wrapper
-            );
-        }
+    alert(
+        enabled
+            ? "Störung aktiviert."
+            : "Störung deaktiviert."
     );
+
+    updateStatus();
 }
 
 async function updateStatus() {
@@ -3377,40 +2031,29 @@ async function updateStatus() {
             "/api/status"
         );
 
-    if (
-        !result.data.success
-    ) {
-        return;
-    }
-
     const status =
-        document.getElementById(
-            "status"
-        );
+        document
+            .getElementById(
+                "status"
+            );
 
     if (
-        result.data.maintenance
+        result.maintenance
     ) {
 
         status.textContent =
-            "🛠️ Webseite befindet sich in Wartung.";
-
-        status.style.color =
-            "#f2bd68";
+            "🛠️ Wartungsarbeiten";
 
         return;
     }
 
     if (
-        result.data.outage
+        result.outage
     ) {
 
         status.textContent =
             "🚨 " +
-            result.data.outageText;
-
-        status.style.color =
-            "#ff7777";
+            result.outageText;
 
         return;
     }
@@ -3419,192 +2062,102 @@ async function updateStatus() {
         "🟢 System online";
 }
 
-function scrollAdmin() {
-
-    document
-        .getElementById(
-            "adminArea"
-        )
-        .scrollIntoView({
-            behavior: "smooth"
-        });
-}
-
-function escapeHtml(
-    value
-) {
+function escapeHtml(value) {
 
     return String(value)
-        .replaceAll(
-            "&",
-            "&amp;"
-        )
-        .replaceAll(
-            "<",
-            "&lt;"
-        )
-        .replaceAll(
-            ">",
-            "&gt;"
-        )
-        .replaceAll(
-            '"',
-            "&quot;"
-        )
-        .replaceAll(
-            "'",
-            "&#039;"
-        );
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
 }
 
-/*
-========================================================
- START
-========================================================
-*/
+// ======================================================
+// AUTOMATISCH EINLOGGEN
+// ======================================================
 
-(async () => {
-
-    console.log(
-        "======================================"
-    );
-
-    console.log(
-        "⛏️ Minecraft Hosting startet"
-    );
-
-    console.log(
-        "🌐 Port:",
-        PORT
-    );
-
-    console.log(
-        "👑 Admin:",
-        ADMIN_EMAIL
-    );
-
-    console.log(
-        "🖥️ Server:",
-        servers.length
-    );
-
-    console.log(
-        "======================================"
-    );
-
-    await updateStatus();
-
-    if (token) {
-        await loadUser();
-        await loadServers();
-
-        if (
-            currentUser &&
-            currentUser.admin
-        ) {
-            await loadAdmin();
-        }
-    }
-
-})();
-
-setInterval(
+window.addEventListener(
+    "load",
     () => {
 
-        /*
-        Aufräumen alter Sessions
-        */
+        const saved =
+            localStorage.getItem(
+                "hostingEmail"
+            );
 
-        const maxAge =
-            24 * 60 * 60 * 1000;
+        if (saved) {
 
-        for (
-            const [
-                token,
-                session
-            ]
-            of sessions
-        ) {
+            document
+                .getElementById(
+                    "email"
+                )
+                .value = saved;
 
-            if (
-                Date.now() -
-                session.createdAt >
-                maxAge
-            ) {
-                sessions.delete(
-                    token
-                );
-            }
+            login();
         }
 
-    },
-    60 * 60 * 1000
-);
+        updateStatus();
 
-process.on(
-    "SIGTERM",
-    () => {
-
-        console.log(
-            "🛑 SIGTERM – Server werden beendet."
+        setInterval(
+            updateStatus,
+            5000
         );
 
-        for (
-            const [
-                id,
-                child
-            ]
-            of runningProcesses
-        ) {
+        setInterval(
+            () => {
 
-            try {
-                child.stdin.write(
-                    "stop\n"
-                );
-            } catch {}
+                if (email) {
+                    loadServers();
 
-            try {
-                child.kill();
-            } catch {}
-        }
+                    if (
+                        email ===
+                        "${ADMIN_EMAIL.toLowerCase()}"
+                    ) {
+                        loadAdmin();
+                    }
+                }
 
-        process.exit(0);
+            },
+            5000
+        );
     }
 );
 
-process.on(
-    "SIGINT",
-    () => {
-
-        for (
-            const child
-            of runningProcesses.values()
-        ) {
-
-            try {
-                child.stdin.write(
-                    "stop\n"
-                );
-            } catch {}
-
-            try {
-                child.kill();
-            } catch {}
-        }
-
-        process.exit(0);
-    }
-);
+// ======================================================
+// SERVER START
+// ======================================================
 
 app.listen(
     PORT,
     "0.0.0.0",
     () => {
 
+        console.log("");
         console.log(
-            `🚀 Webseite läuft auf Port ${PORT}`
+            "======================================"
         );
-
+        console.log(
+            "⛏️ MINECRAFT HOSTING"
+        );
+        console.log(
+            "======================================"
+        );
+        console.log(
+            "🌐 Port:",
+            PORT
+        );
+        console.log(
+            "👑 Admin:",
+            ADMIN_EMAIL
+        );
+        console.log(
+            "📦 Server:",
+            servers.length
+        );
+        console.log(
+            "======================================"
+        );
+        console.log("");
     }
 );
 ```
