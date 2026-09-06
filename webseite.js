@@ -1,947 +1,1705 @@
 const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+
 const PORT = process.env.PORT || 3000;
 
+/*
+====================================================
+ MINECRAFT HOSTING – COMING SOON
+ + ANIMIERTER HINTERGRUND
+ + STERNE
+ + MINECRAFT DESIGN
+ + CHAT FÜR ALLE BESUCHER
+====================================================
+*/
+
 app.get("/", (req, res) => {
-    res.send(`<!DOCTYPE html>
+    res.send(`
+<!DOCTYPE html>
 <html lang="de">
+
 <head>
-    <meta charset="UTF-8">
-
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
-
-    <meta
-        name="theme-color"
-        content="#07120a"
-    >
-
-    <title>Minecraft Hosting</title>
-
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        html,
-        body {
-            width: 100%;
-            height: 100%;
-        }
-
-        body {
-            min-height: 100vh;
-            min-height: 100dvh;
-
-            overflow: hidden;
 
-            display: flex;
-            align-items: center;
-            justify-content: center;
+<meta charset="UTF-8">
 
-            font-family:
-                Arial,
-                Helvetica,
-                sans-serif;
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+>
 
-            color: #ffffff;
+<meta
+    name="theme-color"
+    content="#07120a"
+>
 
-            background:
-                radial-gradient(
-                    circle at 50% 35%,
-                    rgba(45, 120, 55, 0.22),
-                    transparent 45%
-                ),
-                linear-gradient(
-                    180deg,
-                    #02050a 0%,
-                    #071209 55%,
-                    #020602 100%
-                );
-        }
+<title>Minecraft Hosting</title>
 
-        /* =========================================
-           STERNE
-        ========================================= */
+<style>
 
-        #stars {
-            position: fixed;
-            inset: 0;
+/* =========================================
+   GRUNDLAYOUT
+========================================= */
 
-            width: 100%;
-            height: 100%;
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
 
-            z-index: 0;
+html,
+body {
+    width: 100%;
+    min-height: 100%;
+}
 
-            pointer-events: none;
-        }
+body {
+    min-height: 100vh;
+    min-height: 100dvh;
 
-        /* =========================================
-           MOND
-        ========================================= */
+    overflow: hidden;
 
-        .moon {
-            position: fixed;
+    font-family:
+        Arial,
+        Helvetica,
+        sans-serif;
 
-            width: 85px;
-            height: 85px;
+    color: white;
 
-            top: 9%;
-            right: 10%;
+    background:
+        radial-gradient(
+            circle at 50% 35%,
+            rgba(40, 130, 50, 0.22),
+            transparent 45%
+        ),
+        linear-gradient(
+            180deg,
+            #02050a 0%,
+            #071209 55%,
+            #020602 100%
+        );
+}
 
-            border-radius: 50%;
+/* =========================================
+   STERNE
+========================================= */
 
-            background:
-                radial-gradient(
-                    circle at 35% 30%,
-                    #ffffff,
-                    #d8d8d8 55%,
-                    #898989 100%
-                );
+#stars {
+    position: fixed;
 
-            box-shadow:
-                0 0 30px rgba(255,255,255,.25),
-                0 0 90px rgba(255,255,255,.08);
+    inset: 0;
 
-            opacity: .85;
+    width: 100%;
+    height: 100%;
 
-            z-index: 1;
+    z-index: 0;
 
-            animation:
-                moonFloat 6s ease-in-out infinite;
-        }
+    pointer-events: none;
+}
 
-        @keyframes moonFloat {
-            0%,
-            100% {
-                transform: translateY(0);
-            }
+/* =========================================
+   MOND
+========================================= */
 
-            50% {
-                transform: translateY(10px);
-            }
-        }
+.moon {
+    position: fixed;
 
-        /* =========================================
-           WOLKEN
-        ========================================= */
+    width: 85px;
+    height: 85px;
 
-        .cloud {
-            position: fixed;
+    top: 8%;
+    right: 9%;
 
-            height: 18px;
+    border-radius: 50%;
 
-            background:
-                rgba(255,255,255,.045);
+    background:
+        radial-gradient(
+            circle at 35% 30%,
+            #ffffff,
+            #dddddd 55%,
+            #888888 100%
+        );
 
-            z-index: 1;
+    box-shadow:
+        0 0 30px rgba(255,255,255,.3),
+        0 0 80px rgba(255,255,255,.08);
 
-            pointer-events: none;
+    opacity: .85;
 
-            animation:
-                cloudMove linear infinite;
-        }
+    z-index: 1;
 
-        .cloud::before,
-        .cloud::after {
-            content: "";
+    animation:
+        moonFloat 6s ease-in-out infinite;
+}
 
-            position: absolute;
+@keyframes moonFloat {
 
-            background:
-                rgba(255,255,255,.045);
-        }
+    0%,
+    100% {
+        transform: translateY(0);
+    }
 
-        .cloud::before {
-            width: 35px;
-            height: 22px;
+    50% {
+        transform: translateY(10px);
+    }
+}
 
-            left: 18px;
-            bottom: 0;
-        }
+/* =========================================
+   GRÜNER GLOW
+========================================= */
 
-        .cloud::after {
-            width: 50px;
-            height: 28px;
+.greenGlow {
+    position: fixed;
 
-            left: 55px;
-            bottom: 0;
-        }
+    width: 500px;
+    height: 500px;
 
-        .cloud1 {
-            width: 120px;
+    left: 50%;
+    top: 50%;
 
-            top: 20%;
-            left: -160px;
+    transform:
+        translate(-50%, -50%);
 
-            animation-duration: 45s;
-        }
+    background:
+        radial-gradient(
+            circle,
+            rgba(50,200,60,.14),
+            transparent 70%
+        );
 
-        .cloud2 {
-            width: 150px;
+    filter: blur(35px);
 
-            top: 34%;
-            left: -220px;
+    z-index: 1;
 
-            animation-duration: 65s;
-            animation-delay: -20s;
-        }
+    pointer-events: none;
 
-        @keyframes cloudMove {
-            from {
-                transform: translateX(0);
-            }
+    animation:
+        glowPulse 5s ease-in-out infinite;
+}
 
-            to {
-                transform:
-                    translateX(
-                        calc(100vw + 450px)
-                    );
-            }
-        }
+@keyframes glowPulse {
 
-        /* =========================================
-           GRÜNER HINTERGRUND-GLOW
-        ========================================= */
+    0%,
+    100% {
+        opacity: .5;
+        transform:
+            translate(-50%, -50%)
+            scale(1);
+    }
 
-        .greenGlow {
-            position: fixed;
+    50% {
+        opacity: 1;
+        transform:
+            translate(-50%, -50%)
+            scale(1.2);
+    }
+}
 
-            width: 500px;
-            height: 500px;
+/* =========================================
+   PARTIKEL
+========================================= */
 
-            left: 50%;
-            top: 50%;
+#particles {
+    position: fixed;
 
-            transform:
-                translate(-50%, -50%);
+    inset: 0;
 
-            background:
-                radial-gradient(
-                    circle,
-                    rgba(46,204,64,.14),
-                    transparent 70%
-                );
+    z-index: 2;
 
-            filter: blur(30px);
+    pointer-events: none;
+}
 
-            z-index: 1;
+.particle {
+    position: absolute;
 
-            pointer-events: none;
+    width: 4px;
+    height: 4px;
 
-            animation:
-                glowPulse 5s ease-in-out infinite;
-        }
+    background: #55c64b;
 
-        @keyframes glowPulse {
-            0%,
-            100% {
-                opacity: .5;
+    box-shadow:
+        0 0 8px
+        rgba(85,198,75,.8);
 
-                transform:
-                    translate(-50%, -50%)
-                    scale(1);
-            }
+    animation:
+        particleMove linear infinite;
+}
 
-            50% {
-                opacity: 1;
+@keyframes particleMove {
 
-                transform:
-                    translate(-50%, -50%)
-                    scale(1.2);
-            }
-        }
+    from {
+        transform:
+            translateY(105vh)
+            translateX(0);
 
-        /* =========================================
-           PARTIKEL
-        ========================================= */
+        opacity: 0;
+    }
 
-        #particles {
-            position: fixed;
+    15% {
+        opacity: .8;
+    }
 
-            inset: 0;
+    85% {
+        opacity: .8;
+    }
 
-            z-index: 2;
+    to {
+        transform:
+            translateY(-20vh)
+            translateX(80px);
 
-            pointer-events: none;
-        }
+        opacity: 0;
+    }
+}
 
-        .particle {
-            position: absolute;
+/* =========================================
+   HAUPTBOX
+========================================= */
 
-            width: 4px;
-            height: 4px;
+.container {
+    position: relative;
 
-            background: #58c957;
+    z-index: 5;
 
-            box-shadow:
-                0 0 8px
-                rgba(88,201,87,.8);
+    width:
+        min(
+            calc(100% - 30px),
+            850px
+        );
 
-            animation:
-                particleMove linear infinite;
-        }
+    padding:
+        55px 35px;
 
-        @keyframes particleMove {
-            from {
-                transform:
-                    translateY(105vh)
-                    translateX(0);
+    margin:
+        20px auto;
 
-                opacity: 0;
-            }
+    text-align: center;
 
-            15% {
-                opacity: .8;
-            }
+    border:
+        3px solid
+        rgba(82,180,74,.35);
 
-            85% {
-                opacity: .8;
-            }
+    border-radius: 8px;
 
-            to {
-                transform:
-                    translateY(-20vh)
-                    translateX(80px);
+    background:
+        linear-gradient(
+            145deg,
+            rgba(7,15,8,.94),
+            rgba(10,22,12,.84)
+        );
 
-                opacity: 0;
-            }
-        }
+    box-shadow:
+        0 30px 100px
+        rgba(0,0,0,.7),
 
-        /* =========================================
-           HAUPTBOX
-        ========================================= */
+        0 0 60px
+        rgba(50,180,70,.08);
 
-        .container {
-            position: relative;
+    backdrop-filter:
+        blur(12px);
 
-            z-index: 5;
+    -webkit-backdrop-filter:
+        blur(12px);
 
-            width:
-                min(
-                    calc(100% - 30px),
-                    850px
-                );
+    animation:
+        containerAppear 1.2s ease;
+}
 
-            padding:
-                55px 35px;
+@keyframes containerAppear {
 
-            text-align: center;
+    from {
+        opacity: 0;
 
-            border:
-                3px solid
-                rgba(82,180,74,.35);
+        transform:
+            translateY(35px)
+            scale(.92);
+    }
 
-            border-radius: 8px;
+    to {
+        opacity: 1;
 
-            background:
-                linear-gradient(
-                    145deg,
-                    rgba(7,15,8,.94),
-                    rgba(10,22,12,.84)
-                );
+        transform:
+            translateY(0)
+            scale(1);
+    }
+}
 
-            box-shadow:
-                0 30px 100px
-                rgba(0,0,0,.7),
+/* =========================================
+   MINECRAFT BLOCK
+========================================= */
 
-                0 0 60px
-                rgba(50,180,70,.08);
+.minecraftIcon {
 
-            backdrop-filter:
-                blur(12px);
+    display: inline-flex;
 
-            -webkit-backdrop-filter:
-                blur(12px);
+    align-items: center;
+    justify-content: center;
 
-            animation:
-                containerAppear 1.2s ease forwards;
-        }
+    width: 100px;
+    height: 100px;
 
-        @keyframes containerAppear {
-            from {
-                opacity: 0;
+    margin-bottom: 20px;
 
-                transform:
-                    translateY(35px)
-                    scale(.92);
-            }
+    background:
+        linear-gradient(
+            135deg,
+            #55b947,
+            #26772c
+        );
 
-            to {
-                opacity: 1;
+    border:
+        5px solid
+        #163d18;
 
-                transform:
-                    translateY(0)
-                    scale(1);
-            }
-        }
+    box-shadow:
 
-        /* =========================================
-           MINECRAFT BLOCK
-        ========================================= */
+        inset 0 8px 0
+        rgba(255,255,255,.12),
 
-        .minecraftIcon {
-            display: inline-flex;
+        inset 0 -8px 0
+        rgba(0,0,0,.25),
 
-            align-items: center;
-            justify-content: center;
+        0 12px 25px
+        rgba(0,0,0,.5);
 
-            width: 100px;
-            height: 100px;
+    animation:
+        iconFloat 3s ease-in-out infinite;
+}
 
-            margin-bottom: 20px;
+.minecraftIcon span {
 
-            background:
-                linear-gradient(
-                    135deg,
-                    #55b947,
-                    #26772c
-                );
+    font-size: 48px;
 
-            border:
-                5px solid
-                #163d18;
+    filter:
+        drop-shadow(
+            3px 3px 0
+            rgba(0,0,0,.5)
+        );
+}
 
-            box-shadow:
-                inset 0 8px 0
-                rgba(255,255,255,.12),
+@keyframes iconFloat {
 
-                inset 0 -8px 0
-                rgba(0,0,0,.25),
+    0%,
+    100% {
+        transform:
+            translateY(0)
+            rotate(0deg);
+    }
 
-                0 12px 25px
-                rgba(0,0,0,.5);
+    50% {
+        transform:
+            translateY(-10px)
+            rotate(2deg);
+    }
+}
 
-            image-rendering: pixelated;
+/* =========================================
+   TITEL
+========================================= */
 
-            animation:
-                iconFloat 3s ease-in-out infinite;
-        }
+h1 {
 
-        .minecraftIcon span {
-            font-size: 48px;
+    font-size:
+        clamp(
+            32px,
+            7vw,
+            68px
+        );
 
-            filter:
-                drop-shadow(
-                    3px 3px 0
-                    rgba(0,0,0,.5)
-                );
-        }
+    line-height: 1.05;
 
-        @keyframes iconFloat {
-            0%,
-            100% {
-                transform:
-                    translateY(0)
-                    rotate(0deg);
-            }
+    font-weight: 900;
 
-            50% {
-                transform:
-                    translateY(-10px)
-                    rotate(2deg);
-            }
-        }
+    letter-spacing: -2px;
 
-        /* =========================================
-           TITEL
-        ========================================= */
+    text-shadow:
 
-        h1 {
-            font-size:
-                clamp(
-                    32px,
-                    7vw,
-                    68px
-                );
+        4px 4px 0
+        #183b1b,
 
-            line-height: 1.05;
+        0 0 25px
+        rgba(76,220,82,.25);
 
-            font-weight: 900;
+    animation:
+        titleGlow 3s ease-in-out infinite;
+}
 
-            letter-spacing: -2px;
+@keyframes titleGlow {
 
-            color: #ffffff;
+    0%,
+    100% {
+        text-shadow:
+            4px 4px 0 #183b1b,
+            0 0 20px
+            rgba(76,220,82,.15);
+    }
 
-            text-shadow:
-                4px 4px 0 #183b1b,
-                0 0 25px
-                rgba(76,220,82,.25);
+    50% {
+        text-shadow:
+            4px 4px 0 #183b1b,
+            0 0 35px
+            rgba(76,220,82,.35);
+    }
+}
 
-            animation:
-                titleGlow 3s ease-in-out infinite;
-        }
+/* =========================================
+   TEXT
+========================================= */
 
-        @keyframes titleGlow {
-            0%,
-            100% {
-                text-shadow:
-                    4px 4px 0 #183b1b,
-                    0 0 20px
-                    rgba(76,220,82,.15);
-            }
+.description {
 
-            50% {
-                text-shadow:
-                    4px 4px 0 #183b1b,
-                    0 0 35px
-                    rgba(76,220,82,.35);
-            }
-        }
+    margin-top: 20px;
 
-        /* =========================================
-           BESCHREIBUNG
-        ========================================= */
+    color: #b8c5b8;
 
-        .description {
-            margin-top: 20px;
+    font-size:
+        clamp(
+            15px,
+            3vw,
+            19px
+        );
 
-            color: #b8c5b8;
+    line-height: 1.7;
+}
 
-            font-size:
-                clamp(
-                    15px,
-                    3vw,
-                    19px
-                );
+/* =========================================
+   LOADER
+========================================= */
 
-            line-height: 1.7;
-        }
+.loader {
 
-        /* =========================================
-           LOADER
-        ========================================= */
+    width: 100%;
 
-        .loader {
-            width: 100%;
+    max-width: 550px;
 
-            max-width: 550px;
+    height: 22px;
 
-            height: 22px;
+    margin:
+        35px auto 0;
 
-            margin:
-                35px auto 0;
+    padding: 3px;
 
-            padding: 3px;
+    background: #101510;
 
-            background: #101510;
+    border:
+        2px solid
+        #263a27;
+}
 
-            border:
-                2px solid
-                #263a27;
+.loaderBar {
 
-            box-shadow:
-                inset 0 3px 5px
-                rgba(0,0,0,.6);
-        }
+    width: 0%;
 
-        .loaderBar {
-            width: 0%;
-            height: 100%;
+    height: 100%;
 
-            background:
-                repeating-linear-gradient(
-                    90deg,
-                    #55c64b 0px,
-                    #55c64b 16px,
-                    #42a83c 16px,
-                    #42a83c 32px
-                );
+    background:
+        repeating-linear-gradient(
+            90deg,
+            #55c64b 0px,
+            #55c64b 16px,
+            #42a83c 16px,
+            #42a83c 32px
+        );
 
-            box-shadow:
-                0 0 12px
-                rgba(70,200,70,.3);
+    animation:
+        loading 5s
+        ease-in-out infinite;
+}
 
-            animation:
-                loading 5s
-                ease-in-out infinite;
-        }
+@keyframes loading {
 
-        @keyframes loading {
-            0% {
-                width: 0%;
-            }
+    0% {
+        width: 0%;
+    }
 
-            70% {
-                width: 82%;
-            }
+    70% {
+        width: 82%;
+    }
 
-            100% {
-                width: 100%;
-            }
-        }
+    100% {
+        width: 100%;
+    }
+}
 
-        /* =========================================
-           MOBILE
-        ========================================= */
+/* =========================================
+   CHAT BUTTON
+========================================= */
 
-        @media (max-width: 600px) {
+.chatButton {
 
-            body {
-                padding: 12px;
-            }
+    position: fixed;
 
-            .container {
-                width: 100%;
+    right: 22px;
+    bottom: 22px;
 
-                padding:
-                    38px 18px;
+    z-index: 100;
 
-                border-radius: 6px;
-            }
+    width: 62px;
+    height: 62px;
 
-            .minecraftIcon {
-                width: 78px;
-                height: 78px;
+    border: 3px solid #183b1b;
 
-                border-width: 4px;
-            }
+    border-radius: 8px;
 
-            .minecraftIcon span {
-                font-size: 38px;
-            }
+    background:
+        linear-gradient(
+            135deg,
+            #55b947,
+            #26772c
+        );
 
-            h1 {
-                letter-spacing: -1px;
-            }
+    color: white;
 
-            .description {
-                margin-top: 16px;
+    font-size: 27px;
 
-                font-size: 15px;
-            }
+    cursor: pointer;
 
-            .loader {
-                margin-top: 25px;
+    box-shadow:
+        0 8px 25px
+        rgba(0,0,0,.55);
 
-                height: 18px;
-            }
+    transition:
+        transform .2s ease,
+        filter .2s ease;
+}
 
-            .moon {
-                width: 55px;
-                height: 55px;
+.chatButton:hover {
 
-                top: 5%;
-                right: 7%;
-            }
-        }
+    transform:
+        scale(1.08);
 
-        /* =========================================
-           KLEINE HANDYS
-        ========================================= */
+    filter:
+        brightness(1.15);
+}
 
-        @media (max-height: 650px) {
+.chatButton:active {
 
-            .container {
-                padding:
-                    25px 16px;
-            }
+    transform:
+        scale(.95);
+}
 
-            .minecraftIcon {
-                width: 65px;
-                height: 65px;
+/* =========================================
+   CHAT FENSTER
+========================================= */
 
-                margin-bottom: 10px;
-            }
+.chat {
 
-            .minecraftIcon span {
-                font-size: 30px;
-            }
+    position: fixed;
 
-            h1 {
-                font-size: 32px;
-            }
+    right: 22px;
+    bottom: 96px;
 
-            .description {
-                margin-top: 10px;
-            }
+    z-index: 99;
 
-            .loader {
-                margin-top: 18px;
-            }
-        }
-    </style>
+    width:
+        min(
+            calc(100% - 30px),
+            380px
+        );
+
+    height: 500px;
+
+    display: none;
+
+    flex-direction: column;
+
+    overflow: hidden;
+
+    border:
+        3px solid
+        rgba(82,180,74,.45);
+
+    border-radius: 10px;
+
+    background:
+        rgba(5,12,7,.97);
+
+    box-shadow:
+        0 20px 70px
+        rgba(0,0,0,.75);
+
+    backdrop-filter:
+        blur(15px);
+
+    animation:
+        chatOpen .25s ease;
+}
+
+.chat.active {
+
+    display: flex;
+}
+
+@keyframes chatOpen {
+
+    from {
+        opacity: 0;
+
+        transform:
+            translateY(20px)
+            scale(.95);
+    }
+
+    to {
+        opacity: 1;
+
+        transform:
+            translateY(0)
+            scale(1);
+    }
+}
+
+/* =========================================
+   CHAT HEADER
+========================================= */
+
+.chatHeader {
+
+    min-height: 60px;
+
+    display: flex;
+
+    align-items: center;
+    justify-content: space-between;
+
+    padding:
+        0 15px;
+
+    background:
+        linear-gradient(
+            90deg,
+            #1d5c25,
+            #2f8735
+        );
+
+    border-bottom:
+        2px solid
+        rgba(255,255,255,.08);
+}
+
+.chatTitle {
+
+    font-size: 18px;
+
+    font-weight: 800;
+}
+
+.chatStatus {
+
+    color: #b9ffae;
+
+    font-size: 12px;
+}
+
+.closeChat {
+
+    border: 0;
+
+    background: transparent;
+
+    color: white;
+
+    font-size: 24px;
+
+    cursor: pointer;
+}
+
+/* =========================================
+   NACHRICHTEN
+========================================= */
+
+.messages {
+
+    flex: 1;
+
+    overflow-y: auto;
+
+    padding: 14px;
+
+    display: flex;
+
+    flex-direction: column;
+
+    gap: 9px;
+
+    scrollbar-width: thin;
+
+    scrollbar-color:
+        #397f39
+        transparent;
+}
+
+.message {
+
+    max-width: 88%;
+
+    padding:
+        9px 11px;
+
+    border-radius: 6px;
+
+    background:
+        rgba(255,255,255,.06);
+
+    border-left:
+        3px solid
+        #4fae47;
+
+    word-wrap: break-word;
+
+    animation:
+        messageIn .2s ease;
+}
+
+@keyframes messageIn {
+
+    from {
+        opacity: 0;
+        transform: translateY(5px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.messageName {
+
+    color: #73d96b;
+
+    font-size: 12px;
+
+    font-weight: bold;
+
+    margin-bottom: 3px;
+}
+
+.messageText {
+
+    color: #eeeeee;
+
+    font-size: 14px;
+
+    line-height: 1.4;
+}
+
+.systemMessage {
+
+    text-align: center;
+
+    color: #788578;
+
+    font-size: 12px;
+
+    padding: 5px;
+}
+
+/* =========================================
+   CHAT EINGABE
+========================================= */
+
+.chatInputArea {
+
+    display: flex;
+
+    gap: 7px;
+
+    padding: 10px;
+
+    border-top:
+        2px solid
+        rgba(255,255,255,.08);
+
+    background:
+        rgba(0,0,0,.25);
+}
+
+.chatInput {
+
+    flex: 1;
+
+    min-width: 0;
+
+    height: 44px;
+
+    padding:
+        0 12px;
+
+    border:
+        1px solid
+        rgba(255,255,255,.15);
+
+    border-radius: 5px;
+
+    outline: none;
+
+    background:
+        #111a12;
+
+    color: white;
+
+    font-size: 14px;
+}
+
+.chatInput:focus {
+
+    border-color:
+        #55b947;
+
+    box-shadow:
+        0 0 10px
+        rgba(85,185,71,.15);
+}
+
+.sendButton {
+
+    width: 48px;
+
+    border: 0;
+
+    border-radius: 5px;
+
+    background:
+        #3d8f38;
+
+    color: white;
+
+    font-size: 19px;
+
+    cursor: pointer;
+}
+
+.sendButton:hover {
+
+    background:
+        #51aa4a;
+}
+
+/* =========================================
+   MOBILE
+========================================= */
+
+@media (max-width: 600px) {
+
+    body {
+        padding: 10px;
+    }
+
+    .container {
+
+        width: 100%;
+
+        padding:
+            38px 18px;
+
+        margin: 10px auto;
+    }
+
+    .minecraftIcon {
+
+        width: 78px;
+        height: 78px;
+
+        border-width: 4px;
+    }
+
+    .minecraftIcon span {
+        font-size: 38px;
+    }
+
+    h1 {
+        letter-spacing: -1px;
+    }
+
+    .description {
+        font-size: 15px;
+    }
+
+    .loader {
+
+        margin-top: 25px;
+
+        height: 18px;
+    }
+
+    .moon {
+
+        width: 55px;
+        height: 55px;
+
+        top: 5%;
+        right: 7%;
+    }
+
+    .chat {
+
+        right: 10px;
+        bottom: 85px;
+
+        width:
+            calc(100% - 20px);
+
+        height:
+            min(
+                70vh,
+                500px
+            );
+    }
+
+    .chatButton {
+
+        right: 12px;
+        bottom: 12px;
+    }
+}
+
+/* =========================================
+   SEHR KLEINE HANDYS
+========================================= */
+
+@media (max-height: 650px) {
+
+    .container {
+        padding:
+            25px 16px;
+    }
+
+    .minecraftIcon {
+
+        width: 65px;
+        height: 65px;
+
+        margin-bottom: 10px;
+    }
+
+    .minecraftIcon span {
+        font-size: 30px;
+    }
+
+    h1 {
+        font-size: 32px;
+    }
+
+    .description {
+        margin-top: 10px;
+    }
+
+    .loader {
+        margin-top: 18px;
+    }
+
+    .chat {
+        height: 65vh;
+    }
+}
+
+</style>
+
 </head>
 
 <body>
 
-    <canvas id="stars"></canvas>
+<!-- STERNE -->
 
-    <div class="moon"></div>
+<canvas id="stars"></canvas>
 
-    <div class="cloud cloud1"></div>
-    <div class="cloud cloud2"></div>
+<!-- MOND -->
 
-    <div class="greenGlow"></div>
+<div class="moon"></div>
 
-    <div id="particles"></div>
+<!-- GLOW -->
 
-    <main class="container">
+<div class="greenGlow"></div>
 
-        <div class="minecraftIcon">
-            <span>⛏️</span>
+<!-- PARTIKEL -->
+
+<div id="particles"></div>
+
+
+<!-- HAUPTBOX -->
+
+<main class="container">
+
+    <div class="minecraftIcon">
+        <span>⛏️</span>
+    </div>
+
+    <h1>
+        Die Webseite kommt bald!
+    </h1>
+
+    <p class="description">
+        Unser Minecraft-Projekt wird gerade aufgebaut.
+        <br>
+        Schau bald wieder vorbei!
+    </p>
+
+    <div class="loader">
+        <div class="loaderBar"></div>
+    </div>
+
+</main>
+
+
+<!-- CHAT BUTTON -->
+
+<button
+    class="chatButton"
+    id="chatButton"
+    onclick="toggleChat()"
+    aria-label="Chat öffnen"
+>
+    💬
+</button>
+
+
+<!-- CHAT -->
+
+<section
+    class="chat"
+    id="chat"
+>
+
+    <header class="chatHeader">
+
+        <div>
+
+            <div class="chatTitle">
+                💬 Community Chat
+            </div>
+
+            <div class="chatStatus">
+                ● Online
+            </div>
+
         </div>
 
-        <h1>
-            Die Webseite kommt bald!
-        </h1>
+        <button
+            class="closeChat"
+            onclick="toggleChat()"
+        >
+            ×
+        </button>
 
-        <p class="description">
-            Unser Minecraft-Projekt wird gerade aufgebaut.
-            <br>
-            Schau bald wieder vorbei!
-        </p>
+    </header>
 
-        <div class="loader">
-            <div class="loaderBar"></div>
+
+    <div
+        class="messages"
+        id="messages"
+    >
+
+        <div class="systemMessage">
+            Willkommen im Community-Chat! 👋
         </div>
 
-    </main>
+    </div>
 
-    <script>
 
-        /* =========================================
-           ANIMIERTE STERNE
-        ========================================= */
+    <form
+        class="chatInputArea"
+        id="chatForm"
+    >
 
-        const canvas =
-            document.getElementById("stars");
+        <input
+            id="chatInput"
+            class="chatInput"
+            type="text"
+            maxlength="300"
+            placeholder="Nachricht schreiben..."
+            autocomplete="off"
+        >
 
-        const ctx =
-            canvas.getContext("2d");
+        <button
+            class="sendButton"
+            type="submit"
+        >
+            ➤
+        </button>
 
-        let stars = [];
+    </form>
 
-        let width = 0;
-        let height = 0;
+</section>
 
-        function resizeCanvas() {
 
-            width =
-                window.innerWidth;
+<script src="/socket.io/socket.io.js"></script>
 
-            height =
-                window.innerHeight;
+<script>
 
-            const dpr =
-                Math.min(
-                    window.devicePixelRatio || 1,
-                    2
-                );
+/* =========================================
+   CHAT
+========================================= */
 
-            canvas.width =
-                width * dpr;
+const socket =
+    io();
 
-            canvas.height =
-                height * dpr;
+const chat =
+    document.getElementById(
+        "chat"
+    );
 
-            canvas.style.width =
-                width + "px";
+const chatButton =
+    document.getElementById(
+        "chatButton"
+    );
 
-            canvas.style.height =
-                height + "px";
+const messages =
+    document.getElementById(
+        "messages"
+    );
 
-            ctx.setTransform(
-                dpr,
-                0,
-                0,
-                dpr,
-                0,
-                0
-            );
+const chatInput =
+    document.getElementById(
+        "chatInput"
+    );
 
-            createStars();
+const chatForm =
+    document.getElementById(
+        "chatForm"
+    );
+
+
+/*
+   Zufälliger Besuchername
+*/
+
+const names = [
+    "Steve",
+    "Alex",
+    "Creeper",
+    "Builder",
+    "Miner",
+    "Player",
+    "Explorer"
+];
+
+let username =
+    localStorage.getItem(
+        "minecraftChatName"
+    );
+
+if (!username) {
+
+    const randomName =
+        names[
+            Math.floor(
+                Math.random() *
+                names.length
+            )
+        ];
+
+    username =
+        randomName +
+        "_" +
+        Math.floor(
+            Math.random() * 9999
+        );
+
+    localStorage.setItem(
+        "minecraftChatName",
+        username
+    );
+}
+
+
+/*
+   Chat öffnen
+*/
+
+function toggleChat() {
+
+    chat.classList.toggle(
+        "active"
+    );
+
+    if (
+        chat.classList.contains(
+            "active"
+        )
+    ) {
+
+        setTimeout(
+            () => {
+                chatInput.focus();
+            },
+            100
+        );
+    }
+}
+
+
+/*
+   Nachricht senden
+*/
+
+chatForm.addEventListener(
+    "submit",
+    function(event) {
+
+        event.preventDefault();
+
+        const text =
+            chatInput.value.trim();
+
+        if (!text) {
+            return;
         }
 
-        function createStars() {
-
-            stars = [];
-
-            const amount =
-                Math.min(
-                    180,
-                    Math.floor(
-                        (width * height) / 7500
-                    )
-                );
-
-            for (
-                let i = 0;
-                i < amount;
-                i++
-            ) {
-
-                stars.push({
-
-                    x:
-                        Math.random() *
-                        width,
-
-                    y:
-                        Math.random() *
-                        height,
-
-                    size:
-                        Math.random() *
-                        1.8 + .3,
-
-                    speed:
-                        Math.random() *
-                        .35 + .05,
-
-                    opacity:
-                        Math.random() *
-                        .7 + .2,
-
-                    twinkle:
-                        Math.random() *
-                        Math.PI * 2
-                });
+        socket.emit(
+            "chatMessage",
+            {
+                name: username,
+                text: text
             }
-        }
+        );
 
-        function animateStars() {
+        chatInput.value = "";
 
-            ctx.clearRect(
-                0,
-                0,
+        chatInput.focus();
+    }
+);
+
+
+/*
+   Nachricht empfangen
+*/
+
+socket.on(
+    "chatMessage",
+    function(message) {
+
+        addMessage(
+            message.name,
+            message.text
+        );
+    }
+);
+
+
+/*
+   Nachricht anzeigen
+*/
+
+function addMessage(
+    name,
+    text
+) {
+
+    const wrapper =
+        document.createElement(
+            "div"
+        );
+
+    wrapper.className =
+        "message";
+
+
+    const nameElement =
+        document.createElement(
+            "div"
+        );
+
+    nameElement.className =
+        "messageName";
+
+    nameElement.textContent =
+        name;
+
+
+    const textElement =
+        document.createElement(
+            "div"
+        );
+
+    textElement.className =
+        "messageText";
+
+    textElement.textContent =
+        text;
+
+
+    wrapper.appendChild(
+        nameElement
+    );
+
+    wrapper.appendChild(
+        textElement
+    );
+
+    messages.appendChild(
+        wrapper
+    );
+
+
+    messages.scrollTop =
+        messages.scrollHeight;
+}
+
+
+/* =========================================
+   STERNE
+========================================= */
+
+const canvas =
+    document.getElementById(
+        "stars"
+    );
+
+const ctx =
+    canvas.getContext(
+        "2d"
+    );
+
+let stars = [];
+
+let width = 0;
+let height = 0;
+
+
+function resizeCanvas() {
+
+    width =
+        window.innerWidth;
+
+    height =
+        window.innerHeight;
+
+    const dpr =
+        Math.min(
+            window.devicePixelRatio || 1,
+            2
+        );
+
+    canvas.width =
+        width * dpr;
+
+    canvas.height =
+        height * dpr;
+
+    canvas.style.width =
+        width + "px";
+
+    canvas.style.height =
+        height + "px";
+
+    ctx.setTransform(
+        dpr,
+        0,
+        0,
+        dpr,
+        0,
+        0
+    );
+
+    createStars();
+}
+
+
+function createStars() {
+
+    stars = [];
+
+    const amount =
+        Math.min(
+            180,
+            Math.floor(
+                (width * height) /
+                7500
+            )
+        );
+
+    for (
+        let i = 0;
+        i < amount;
+        i++
+    ) {
+
+        stars.push({
+
+            x:
+                Math.random() *
                 width,
-                height
-            );
 
-            for (
-                const star of stars
-            ) {
+            y:
+                Math.random() *
+                height,
 
-                star.y +=
-                    star.speed;
+            size:
+                Math.random() *
+                1.8 + .3,
 
-                star.twinkle +=
-                    .015;
+            speed:
+                Math.random() *
+                .35 + .05,
 
-                if (
-                    star.y >
-                    height + 5
-                ) {
+            opacity:
+                Math.random() *
+                .7 + .2,
 
-                    star.y = -5;
-
-                    star.x =
-                        Math.random() *
-                        width;
-                }
-
-                const alpha =
-                    Math.max(
-                        .1,
-                        Math.min(
-                            1,
-                            star.opacity +
-                            Math.sin(
-                                star.twinkle
-                            ) * .15
-                        )
-                    );
-
-                ctx.beginPath();
-
-                ctx.fillStyle =
-                    "rgba(255,255,255," +
-                    alpha +
-                    ")";
-
-                ctx.arc(
-                    star.x,
-                    star.y,
-                    star.size,
-                    0,
-                    Math.PI * 2
-                );
-
-                ctx.fill();
-            }
-
-            requestAnimationFrame(
-                animateStars
-            );
-        }
-
-        window.addEventListener(
-            "resize",
-            resizeCanvas
-        );
-
-        resizeCanvas();
-
-        requestAnimationFrame(
-            animateStars
-        );
+            twinkle:
+                Math.random() *
+                Math.PI * 2
+        });
+    }
+}
 
 
-        /* =========================================
-           GRÜNE PARTIKEL
-        ========================================= */
+function animateStars() {
 
-        const particleContainer =
-            document.getElementById(
-                "particles"
-            );
+    ctx.clearRect(
+        0,
+        0,
+        width,
+        height
+    );
 
-        for (
-            let i = 0;
-            i < 35;
-            i++
+    for (
+        const star of stars
+    ) {
+
+        star.y +=
+            star.speed;
+
+        star.twinkle +=
+            .015;
+
+        if (
+            star.y >
+            height + 5
         ) {
 
-            const particle =
-                document.createElement(
-                    "div"
-                );
+            star.y = -5;
 
-            particle.className =
-                "particle";
-
-            particle.style.left =
-                Math.random() * 100 + "%";
-
-            particle.style.animationDuration =
-                (
-                    Math.random() * 12 + 8
-                ) + "s";
-
-            particle.style.animationDelay =
-                -(
-                    Math.random() * 15
-                ) + "s";
-
-            particle.style.opacity =
-                Math.random() * .7;
-
-            particleContainer.appendChild(
-                particle
-            );
+            star.x =
+                Math.random() *
+                width;
         }
 
-    </script>
+        const alpha =
+            Math.max(
+                .1,
+                Math.min(
+                    1,
+                    star.opacity +
+                    Math.sin(
+                        star.twinkle
+                    ) * .15
+                )
+            );
+
+        ctx.beginPath();
+
+        ctx.fillStyle =
+            "rgba(255,255,255," +
+            alpha +
+            ")";
+
+        ctx.arc(
+            star.x,
+            star.y,
+            star.size,
+            0,
+            Math.PI * 2
+        );
+
+        ctx.fill();
+    }
+
+    requestAnimationFrame(
+        animateStars
+    );
+}
+
+
+window.addEventListener(
+    "resize",
+    resizeCanvas
+);
+
+resizeCanvas();
+
+requestAnimationFrame(
+    animateStars
+);
+
+
+/* =========================================
+   PARTIKEL
+========================================= */
+
+const particleContainer =
+    document.getElementById(
+        "particles"
+    );
+
+for (
+    let i = 0;
+    i < 35;
+    i++
+) {
+
+    const particle =
+        document.createElement(
+            "div"
+        );
+
+    particle.className =
+        "particle";
+
+    particle.style.left =
+        Math.random() * 100 + "%";
+
+    particle.style.animationDuration =
+        (
+            Math.random() * 12 + 8
+        ) + "s";
+
+    particle.style.animationDelay =
+        -(
+            Math.random() * 15
+        ) + "s";
+
+    particleContainer.appendChild(
+        particle
+    );
+}
+
+</script>
 
 </body>
-</html>`);
+
+</html>
+    `);
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-    console.log("======================================");
-    console.log("⛏️ Minecraft Webseite gestartet");
-    console.log("🌐 Port: " + PORT);
-    console.log("⭐ Animierte Sterne: AKTIV");
-    console.log("✨ Partikel: AKTIV");
-    console.log("🌙 Mond: AKTIV");
-    console.log("☁️ Wolken: AKTIV");
-    console.log("🎵 Musik: DEAKTIVIERT");
-    console.log("📱 Mobile: AKTIV");
-    console.log("======================================");
-});
+
+/* =========================================
+   CHAT SERVER
+========================================= */
+
+io.on(
+    "connection",
+    (socket) => {
+
+        console.log(
+            "💬 Besucher verbunden:",
+            socket.id
+        );
+
+
+        socket.on(
+            "chatMessage",
+            (data) => {
+
+                if (!data) {
+                    return;
+                }
+
+                let name =
+                    String(
+                        data.name || "Player"
+                    )
+                    .trim()
+                    .slice(0, 24);
+
+                let text =
+                    String(
+                        data.text || ""
+                    )
+                    .trim()
+                    .slice(0, 300);
+
+                if (!text) {
+                    return;
+                }
+
+                if (!name) {
+                    name = "Player";
+                }
+
+                /*
+                 * Nachricht an alle
+                 */
+
+                io.emit(
+                    "chatMessage",
+                    {
+                        name: name,
+                        text: text
+                    }
+                );
+
+                console.log(
+                    "💬 " +
+                    name +
+                    ": " +
+                    text
+                );
+            }
+        );
+
+
+        socket.on(
+            "disconnect",
+            () => {
+
+                console.log(
+                    "👋 Besucher getrennt:",
+                    socket.id
+                );
+            }
+        );
+
+    }
+);
+
+
+/* =========================================
+   SERVER START
+========================================= */
+
+server.listen(
+    PORT,
+    "0.0.0.0",
+    () => {
+
+        console.log("");
+        console.log(
+            "======================================"
+        );
+        console.log(
+            "⛏️ Minecraft Hosting Webseite"
+        );
+        console.log(
+            "======================================"
+        );
+        console.log(
+            "🌐 Port: " + PORT
+        );
+        console.log(
+            "⭐ Sterne: AKTIV"
+        );
+        console.log(
+            "✨ Partikel: AKTIV"
+        );
+        console.log(
+            "🌙 Mond: AKTIV"
+        );
+        console.log(
+            "💬 Community Chat: AKTIV"
+        );
+        console.log(
+            "📱 Mobile: AKTIV"
+        );
+        console.log(
+            "======================================"
+        );
+        console.log("");
+
+    }
+);
