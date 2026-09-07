@@ -1,6 +1,7 @@
 {
-  "name": "minecraft-hosting",
+  "name": "minecraft-host-console",
   "version": "1.0.0",
+  "description": "Minecraft Hosting mit Host Console",
   "main": "webseite.js",
   "scripts": {
     "start": "node webseite.js"
