@@ -1,9 +1,13 @@
 {
   "name": "minecraft-hosting",
-  "version": "1.0.0",
+  "version": "2.0.0",
+  "description": "Minecraft Hosting Panel",
   "main": "webseite.js",
   "scripts": {
     "start": "node webseite.js"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
