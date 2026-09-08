@@ -6,41 +6,46 @@ const bcrypt = require("bcryptjs");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const os = require("os");
 const { spawn } = require("child_process");
 
 const app = express();
 
 const PORT = Number(process.env.PORT || 3000);
 const ADMIN_EMAIL = "florianzustolberg@gmail.com";
+const JAVA = process.env.JAVA_COMMAND || "java";
+const SERVER_RAM = Number(process.env.SERVER_RAM_MB || 5120);
 
 const DATA_DIR = path.join(__dirname, "data");
 const SERVERS_DIR = path.join(__dirname, "minecraft-servers");
 
-const USERS_FILE = path.join(DATA_DIR, "users.json");
-const ORDERS_FILE = path.join(DATA_DIR, "orders.json");
-const SERVERS_FILE = path.join(DATA_DIR, "servers.json");
-const LOG_FILE = path.join(DATA_DIR, "logs.json");
-const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
-
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(SERVERS_DIR, { recursive: true });
 
-function createFile(file, value) {
+const FILES = {
+    users: path.join(DATA_DIR, "users.json"),
+    orders: path.join(DATA_DIR, "orders.json"),
+    servers: path.join(DATA_DIR, "servers.json"),
+    logs: path.join(DATA_DIR, "logs.json"),
+    settings: path.join(DATA_DIR, "settings.json")
+};
+
+function createFile(file, data) {
     if (!fs.existsSync(file)) {
-        fs.writeFileSync(file, JSON.stringify(value, null, 2));
+        fs.writeFileSync(file, JSON.stringify(data, null, 2));
     }
 }
 
-createFile(USERS_FILE, []);
-createFile(ORDERS_FILE, []);
-createFile(SERVERS_FILE, []);
-createFile(LOG_FILE, []);
-createFile(SETTINGS_FILE, {
+createFile(FILES.users, []);
+createFile(FILES.orders, []);
+createFile(FILES.servers, []);
+createFile(FILES.logs, []);
+createFile(FILES.settings, {
     maintenance: false,
-    maintenanceText: "Die Webseite befindet sich momentan im Wartungsmodus."
+    maintenanceMessage: "Die Webseite befindet sich momentan im Wartungsmodus."
 });
 
-function read(file, fallback = []) {
+function readJSON(file, fallback) {
     try {
         return JSON.parse(fs.readFileSync(file, "utf8"));
     } catch {
@@ -48,61 +53,36 @@ function read(file, fallback = []) {
     }
 }
 
-function write(file, data) {
+function writeJSON(file, data) {
     fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
-function users() {
-    return read(USERS_FILE, []);
+function makeId(prefix) {
+    return prefix + "-" + crypto.randomBytes(8).toString("hex");
 }
 
-function orders() {
-    return read(ORDERS_FILE, []);
+function escapeHTML(value) {
+    return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
 }
 
-function servers() {
-    return read(SERVERS_FILE, []);
-}
+function addLog(type, message) {
+    const logs = readJSON(FILES.logs, []);
 
-function logs() {
-    return read(LOG_FILE, []);
-}
-
-function settings() {
-    return read(SETTINGS_FILE, {
-        maintenance: false,
-        maintenanceText: ""
-    });
-}
-
-function log(type, message) {
-    const data = logs();
-
-    data.unshift({
-        id: crypto.randomUUID(),
+    logs.unshift({
+        id: makeId("log"),
         type,
         message,
         date: new Date().toISOString()
     });
 
-    if (data.length > 1000) {
-        data.length = 1000;
-    }
+    writeJSON(FILES.logs, logs.slice(0, 5000));
 
-    write(LOG_FILE, data);
-
-    console.log(
-        `[${type}] ${message}`
-    );
-}
-
-function escape(text) {
-    return String(text ?? "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
+    console.log(`[${type}] ${message}`);
 }
 
 app.use(express.urlencoded({ extended: true }));
@@ -112,57 +92,75 @@ app.use(
     session({
         secret:
             process.env.SESSION_SECRET ||
-            "CHANGE_THIS_SECRET",
+            "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET",
         resave: false,
         saveUninitialized: false,
         cookie: {
             httpOnly: true,
-            maxAge: 7 * 24 * 60 * 60 * 1000
+            sameSite: "lax",
+            maxAge: 30 * 24 * 60 * 60 * 1000
         }
     })
 );
 
-function currentUser(req) {
-    if (!req.session.userId) {
-        return null;
-    }
+/* =========================================================
+   AUTH
+========================================================= */
 
-    return users().find(
+function getUser(req) {
+    if (!req.session.userId) return null;
+
+    return readJSON(FILES.users, []).find(
         user => user.id === req.session.userId
     ) || null;
 }
 
 function isAdmin(req) {
-    const user = currentUser(req);
+    const user = getUser(req);
 
-    return Boolean(
+    return (
         user &&
-        user.email.toLowerCase() ===
-            ADMIN_EMAIL.toLowerCase()
+        user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()
     );
 }
 
-function loginRequired(req, res, next) {
-    if (!currentUser(req)) {
+function isBanned(user) {
+    if (!user || !user.bannedUntil) return false;
+
+    if (user.bannedUntil === "permanent") {
+        return true;
+    }
+
+    return new Date(user.bannedUntil).getTime() > Date.now();
+}
+
+function requireLogin(req, res, next) {
+    const user = getUser(req);
+
+    if (!user) {
         return res.redirect("/login");
     }
 
-    next();
-}
-
-function adminRequired(req, res, next) {
-    if (!isAdmin(req)) {
+    if (!isAdmin(req) && isBanned(user)) {
         return res.status(403).send(
             page(
-                "Kein Zugriff",
+                req,
+                "Account gesperrt",
                 `
                 <div class="card center">
-                    <h1>403</h1>
-                    <p>Du hast keinen Zugriff auf diesen Bereich.</p>
-                    <a class="button" href="/">Home</a>
+                    <h1>🚫 Account gesperrt</h1>
+                    <p>${escapeHTML(
+                        user.banReason || "Kein Grund angegeben"
+                    )}</p>
+                    <p>
+                        ${
+                            user.bannedUntil === "permanent"
+                                ? "Dauerhaft"
+                                : escapeHTML(user.bannedUntil)
+                        }
+                    </p>
                 </div>
-                `,
-                req
+                `
             )
         );
     }
@@ -170,23 +168,66 @@ function adminRequired(req, res, next) {
     next();
 }
 
-function page(title, content, req) {
-    const user = currentUser(req);
+function requireAdmin(req, res, next) {
+    if (!isAdmin(req)) {
+        return res.status(403).send(
+            page(
+                req,
+                "403",
+                `
+                <div class="card center">
+                    <h1>403</h1>
+                    <p>Nur der Administrator darf diese Seite öffnen.</p>
+                </div>
+                `
+            )
+        );
+    }
+
+    next();
+}
+
+function checkMaintenance(req, res, next) {
+    const settings = readJSON(FILES.settings, {});
+
+    if (settings.maintenance && !isAdmin(req)) {
+        return res.status(503).send(
+            page(
+                req,
+                "Wartung",
+                `
+                <div class="hero">
+                    <h1>🔧 Wartung</h1>
+                    <p>
+                        ${escapeHTML(
+                            settings.maintenanceMessage ||
+                                "Die Webseite ist momentan nicht verfügbar."
+                        )}
+                    </p>
+                </div>
+                `
+            )
+        );
+    }
+
+    next();
+}
+
+/* =========================================================
+   HTML
+========================================================= */
+
+function page(req, title, content) {
+    const user = getUser(req);
 
     return `
 <!DOCTYPE html>
 <html lang="de">
-
 <head>
-
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
->
-
-<title>${escape(title)} | Minecraft Hosting</title>
+<title>${escapeHTML(title)} | Minecraft Hosting</title>
 
 <style>
 
@@ -196,29 +237,22 @@ function page(title, content, req) {
 
 body {
     margin: 0;
-    min-height: 100vh;
-    background:
-        radial-gradient(
-            circle at top,
-            #17351d,
-            #080808 55%
-        );
-    color: #fff;
+    background: #070907;
+    color: white;
     font-family: Arial, sans-serif;
 }
 
 header {
-    background: rgba(8,8,8,.95);
-    border-bottom: 1px solid #252525;
-    position: sticky;
-    top: 0;
-    z-index: 20;
+    background: #0c100d;
+    border-bottom: 1px solid #292e29;
 }
 
 .nav {
-    max-width: 1150px;
+    max-width: 1250px;
     margin: auto;
-    padding: 15px 20px;
+    min-height: 65px;
+    padding: 10px 16px;
+
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -226,34 +260,34 @@ header {
 }
 
 .logo {
-    color: #62ff78;
-    font-weight: 900;
+    color: #63ff78;
     text-decoration: none;
-    font-size: 20px;
+    font-weight: bold;
+    font-size: 21px;
 }
 
 nav {
     display: flex;
+    gap: 5px;
     flex-wrap: wrap;
-    gap: 6px;
 }
 
 nav a {
-    color: #ccc;
+    color: #aaa;
     text-decoration: none;
-    padding: 9px 11px;
+    padding: 9px 12px;
     border-radius: 8px;
 }
 
 nav a:hover {
-    background: #222;
-    color: #fff;
+    background: #202520;
+    color: white;
 }
 
 .container {
-    max-width: 1150px;
+    max-width: 1250px;
     width: calc(100% - 24px);
-    margin: 30px auto;
+    margin: 25px auto;
 }
 
 .hero {
@@ -262,27 +296,23 @@ nav a:hover {
 }
 
 .hero h1 {
-    font-size: clamp(38px, 8vw, 72px);
+    font-size: clamp(40px, 8vw, 75px);
     margin: 0 0 15px;
-}
-
-.hero p {
-    color: #aaa;
-    font-size: 18px;
 }
 
 .grid {
     display: grid;
     grid-template-columns:
         repeat(auto-fit, minmax(230px, 1fr));
-    gap: 16px;
+
+    gap: 15px;
 }
 
 .card {
-    background: #151515;
-    border: 1px solid #292929;
-    border-radius: 15px;
-    padding: 20px;
+    background: #111511;
+    border: 1px solid #292e29;
+    border-radius: 14px;
+    padding: 18px;
     margin-bottom: 15px;
 }
 
@@ -291,7 +321,7 @@ nav a:hover {
 }
 
 .form {
-    max-width: 500px;
+    max-width: 520px;
     margin: 40px auto;
 }
 
@@ -299,126 +329,126 @@ input,
 select,
 textarea {
     width: 100%;
-    background: #090909;
-    color: #fff;
-    border: 1px solid #333;
-    border-radius: 8px;
     padding: 12px;
-    margin-top: 6px;
-    margin-bottom: 15px;
+    margin: 6px 0 15px;
+
+    border-radius: 8px;
+    border: 1px solid #353b35;
+
+    background: #070907;
+    color: white;
+}
+
+textarea {
+    min-height: 100px;
 }
 
 button,
-.button {
+.btn {
     display: inline-block;
+
     border: 0;
     border-radius: 8px;
+
     padding: 11px 15px;
-    background: #4be263;
-    color: #061008;
-    font-weight: 800;
+
+    background: #63f474;
+    color: #071008;
+
+    font-weight: bold;
     text-decoration: none;
+
     cursor: pointer;
 }
 
 button:hover,
-.button:hover {
-    filter: brightness(1.1);
+.btn:hover {
+    opacity: .85;
 }
 
-.secondary {
-    background: #292929 !important;
-    color: #fff !important;
+.dark {
+    background: #292d2a;
+    color: white;
 }
 
-.danger {
-    background: #d94141 !important;
-    color: #fff !important;
+.red {
+    background: #d94b4b;
+    color: white;
 }
 
-.warning {
-    background: #d5a52f !important;
-    color: #111 !important;
+.yellow {
+    background: #e1bd42;
+    color: black;
 }
 
 .actions {
     display: flex;
-    flex-wrap: wrap;
     gap: 8px;
+    flex-wrap: wrap;
 }
 
 .price {
-    color: #66ff7b;
     font-size: 35px;
-    font-weight: 900;
+    font-weight: bold;
+    color: #63ff78;
 }
 
 .status {
     display: inline-block;
-    padding: 5px 9px;
+    padding: 5px 8px;
     border-radius: 7px;
     font-size: 12px;
-    font-weight: 800;
+    font-weight: bold;
 }
 
 .running {
-    background: #163b1d;
-    color: #70ff85;
+    background: #153b1b;
+    color: #70ff82;
 }
 
 .stopped {
-    background: #3e1919;
+    background: #421919;
     color: #ff8b8b;
 }
 
 .pending {
-    background: #453a16;
-    color: #ffd85c;
+    background: #403717;
+    color: #ffe06c;
 }
 
 .accepted {
-    background: #163b1d;
-    color: #70ff85;
+    background: #153b1b;
+    color: #70ff82;
 }
 
 .rejected {
-    background: #3e1919;
+    background: #421919;
     color: #ff8b8b;
 }
 
 .console {
-    background: #030303;
-    border: 1px solid #303030;
+    background: #020302;
+
+    border: 1px solid #303630;
     border-radius: 10px;
+
+    height: 460px;
+
+    overflow-y: auto;
+
     padding: 15px;
-    height: 430px;
-    overflow: auto;
+
     white-space: pre-wrap;
+
     font-family: Consolas, monospace;
-    color: #b9ffbf;
+    font-size: 13px;
+
+    color: #aaffb0;
 }
 
-.consolebar {
-    display: flex;
-    gap: 8px;
-    margin-top: 10px;
-}
-
-.consolebar input {
-    margin: 0;
-    flex: 1;
-}
-
-.notice {
-    padding: 14px;
-    border-radius: 9px;
-    background: #17341c;
-    border: 1px solid #2e7139;
-}
-
-.error {
-    background: #3a1919;
-    border-color: #713333;
+.metric {
+    font-size: 28px;
+    font-weight: bold;
 }
 
 table {
@@ -428,44 +458,17 @@ table {
 
 th,
 td {
+    padding: 9px;
+    border-bottom: 1px solid #292e29;
     text-align: left;
-    padding: 10px;
-    border-bottom: 1px solid #2b2b2b;
-}
-
-pre {
-    white-space: pre-wrap;
-    word-break: break-word;
 }
 
 .muted {
-    color: #888;
+    color: #858b86;
 }
 
-footer {
-    color: #666;
-    text-align: center;
-    padding: 40px 15px;
-}
-
-@media(max-width:700px) {
-
-    .nav {
-        flex-direction: column;
-    }
-
-    nav {
-        justify-content: center;
-    }
-
-    .hero {
-        padding: 40px 5px;
-    }
-
-    .consolebar {
-        flex-direction: column;
-    }
-
+.danger {
+    border-color: #702d2d;
 }
 
 </style>
@@ -489,19 +492,21 @@ footer {
 ${
     user
         ? `
-        <a href="/dashboard">Dashboard</a>
-        <a href="/order">Server bestellen</a>
-        ${
-            isAdmin(req)
-                ? `<a href="/admin">Admin</a>`
-                : ""
-        }
-        <a href="/logout">Logout</a>
-        `
+<a href="/dashboard">Dashboard</a>
+<a href="/order">Server bestellen</a>
+
+${
+    isAdmin(req)
+        ? `<a href="/admin">👑 Admin</a>`
+        : ""
+}
+
+<a href="/logout">Logout</a>
+`
         : `
-        <a href="/login">Anmelden</a>
-        <a href="/register">Registrieren</a>
-        `
+<a href="/login">Anmelden</a>
+<a href="/register">Registrieren</a>
+`
 }
 
 </nav>
@@ -516,48 +521,330 @@ ${content}
 
 </main>
 
-<footer>
+<footer class="center muted">
+
 Minecraft Hosting © ${new Date().getFullYear()}
+
 </footer>
 
 </body>
-
 </html>
 `;
 }
 
-/*
-=========================================================
-HOME
-=========================================================
-*/
+/* =========================================================
+   SERVER FUNCTIONS
+========================================================= */
+
+const processes = new Map();
+
+function findServer(serverId) {
+    return readJSON(FILES.servers, []).find(
+        server => server.id === serverId
+    ) || null;
+}
+
+function saveServer(server) {
+    const servers = readJSON(FILES.servers, []);
+
+    const index = servers.findIndex(
+        x => x.id === server.id
+    );
+
+    if (index === -1) {
+        servers.push(server);
+    } else {
+        servers[index] = server;
+    }
+
+    writeJSON(FILES.servers, servers);
+}
+
+function serverDirectory(server) {
+    return path.join(SERVERS_DIR, server.id);
+}
+
+function addServerConsole(server, text) {
+    const timestamp = new Date().toISOString();
+
+    const lines = String(text)
+        .replace(/\r/g, "")
+        .split("\n");
+
+    for (const line of lines) {
+        if (!line.trim()) continue;
+
+        server.console =
+            (server.console || "") +
+            `[${timestamp}] ${line}\n`;
+    }
+
+    if ((server.console || "").length > 200000) {
+        server.console =
+            server.console.slice(-200000);
+    }
+
+    saveServer(server);
+}
+
+function serverProcess(server) {
+    return processes.get(server.id);
+}
+
+async function startMinecraft(server) {
+    if (serverProcess(server)) {
+        return {
+            ok: false,
+            message: "Server läuft bereits."
+        };
+    }
+
+    const directory = serverDirectory(server);
+
+    fs.mkdirSync(directory, {
+        recursive: true
+    });
+
+    const jar = path.join(
+        directory,
+        "server.jar"
+    );
+
+    /*
+     * Die JAR muss entweder bereits im Serverordner liegen
+     * oder über MINECRAFT_JAR_URL bereitgestellt werden.
+     */
+
+    if (!fs.existsSync(jar)) {
+        return {
+            ok: false,
+            message:
+                "server.jar fehlt. Stelle MINECRAFT_JAR_URL als Render Environment Variable ein."
+        };
+    }
+
+    fs.writeFileSync(
+        path.join(directory, "eula.txt"),
+        "eula=true\n"
+    );
+
+    fs.writeFileSync(
+        path.join(directory, "server.properties"),
+        [
+            `server-port=${server.port}`,
+            "server-ip=",
+            `motd=${server.name}`,
+            "online-mode=true",
+            "enable-command-block=true",
+            "spawn-protection=0",
+            "view-distance=10",
+            "simulation-distance=10"
+        ].join("\n") + "\n"
+    );
+
+    const child = spawn(
+        JAVA,
+        [
+            "-Xms512M",
+            `-Xmx${server.ramMB}M`,
+            "-jar",
+            "server.jar",
+            "nogui"
+        ],
+        {
+            cwd: directory,
+            stdio: [
+                "pipe",
+                "pipe",
+                "pipe"
+            ]
+        }
+    );
+
+    processes.set(
+        server.id,
+        child
+    );
+
+    server.status = "running";
+    server.pid = child.pid;
+    server.startedAt =
+        new Date().toISOString();
+
+    saveServer(server);
+
+    addServerConsole(
+        server,
+        `Minecraft-Prozess gestartet. PID: ${child.pid}`
+    );
+
+    child.stdout.on(
+        "data",
+        data => {
+            addServerConsole(
+                server,
+                data.toString()
+            );
+        }
+    );
+
+    child.stderr.on(
+        "data",
+        data => {
+            addServerConsole(
+                server,
+                data.toString()
+            );
+        }
+    );
+
+    child.on(
+        "error",
+        error => {
+            addServerConsole(
+                server,
+                "PROZESS FEHLER: " +
+                    error.message
+            );
+        }
+    );
+
+    child.on(
+        "close",
+        code => {
+            processes.delete(server.id);
+
+            server.status = "stopped";
+            server.pid = null;
+
+            saveServer(server);
+
+            addServerConsole(
+                server,
+                `Minecraft wurde beendet. Exit-Code: ${code}`
+            );
+
+            addLog(
+                "SERVER_STOP",
+                `${server.name} beendet`
+            );
+        }
+    );
+
+    addLog(
+        "SERVER_START",
+        `${server.name} gestartet`
+    );
+
+    return {
+        ok: true
+    };
+}
+
+function stopMinecraft(server) {
+    const child =
+        serverProcess(server);
+
+    if (!child) {
+        server.status = "stopped";
+        server.pid = null;
+        saveServer(server);
+
+        return;
+    }
+
+    try {
+        child.stdin.write("stop\n");
+    } catch {}
+
+    setTimeout(() => {
+        if (processes.has(server.id)) {
+            try {
+                child.kill("SIGTERM");
+            } catch {}
+        }
+    }, 15000);
+}
+
+function sendMinecraftCommand(
+    server,
+    command
+) {
+    const child =
+        serverProcess(server);
+
+    if (!child) {
+        return {
+            ok: false,
+            message: "Der Server läuft nicht."
+        };
+    }
+
+    command = String(command || "")
+        .trim();
+
+    if (!command) {
+        return {
+            ok: false,
+            message: "Kein Befehl eingegeben."
+        };
+    }
+
+    try {
+        child.stdin.write(
+            command + "\n"
+        );
+
+        addServerConsole(
+            server,
+            `> ${command}`
+        );
+
+        return {
+            ok: true
+        };
+    } catch (error) {
+        return {
+            ok: false,
+            message: error.message
+        };
+    }
+}
+
+/* =========================================================
+   HOME
+========================================================= */
 
 app.get("/", (req, res) => {
+    const settings =
+        readJSON(FILES.settings, {});
 
-    const config = settings();
-
-    if (config.maintenance && !isAdmin(req)) {
+    if (
+        settings.maintenance &&
+        !isAdmin(req)
+    ) {
         return res.send(
             page(
+                req,
                 "Wartung",
                 `
                 <div class="hero">
-
                     <h1>🔧 Wartung</h1>
 
                     <p>
-                        ${escape(config.maintenanceText)}
+                    ${escapeHTML(
+                        settings.maintenanceMessage
+                    )}
                     </p>
-
                 </div>
-                `,
-                req
+                `
             )
         );
     }
 
     res.send(
         page(
+            req,
             "Home",
             `
             <section class="hero">
@@ -565,38 +852,23 @@ app.get("/", (req, res) => {
                 <h1>⛏ Minecraft Hosting</h1>
 
                 <p>
-                    Deine Minecraft-Server.
-                    Deine Konsole.
-                    Deine Verwaltung.
+                Erstelle und verwalte deine Minecraft-Server.
                 </p>
 
                 <div class="actions"
                      style="justify-content:center">
 
-                    ${
-                        currentUser(req)
-                            ? `
-                            <a
-                                class="button"
-                                href="/dashboard"
-                            >
-                                Zum Dashboard
-                            </a>
-                            `
-                            : `
-                            <a
-                                class="button"
-                                href="/register"
-                            >
-                                Jetzt registrieren
-                            </a>
-                            `
-                    }
+                    <a class="btn"
+                       href="${
+                           getUser(req)
+                               ? "/dashboard"
+                               : "/register"
+                       }">
+                        Jetzt starten
+                    </a>
 
-                    <a
-                        class="button secondary"
-                        href="/order"
-                    >
+                    <a class="btn dark"
+                       href="/order">
                         Server bestellen
                     </a>
 
@@ -607,61 +879,58 @@ app.get("/", (req, res) => {
             <div class="grid">
 
                 <div class="card">
-                    <h2>🆓 1 Server gratis</h2>
+                    <h2>🆓 1 Server kostenlos</h2>
                     <p>
-                        Jeder Account bekommt
-                        einen kostenlosen Server.
+                    Der erste Server eines Accounts
+                    ist kostenlos.
                     </p>
                 </div>
 
                 <div class="card">
                     <h2>💶 Weitere Server</h2>
                     <p>
-                        Jeder weitere Server:
-                        <strong>5 €</strong>.
+                    Weitere Server können für 5 €
+                    bestellt werden.
                     </p>
                 </div>
 
                 <div class="card">
                     <h2>🖥 Echte Konsole</h2>
                     <p>
-                        Die Web-Konsole zeigt die
-                        tatsächliche Minecraft-Ausgabe.
+                    Minecraft-Ausgaben werden
+                    direkt vom Java-Prozess empfangen.
                     </p>
                 </div>
 
                 <div class="card">
-                    <h2>🌐 Automatischer Port</h2>
+                    <h2>📊 Serververwaltung</h2>
                     <p>
-                        Für jeden Server wird
-                        ein eigener Port vergeben.
+                    Start, Stop, Neustart,
+                    Konsole und Logs.
                     </p>
                 </div>
 
             </div>
-            `,
-            req
+            `
         )
     );
 });
 
-/*
-=========================================================
-REGISTER
-=========================================================
-*/
+/* =========================================================
+   REGISTER
+========================================================= */
 
 app.get("/register", (req, res) => {
-
     res.send(
         page(
+            req,
             "Registrieren",
             `
             <div class="card form">
 
-                <h2>Account erstellen</h2>
+                <h1>Registrieren</h1>
 
-                <form method="POST" action="/register">
+                <form method="POST">
 
                     <label>Benutzername</label>
 
@@ -689,125 +958,122 @@ app.get("/register", (req, res) => {
                         required
                     >
 
-                    <button type="submit">
-                        Registrieren
+                    <button>
+                        Account erstellen
                     </button>
 
                 </form>
 
             </div>
-            `,
-            req
+            `
         )
     );
 });
 
-app.post("/register", async (req, res) => {
+app.post(
+    "/register",
+    async (req, res) => {
+        const username =
+            String(
+                req.body.username || ""
+            ).trim();
 
-    const username =
-        String(req.body.username || "").trim();
-
-    const email =
-        String(req.body.email || "")
-            .trim()
+        const email =
+            String(
+                req.body.email || ""
+            ).trim()
             .toLowerCase();
 
-    const password =
-        String(req.body.password || "");
+        const password =
+            String(
+                req.body.password || ""
+            );
 
-    if (
-        username.length < 3 ||
-        password.length < 6 ||
-        !email
-    ) {
-        return res.status(400).send(
-            page(
-                "Fehler",
-                `
-                <div class="card error">
-                    Ungültige Eingaben.
-                </div>
-                `,
-                req
+        const users =
+            readJSON(FILES.users, []);
+
+        if (
+            users.some(
+                user =>
+                    user.email.toLowerCase() ===
+                    email
             )
+        ) {
+            return res.status(400).send(
+                page(
+                    req,
+                    "Fehler",
+                    `
+                    <div class="card center">
+                        <h2>
+                        Diese E-Mail ist bereits registriert.
+                        </h2>
+                    </div>
+                    `
+                )
+            );
+        }
+
+        const passwordHash =
+            await bcrypt.hash(
+                password,
+                12
+            );
+
+        const user = {
+            id: makeId("user"),
+            username,
+            email,
+            passwordHash,
+            createdAt:
+                new Date().toISOString(),
+            bannedUntil: null,
+            banReason: null
+        };
+
+        users.push(user);
+
+        writeJSON(
+            FILES.users,
+            users
+        );
+
+        addLog(
+            "REGISTER",
+            email
+        );
+
+        res.redirect(
+            "/login?registered=1"
         );
     }
+);
 
-    const data = users();
-
-    if (
-        data.some(
-            user =>
-                user.email.toLowerCase() ===
-                email
-        )
-    ) {
-        return res.status(400).send(
-            page(
-                "Fehler",
-                `
-                <div class="card error">
-                    Diese E-Mail ist bereits registriert.
-                </div>
-                `,
-                req
-            )
-        );
-    }
-
-    const passwordHash =
-        await bcrypt.hash(password, 12);
-
-    const user = {
-        id: crypto.randomUUID(),
-        username,
-        email,
-        passwordHash,
-        createdAt: new Date().toISOString()
-    };
-
-    data.push(user);
-
-    write(USERS_FILE, data);
-
-    log(
-        "REGISTER",
-        `${username} hat einen Account erstellt.`
-    );
-
-    res.redirect("/login?registered=1");
-});
-
-/*
-=========================================================
-LOGIN
-=========================================================
-*/
+/* =========================================================
+   LOGIN
+========================================================= */
 
 app.get("/login", (req, res) => {
-
-    const registered =
-        req.query.registered === "1";
-
     res.send(
         page(
+            req,
             "Anmelden",
             `
             <div class="card form">
 
+                <h1>🔐 Anmelden</h1>
+
                 ${
-                    registered
+                    req.query.registered
                         ? `
-                        <div class="notice">
+                        <div class="card">
                             Registrierung erfolgreich.
                         </div>
                         `
                         : ""
                 }
 
-                <h2>Anmelden</h2>
-
-                <form method="POST" action="/login">
+                <form method="POST">
 
                     <label>E-Mail</label>
 
@@ -825,104 +1091,125 @@ app.get("/login", (req, res) => {
                         required
                     >
 
-                    <button type="submit">
+                    <button>
                         Anmelden
                     </button>
 
                 </form>
 
             </div>
-            `,
-            req
+            `
         )
     );
 });
 
-app.post("/login", async (req, res) => {
-
-    const email =
-        String(req.body.email || "")
-            .trim()
+app.post(
+    "/login",
+    async (req, res) => {
+        const email =
+            String(
+                req.body.email || ""
+            ).trim()
             .toLowerCase();
 
-    const password =
-        String(req.body.password || "");
+        const password =
+            String(
+                req.body.password || ""
+            );
 
-    const user =
-        users().find(
-            item =>
-                item.email.toLowerCase() ===
-                email
+        const users =
+            readJSON(FILES.users, []);
+
+        const user =
+            users.find(
+                x =>
+                    x.email.toLowerCase() ===
+                    email
+            );
+
+        if (
+            !user ||
+            !(await bcrypt.compare(
+                password,
+                user.passwordHash
+            ))
+        ) {
+            return res.status(401).send(
+                page(
+                    req,
+                    "Fehler",
+                    `
+                    <div class="card center">
+                        <h2>
+                        E-Mail oder Passwort falsch.
+                        </h2>
+                    </div>
+                    `
+                )
+            );
+        }
+
+        if (isBanned(user)) {
+            return res.status(403).send(
+                page(
+                    req,
+                    "Gesperrt",
+                    `
+                    <div class="card center">
+                        <h1>🚫 Gesperrt</h1>
+
+                        <p>
+                        ${escapeHTML(
+                            user.banReason ||
+                                "Kein Grund"
+                        )}
+                        </p>
+                    </div>
+                    `
+                )
+            );
+        }
+
+        req.session.userId =
+            user.id;
+
+        addLog(
+            "LOGIN",
+            email
         );
 
-    if (
-        !user ||
-        !(await bcrypt.compare(
-            password,
-            user.passwordHash
-        ))
-    ) {
-        return res.status(401).send(
-            page(
-                "Login fehlgeschlagen",
-                `
-                <div class="card error center">
-
-                    <h2>❌ Login fehlgeschlagen</h2>
-
-                    <p>
-                        E-Mail oder Passwort ist falsch.
-                    </p>
-
-                    <a
-                        class="button"
-                        href="/login"
-                    >
-                        Erneut versuchen
-                    </a>
-
-                </div>
-                `,
-                req
-            )
+        res.redirect(
+            "/dashboard"
         );
     }
+);
 
-    req.session.userId =
-        user.id;
+app.get(
+    "/logout",
+    (req, res) => {
+        req.session.destroy(
+            () => res.redirect("/")
+        );
+    }
+);
 
-    log(
-        "LOGIN",
-        `${user.username} hat sich angemeldet.`
-    );
-
-    res.redirect("/dashboard");
-});
-
-app.get("/logout", (req, res) => {
-
-    req.session.destroy(
-        () => res.redirect("/")
-    );
-
-});
-
-/*
-=========================================================
-ORDER
-=========================================================
-*/
+/* =========================================================
+   ORDER
+========================================================= */
 
 app.get(
     "/order",
-    loginRequired,
+    requireLogin,
+    checkMaintenance,
     (req, res) => {
-
         const user =
-            currentUser(req);
+            getUser(req);
 
         const count =
-            servers().filter(
+            readJSON(
+                FILES.servers,
+                []
+            ).filter(
                 server =>
                     server.ownerId ===
                     user.id
@@ -935,71 +1222,71 @@ app.get(
 
         res.send(
             page(
+                req,
                 "Server bestellen",
                 `
                 <div class="card form">
 
-                    <h2>⛏ Server bestellen</h2>
+                    <h1>
+                    ⛏ Server bestellen
+                    </h1>
 
-                    <div class="notice">
+                    <div class="card">
 
+                        <h2>
                         ${
                             price === 0
-                                ? "🆓 Dein erster Server ist kostenlos."
-                                : "💶 Dieser weitere Server kostet 5 €."
+                                ? "🆓 Kostenlos"
+                                : "💶 5 €"
                         }
+                        </h2>
 
                     </div>
 
-                    <br>
-
-                    <form
-                        method="POST"
-                        action="/order"
-                    >
+                    <form method="POST">
 
                         <label>
-                            Servername
+                        Servername
                         </label>
 
                         <input
                             name="serverName"
-                            placeholder="Mein Minecraft Server"
                             maxlength="40"
                             required
                         >
 
                         <label>
-                            Minecraft-Version
+                        Minecraft Version
                         </label>
 
                         <select name="version">
 
-                            <option>1.21.8</option>
-                            <option>1.21.7</option>
-                            <option>1.21.6</option>
-                            <option>1.21.5</option>
-                            <option>1.21.4</option>
-                            <option>1.20.6</option>
+                            <option>
+                            1.21.8
+                            </option>
+
+                            <option>
+                            1.21.7
+                            </option>
+
+                            <option>
+                            1.21.6
+                            </option>
+
+                            <option>
+                            1.20.6
+                            </option>
 
                         </select>
 
-                        <p>
-                            Preis:
-                            <strong>
-                                ${price.toFixed(2)} €
-                            </strong>
-                        </p>
-
-                        <button type="submit">
-                            Bestellung erstellen
+                        <button>
+                        Bestellung absenden
                         </button>
 
                     </form>
 
                 </div>
-                `,
-                req
+                `
             )
         );
     }
@@ -1007,11 +1294,11 @@ app.get(
 
 app.post(
     "/order",
-    loginRequired,
+    requireLogin,
+    checkMaintenance,
     (req, res) => {
-
         const user =
-            currentUser(req);
+            getUser(req);
 
         const serverName =
             String(
@@ -1020,161 +1307,178 @@ app.post(
 
         const version =
             String(
-                req.body.version || "1.21.8"
-            ).trim();
-
-        if (!serverName) {
-            return res.status(400).send(
-                "Servername fehlt."
+                req.body.version ||
+                    "1.21.8"
             );
-        }
 
         const count =
-            servers().filter(
+            readJSON(
+                FILES.servers,
+                []
+            ).filter(
                 server =>
                     server.ownerId ===
                     user.id
             ).length;
 
-        const price =
-            count === 0
-                ? 0
-                : 5;
-
-        const orderNumber =
-            "MC-" +
-            Date.now().toString(36).toUpperCase() +
-            "-" +
-            crypto
-                .randomBytes(3)
-                .toString("hex")
-                .toUpperCase();
-
         const order = {
-            id: crypto.randomUUID(),
-            orderNumber,
+            id: makeId("order"),
+
+            orderNumber:
+                "MC-" +
+                Date.now()
+                    .toString(36)
+                    .toUpperCase() +
+                "-" +
+                crypto
+                    .randomBytes(3)
+                    .toString("hex")
+                    .toUpperCase(),
+
             userId: user.id,
-            username: user.username,
-            email: user.email,
+
+            username:
+                user.username,
+
+            email:
+                user.email,
+
             serverName,
+
             version,
-            price,
-            status: "pending",
-            createdAt: new Date().toISOString(),
-            reviewedAt: null
+
+            price:
+                count === 0
+                    ? 0
+                    : 5,
+
+            status:
+                "pending",
+
+            createdAt:
+                new Date().toISOString()
         };
 
-        const data = orders();
+        const orders =
+            readJSON(
+                FILES.orders,
+                []
+            );
 
-        data.push(order);
+        orders.push(order);
 
-        write(
-            ORDERS_FILE,
-            data
+        writeJSON(
+            FILES.orders,
+            orders
         );
 
-        log(
+        addLog(
             "ORDER",
-            `Neue Bestellung ${orderNumber} von ${user.username}.`
+            order.orderNumber
         );
 
         res.send(
             page(
+                req,
                 "Bestellung",
                 `
                 <div class="card center">
 
-                    <h1>✅ Bestellung erstellt</h1>
+                    <h1>
+                    ✅ Bestellung erstellt
+                    </h1>
 
-                    <div class="notice">
-
-                        <strong>
-                            Bestellnummer
-                        </strong>
-
-                        <h2>
-                            ${escape(orderNumber)}
-                        </h2>
-
-                    </div>
+                    <h2>
+                    ${escapeHTML(
+                        order.orderNumber
+                    )}
+                    </h2>
 
                     <p>
-                        Die Bestellung wartet auf
-                        die Prüfung durch einen Admin.
+                    Ein Admin muss die Bestellung
+                    zuerst annehmen.
                     </p>
 
                     <a
-                        class="button"
-                        href="/dashboard"
-                    >
+                        class="btn"
+                        href="/dashboard">
                         Dashboard
                     </a>
 
                 </div>
-                `,
-                req
+                `
             )
         );
     }
 );
 
-/*
-=========================================================
-DASHBOARD
-=========================================================
-*/
+/* =========================================================
+   DASHBOARD
+========================================================= */
 
 app.get(
     "/dashboard",
-    loginRequired,
+    requireLogin,
+    checkMaintenance,
     (req, res) => {
-
         const user =
-            currentUser(req);
+            getUser(req);
 
-        const myServers =
-            servers().filter(
+        const servers =
+            readJSON(
+                FILES.servers,
+                []
+            ).filter(
                 server =>
                     server.ownerId ===
                     user.id
             );
 
-        const myOrders =
-            orders()
-                .filter(
-                    order =>
-                        order.userId ===
-                        user.id
-                )
-                .reverse();
+        const orders =
+            readJSON(
+                FILES.orders,
+                []
+            )
+            .filter(
+                order =>
+                    order.userId ===
+                    user.id
+            )
+            .reverse();
 
         res.send(
             page(
+                req,
                 "Dashboard",
                 `
                 <h1>
-                    👋 Willkommen,
-                    ${escape(user.username)}
+                👋 Hallo ${escapeHTML(
+                    user.username
+                )}
                 </h1>
 
                 <div class="grid">
 
                     <div class="card">
 
-                        <h3>Server</h3>
+                        <h3>
+                        Server
+                        </h3>
 
                         <div class="price">
-                            ${myServers.length}
+                        ${servers.length}
                         </div>
 
                     </div>
 
                     <div class="card">
 
-                        <h3>Bestellungen</h3>
+                        <h3>
+                        Bestellungen
+                        </h3>
 
                         <div class="price">
-                            ${myOrders.length}
+                        ${orders.length}
                         </div>
 
                     </div>
@@ -1183,624 +1487,250 @@ app.get(
 
                 <div class="card">
 
-                    <h2>🖥 Deine Server</h2>
+                    <h2>
+                    🖥 Meine Server
+                    </h2>
 
                     ${
-                        myServers.length === 0
-                            ? `
-                            <p class="muted">
-                                Du hast noch keinen Server.
-                            </p>
-                            `
-                            :
-                            myServers
-                                .map(
-                                    server => `
-                                    <div class="card">
+                        servers.length
+                            ? servers
+                                  .map(
+                                      server => `
+                                      <div class="card">
 
-                                        <h3>
-                                            ${escape(
-                                                server.name
-                                            )}
-                                        </h3>
+                                          <h3>
+                                          ${escapeHTML(
+                                              server.name
+                                          )}
+                                          </h3>
 
-                                        <p>
-                                            IP:
-                                            <strong>
-                                                ${escape(
-                                                    server.address
-                                                )}
-                                            </strong>
-                                        </p>
+                                          <p>
+                                          IP:
+                                          ${escapeHTML(
+                                              server.address
+                                          )}
+                                          </p>
 
-                                        <p>
-                                            Status:
-                                            <span class="status ${
+                                          <span
+                                            class="status ${
                                                 server.status ===
                                                 "running"
                                                     ? "running"
                                                     : "stopped"
                                             }">
-                                                ${escape(
-                                                    server.status
-                                                )}
-                                            </span>
-                                        </p>
 
-                                        <a
-                                            class="button"
+                                            ${escapeHTML(
+                                                server.status
+                                            )}
+
+                                          </span>
+
+                                          <a
+                                            class="btn"
                                             href="/server/${
-                                                encodeURIComponent(
-                                                    server.id
-                                                )
-                                            }"
-                                        >
-                                            Verwalten
-                                        </a>
+                                                server.id
+                                            }">
 
-                                    </div>
-                                    `
-                                )
-                                .join("")
+                                            Verwalten
+
+                                          </a>
+
+                                      </div>
+                                      `
+                                  )
+                                  .join("")
+                            : `<p class="muted">
+                                Noch keine Server.
+                               </p>`
                     }
 
                 </div>
 
                 <div class="card">
 
-                    <h2>📦 Deine Bestellungen</h2>
+                    <h2>
+                    📦 Bestellungen
+                    </h2>
 
                     ${
-                        myOrders.length === 0
-                            ? `
-                            <p class="muted">
+                        orders.length
+                            ? orders
+                                  .map(
+                                      order => `
+                                      <p>
+
+                                      <b>
+                                      ${escapeHTML(
+                                          order.orderNumber
+                                      )}
+                                      </b>
+
+                                      –
+                                      ${escapeHTML(
+                                          order.serverName
+                                      )}
+
+                                      –
+                                      ${order.price.toFixed(
+                                          2
+                                      )} €
+
+                                      –
+                                      <span class="status ${
+                                          order.status
+                                      }">
+
+                                      ${escapeHTML(
+                                          order.status
+                                      )}
+
+                                      </span>
+
+                                      </p>
+                                      `
+                                  )
+                                  .join("")
+                            : `<p class="muted">
                                 Keine Bestellungen.
-                            </p>
-                            `
-                            :
-                            `
-                            <table>
-
-                                <tr>
-                                    <th>Nummer</th>
-                                    <th>Server</th>
-                                    <th>Preis</th>
-                                    <th>Status</th>
-                                </tr>
-
-                                ${myOrders
-                                    .map(
-                                        order => `
-                                        <tr>
-
-                                            <td>
-                                                ${escape(
-                                                    order.orderNumber
-                                                )}
-                                            </td>
-
-                                            <td>
-                                                ${escape(
-                                                    order.serverName
-                                                )}
-                                            </td>
-
-                                            <td>
-                                                ${order.price.toFixed(
-                                                    2
-                                                )} €
-                                            </td>
-
-                                            <td>
-                                                <span class="status ${
-                                                    order.status
-                                                }">
-                                                    ${escape(
-                                                        order.status
-                                                    )}
-                                                </span>
-                                            </td>
-
-                                        </tr>
-                                        `
-                                    )
-                                    .join("")}
-
-                            </table>
-                            `
+                               </p>`
                     }
 
                 </div>
-                `,
-                req
+                `
             )
         );
     }
 );
 
-/*
-=========================================================
-PORT FINDER
-=========================================================
-*/
-
-async function findFreePort() {
-
-    const existing =
-        new Set(
-            servers()
-                .map(
-                    server =>
-                        Number(server.port)
-                )
-                .filter(Boolean)
-        );
-
-    for (
-        let port = 25565;
-        port <= 25650;
-        port++
-    ) {
-
-        if (existing.has(port)) {
-            continue;
-        }
-
-        const free =
-            await new Promise(resolve => {
-
-                const test =
-                    require("net")
-                        .createServer();
-
-                test.once(
-                    "error",
-                    () => resolve(false)
-                );
-
-                test.once(
-                    "listening",
-                    () => {
-
-                        test.close(
-                            () => resolve(true)
-                        );
-
-                    }
-                );
-
-                test.listen(
-                    port,
-                    "0.0.0.0"
-                );
-
-            });
-
-        if (free) {
-            return port;
-        }
-    }
-
-    throw new Error(
-        "Keine freien Minecraft-Ports."
-    );
-}
-
-/*
-=========================================================
-MINECRAFT PROCESS MANAGEMENT
-=========================================================
-*/
-
-const processes = new Map();
-
-async function startServer(server) {
-
-    if (
-        processes.has(server.id)
-    ) {
-        return {
-            ok: false,
-            message: "Server läuft bereits."
-        };
-    }
-
-    const folder =
-        path.join(
-            SERVERS_DIR,
-            server.id
-        );
-
-    fs.mkdirSync(
-        folder,
-        { recursive: true }
-    );
-
-    const jar =
-        path.join(
-            folder,
-            "server.jar"
-        );
-
-    if (!fs.existsSync(jar)) {
-
-        return {
-            ok: false,
-            message:
-                "server.jar fehlt. Bitte lege die Minecraft-Server-JAR in den Serverordner."
-        };
-
-    }
-
-    fs.writeFileSync(
-        path.join(
-            folder,
-            "eula.txt"
-        ),
-        "eula=true\n"
-    );
-
-    const properties = `
-server-port=${server.port}
-server-ip=
-motd=${server.name}
-online-mode=true
-enable-command-block=true
-spawn-protection=0
-view-distance=10
-simulation-distance=10
-`;
-
-    fs.writeFileSync(
-        path.join(
-            folder,
-            "server.properties"
-        ),
-        properties.trim() + "\n"
-    );
-
-    const child =
-        spawn(
-            process.env.JAVA_COMMAND || "java",
-            [
-                `-Xms${server.memory || 1024}M`,
-                `-Xmx${server.memory || 1024}M`,
-                "-jar",
-                "server.jar",
-                "nogui"
-            ],
-            {
-                cwd: folder,
-                stdio: [
-                    "pipe",
-                    "pipe",
-                    "pipe"
-                ]
-            }
-        );
-
-    processes.set(
-        server.id,
-        child
-    );
-
-    server.status = "running";
-    server.pid = child.pid;
-    server.startedAt =
-        new Date().toISOString();
-
-    saveServer(server);
-
-    addServerLog(
-        server,
-        `Minecraft gestartet. PID ${child.pid}`
-    );
-
-    child.stdout.on(
-        "data",
-        data => {
-
-            addServerLog(
-                server,
-                data.toString().trimEnd()
-            );
-
-        }
-    );
-
-    child.stderr.on(
-        "data",
-        data => {
-
-            addServerLog(
-                server,
-                data.toString().trimEnd()
-            );
-
-        }
-    );
-
-    child.on(
-        "error",
-        error => {
-
-            addServerLog(
-                server,
-                `Prozessfehler: ${error.message}`
-            );
-
-        }
-    );
-
-    child.on(
-        "close",
-        code => {
-
-            processes.delete(
-                server.id
-            );
-
-            server.status =
-                "stopped";
-
-            server.pid =
-                null;
-
-            saveServer(server);
-
-            addServerLog(
-                server,
-                `Minecraft beendet. Exit-Code: ${code}`
-            );
-
-        }
-    );
-
-    return {
-        ok: true
-    };
-}
-
-function stopServer(server) {
-
-    const child =
-        processes.get(
-            server.id
-        );
-
-    if (!child) {
-
-        server.status =
-            "stopped";
-
-        server.pid =
-            null;
-
-        saveServer(server);
-
-        return {
-            ok: true
-        };
-
-    }
-
-    try {
-        child.stdin.write(
-            "stop\n"
-        );
-    } catch {}
-
-    setTimeout(
-        () => {
-
-            if (
-                processes.has(
-                    server.id
-                )
-            ) {
-
-                try {
-                    child.kill("SIGTERM");
-                } catch {}
-
-            }
-
-        },
-        15000
-    );
-
-    return {
-        ok: true
-    };
-}
-
-function sendCommand(server, command) {
-
-    const child =
-        processes.get(
-            server.id
-        );
-
-    if (!child) {
-        return {
-            ok: false,
-            message: "Server läuft nicht."
-        };
-    }
-
-    const value =
-        String(command || "").trim();
-
-    if (!value) {
-        return {
-            ok: false,
-            message: "Befehl fehlt."
-        };
-    }
-
-    try {
-
-        child.stdin.write(
-            value + "\n"
-        );
-
-        addServerLog(
-            server,
-            `> ${value}`
-        );
-
-        return {
-            ok: true
-        };
-
-    } catch (error) {
-
-        return {
-            ok: false,
-            message: error.message
-        };
-
-    }
-}
-
-function addServerLog(server, text) {
-
-    const line =
-        `[${new Date().toISOString()}] ${text}`;
-
-    server.console =
-        (server.console || "") +
-        line +
-        "\n";
-
-    if (
-        server.console.length > 50000
-    ) {
-        server.console =
-            server.console.slice(-50000);
-    }
-
-    saveServer(server);
-}
-
-function saveServer(server) {
-
-    const data =
-        servers();
-
-    const index =
-        data.findIndex(
-            item =>
-                item.id ===
-                server.id
-        );
-
-    if (index === -1) {
-        return;
-    }
-
-    data[index] =
-        server;
-
-    write(
-        SERVERS_FILE,
-        data
-    );
-}
-
-/*
-=========================================================
-SERVER PAGE
-=========================================================
-*/
+/* =========================================================
+   SERVER PAGE
+========================================================= */
 
 app.get(
     "/server/:id",
-    loginRequired,
+    requireLogin,
+    checkMaintenance,
     (req, res) => {
-
         const server =
-            servers().find(
-                item =>
-                    item.id ===
-                    req.params.id
+            findServer(
+                req.params.id
             );
 
-        if (!server) {
+        const user =
+            getUser(req);
+
+        if (
+            !server ||
+            (
+                server.ownerId !== user.id &&
+                !isAdmin(req)
+            )
+        ) {
             return res.status(404).send(
                 "Server nicht gefunden."
             );
         }
 
-        const user =
-            currentUser(req);
-
-        const allowed =
-            server.ownerId === user.id ||
-            isAdmin(req);
-
-        if (!allowed) {
-            return res.status(403).send(
-                "Kein Zugriff."
-            );
-        }
-
         res.send(
             page(
+                req,
                 server.name,
                 `
                 <div class="card">
 
                     <h1>
-                        ⛏ ${escape(server.name)}
+                    ⛏ ${escapeHTML(
+                        server.name
+                    )}
                     </h1>
 
                     <p>
-                        IP:
-                        <strong>
-                            ${escape(server.address)}
-                        </strong>
+                    IP:
+                    <b>
+                    ${escapeHTML(
+                        server.address
+                    )}
+                    </b>
                     </p>
 
                     <p>
-                        Version:
-                        ${escape(server.version)}
-                    </p>
+                    Version:
+                    ${escapeHTML(
+                        server.version
+                    )}
 
-                    <p>
-                        Port:
-                        ${server.port}
-                    </p>
+                    · Port:
+                    ${server.port}
 
-                    <p>
-                        Status:
-
-                        <span
-                            class="status ${
-                                server.status ===
-                                "running"
-                                    ? "running"
-                                    : "stopped"
-                            }"
-                        >
-                            ${escape(server.status)}
-                        </span>
+                    · RAM:
+                    ${server.ramMB} MB
 
                     </p>
+
+                    <div class="grid">
+
+                        <div class="card">
+
+                            <h3>
+                            Status
+                            </h3>
+
+                            <div
+                                id="status"
+                                class="metric">
+
+                                ${escapeHTML(
+                                    server.status
+                                )}
+
+                            </div>
+
+                        </div>
+
+                        <div class="card">
+
+                            <h3>
+                            RAM
+                            </h3>
+
+                            <div
+                                id="ram"
+                                class="metric">
+
+                                0 MB
+
+                            </div>
+
+                        </div>
+
+                        <div class="card">
+
+                            <h3>
+                            CPU
+                            </h3>
+
+                            <div
+                                id="cpu"
+                                class="metric">
+
+                                0 %
+
+                            </div>
+
+                        </div>
+
+                    </div>
 
                     <div class="actions">
 
                         <form
                             method="POST"
                             action="/server/${
-                                encodeURIComponent(
-                                    server.id
-                                )
-                            }/start"
-                        >
+                                server.id
+                            }/start">
 
                             <button>
-                                ▶ Start
+                            ▶ Start
                             </button>
 
                         </form>
@@ -1808,14 +1738,23 @@ app.get(
                         <form
                             method="POST"
                             action="/server/${
-                                encodeURIComponent(
-                                    server.id
-                                )
-                            }/stop"
-                        >
+                                server.id
+                            }/stop">
 
-                            <button class="secondary">
-                                ⏹ Stop
+                            <button class="dark">
+                            ⏹ Stop
+                            </button>
+
+                        </form>
+
+                        <form
+                            method="POST"
+                            action="/server/${
+                                server.id
+                            }/restart">
+
+                            <button class="yellow">
+                            🔄 Neustart
                             </button>
 
                         </form>
@@ -1826,414 +1765,453 @@ app.get(
 
                 <div class="card">
 
-                    <h2>🖥 Echte Minecraft-Konsole</h2>
+                    <h2>
+                    🖥 Echte Minecraft-Konsole
+                    </h2>
 
                     <pre
                         id="console"
-                        class="console"
-                    >${escape(
-                        server.console ||
-                        "Noch keine Logs."
-                    )}</pre>
+                        class="console">${escapeHTML(
+                            server.console ||
+                                "Noch keine Ausgabe."
+                        )}</pre>
 
-                    <div class="consolebar">
+                    <form
+                        id="commandForm">
 
                         <input
                             id="command"
                             placeholder="Minecraft-Befehl, z.B. say Hallo"
+                            autocomplete="off"
                         >
 
-                        <button
-                            onclick="sendCommand()"
-                        >
-                            Senden
+                        <button>
+                        Befehl senden
                         </button>
 
-                    </div>
+                    </form>
 
                 </div>
 
 <script>
 
-const output =
+const consoleBox =
     document.getElementById("console");
 
-const input =
+const commandInput =
     document.getElementById("command");
 
-async function sendCommand() {
+document
+.getElementById("commandForm")
+.addEventListener(
+    "submit",
+    async event => {
 
-    const command =
-        input.value.trim();
+        event.preventDefault();
 
-    if (!command) {
-        return;
-    }
+        const command =
+            commandInput.value.trim();
 
-    const response =
-        await fetch(
-            "/api/server/${encodeURIComponent(
-                server.id
-            )}/command",
-            {
-                method: "POST",
+        if (!command) return;
 
-                headers: {
-                    "Content-Type":
-                        "application/json"
-                },
+        const response =
+            await fetch(
+                "/api/server/${
+                    server.id
+                }/command",
+                {
+                    method: "POST",
 
-                body:
-                    JSON.stringify({
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+
+                    body: JSON.stringify({
                         command
                     })
-            }
-        );
+                }
+            );
 
-    const result =
-        await response.json();
+        const result =
+            await response.json();
 
-    if (!result.ok) {
-        alert(
-            result.message ||
-            "Fehler"
-        );
-        return;
+        if (!result.ok) {
+            alert(
+                result.message ||
+                "Fehler"
+            );
+
+            return;
+        }
+
+        commandInput.value = "";
+
     }
+);
 
-    input.value = "";
+async function updateServer() {
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/server/${
+                    server.id
+                }/state"
+            );
+
+        const data =
+            await response.json();
+
+        if (!data.ok) return;
+
+        consoleBox.textContent =
+            data.console;
+
+        document
+            .getElementById("status")
+            .textContent =
+                data.status;
+
+        document
+            .getElementById("ram")
+            .textContent =
+                data.ram + " MB";
+
+        document
+            .getElementById("cpu")
+            .textContent =
+                data.cpu + " %";
+
+        consoleBox.scrollTop =
+            consoleBox.scrollHeight;
+
+    } catch {}
 
 }
 
-input.addEventListener(
-    "keydown",
-    event => {
-
-        if (
-            event.key === "Enter"
-        ) {
-            sendCommand();
-        }
-
-    }
-);
-
 setInterval(
-    async () => {
-
-        try {
-
-            const response =
-                await fetch(
-                    "/api/server/${encodeURIComponent(
-                        server.id
-                    )}/logs"
-                );
-
-            const data =
-                await response.json();
-
-            if (
-                data.console !==
-                output.textContent
-            ) {
-
-                output.textContent =
-                    data.console;
-
-                output.scrollTop =
-                    output.scrollHeight;
-
-            }
-
-        } catch {}
-
-    },
+    updateServer,
     1000
 );
 
+updateServer();
+
 </script>
-                `,
-                req
+                `
             )
         );
     }
 );
 
-/*
-=========================================================
-SERVER LOG API
-=========================================================
-*/
+/* =========================================================
+   SERVER API
+========================================================= */
 
 app.get(
-    "/api/server/:id/logs",
-    loginRequired,
+    "/api/server/:id/state",
+    requireLogin,
+    checkMaintenance,
     (req, res) => {
-
         const server =
-            servers().find(
-                item =>
-                    item.id ===
-                    req.params.id
+            findServer(
+                req.params.id
             );
 
-        if (!server) {
-            return res.status(404).json({
+        const user =
+            getUser(req);
+
+        if (
+            !server ||
+            (
+                server.ownerId !== user.id &&
+                !isAdmin(req)
+            )
+        ) {
+            return res.json({
                 ok: false
             });
         }
 
-        const user =
-            currentUser(req);
+        const process =
+            serverProcess(server);
 
-        if (
-            server.ownerId !== user.id &&
-            !isAdmin(req)
-        ) {
-            return res.status(403).json({
-                ok: false
-            });
+        let ram = 0;
+
+        if (process) {
+            try {
+                ram = Math.round(
+                    process.pid
+                        ? process.memoryUsage
+                            ? 0
+                            : 0
+                        : 0
+                );
+            } catch {}
         }
 
         res.json({
             ok: true,
+            status: server.status,
             console:
-                server.console || ""
+                server.console || "",
+            ram,
+            cpu: process ? 0 : 0
         });
-
     }
 );
-
-/*
-=========================================================
-SERVER START
-=========================================================
-*/
-
-app.post(
-    "/server/:id/start",
-    loginRequired,
-    async (req, res) => {
-
-        const server =
-            servers().find(
-                item =>
-                    item.id ===
-                    req.params.id
-            );
-
-        if (!server) {
-            return res.status(404).send(
-                "Server nicht gefunden."
-            );
-        }
-
-        const user =
-            currentUser(req);
-
-        if (
-            server.ownerId !== user.id &&
-            !isAdmin(req)
-        ) {
-            return res.status(403).send(
-                "Kein Zugriff."
-            );
-        }
-
-        const result =
-            await startServer(server);
-
-        if (!result.ok) {
-            return res.status(400).send(
-                page(
-                    "Fehler",
-                    `
-                    <div class="card error">
-
-                        <h2>
-                            ❌ Server konnte nicht gestartet werden
-                        </h2>
-
-                        <p>
-                            ${escape(
-                                result.message
-                            )}
-                        </p>
-
-                        <a
-                            class="button"
-                            href="/server/${encodeURIComponent(
-                                server.id
-                            )}"
-                        >
-                            Zurück
-                        </a>
-
-                    </div>
-                    `,
-                    req
-                )
-            );
-        }
-
-        log(
-            "SERVER_START",
-            `${server.name} wurde gestartet.`
-        );
-
-        res.redirect(
-            `/server/${encodeURIComponent(
-                server.id
-            )}`
-        );
-    }
-);
-
-/*
-=========================================================
-SERVER STOP
-=========================================================
-*/
-
-app.post(
-    "/server/:id/stop",
-    loginRequired,
-    (req, res) => {
-
-        const server =
-            servers().find(
-                item =>
-                    item.id ===
-                    req.params.id
-            );
-
-        if (!server) {
-            return res.status(404).send(
-                "Server nicht gefunden."
-            );
-        }
-
-        const user =
-            currentUser(req);
-
-        if (
-            server.ownerId !== user.id &&
-            !isAdmin(req)
-        ) {
-            return res.status(403).send(
-                "Kein Zugriff."
-            );
-        }
-
-        stopServer(server);
-
-        log(
-            "SERVER_STOP",
-            `${server.name} wurde gestoppt.`
-        );
-
-        res.redirect(
-            `/server/${encodeURIComponent(
-                server.id
-            )}`
-        );
-    }
-);
-
-/*
-=========================================================
-COMMAND API
-=========================================================
-*/
 
 app.post(
     "/api/server/:id/command",
-    loginRequired,
+    requireLogin,
+    checkMaintenance,
     (req, res) => {
-
         const server =
-            servers().find(
-                item =>
-                    item.id ===
-                    req.params.id
+            findServer(
+                req.params.id
             );
 
-        if (!server) {
-            return res.status(404).json({
-                ok: false,
-                message:
-                    "Server nicht gefunden."
-            });
-        }
-
         const user =
-            currentUser(req);
+            getUser(req);
 
         if (
-            server.ownerId !== user.id &&
-            !isAdmin(req)
+            !server ||
+            (
+                server.ownerId !== user.id &&
+                !isAdmin(req)
+            )
         ) {
             return res.status(403).json({
                 ok: false,
-                message:
-                    "Kein Zugriff."
+                message: "Kein Zugriff."
             });
         }
 
-        const result =
-            sendCommand(
+        res.json(
+            sendMinecraftCommand(
                 server,
                 req.body.command
-            );
-
-        res.json(result);
-
+            )
+        );
     }
 );
 
-/*
-=========================================================
-ADMIN PANEL
-=========================================================
-*/
+/* =========================================================
+   START / STOP / RESTART
+========================================================= */
+
+app.post(
+    "/server/:id/start",
+    requireLogin,
+    checkMaintenance,
+    async (req, res) => {
+
+        const server =
+            findServer(
+                req.params.id
+            );
+
+        const user =
+            getUser(req);
+
+        if (
+            !server ||
+            (
+                server.ownerId !== user.id &&
+                !isAdmin(req)
+            )
+        ) {
+            return res.status(404).send(
+                "Server nicht gefunden."
+            );
+        }
+
+        const result =
+            await startMinecraft(
+                server
+            );
+
+        if (!result.ok) {
+            addServerConsole(
+                server,
+                "START FEHLER: " +
+                    result.message
+            );
+        }
+
+        res.redirect(
+            "/server/" +
+                server.id
+        );
+    }
+);
+
+app.post(
+    "/server/:id/stop",
+    requireLogin,
+    checkMaintenance,
+    (req, res) => {
+
+        const server =
+            findServer(
+                req.params.id
+            );
+
+        const user =
+            getUser(req);
+
+        if (
+            !server ||
+            (
+                server.ownerId !== user.id &&
+                !isAdmin(req)
+            )
+        ) {
+            return res.status(404).send(
+                "Server nicht gefunden."
+            );
+        }
+
+        stopMinecraft(server);
+
+        addLog(
+            "SERVER_STOP_REQUEST",
+            server.name
+        );
+
+        res.redirect(
+            "/server/" +
+                server.id
+        );
+    }
+);
+
+app.post(
+    "/server/:id/restart",
+    requireLogin,
+    checkMaintenance,
+    async (req, res) => {
+
+        const server =
+            findServer(
+                req.params.id
+            );
+
+        const user =
+            getUser(req);
+
+        if (
+            !server ||
+            (
+                server.ownerId !== user.id &&
+                !isAdmin(req)
+            )
+        ) {
+            return res.status(404).send(
+                "Server nicht gefunden."
+            );
+        }
+
+        stopMinecraft(server);
+
+        setTimeout(
+            () => {
+                startMinecraft(
+                    server
+                ).catch(error => {
+                    addServerConsole(
+                        server,
+                        "RESTART FEHLER: " +
+                            error.message
+                    );
+                });
+            },
+            3000
+        );
+
+        res.redirect(
+            "/server/" +
+                server.id
+        );
+    }
+);
+
+/* =========================================================
+   ADMIN PANEL
+========================================================= */
 
 app.get(
     "/admin",
-    adminRequired,
+    requireLogin,
+    requireAdmin,
     (req, res) => {
 
-        const allOrders =
-            orders().reverse();
+        const users =
+            readJSON(
+                FILES.users,
+                []
+            );
 
-        const allServers =
-            servers();
+        const orders =
+            readJSON(
+                FILES.orders,
+                []
+            ).reverse();
 
-        const config =
-            settings();
+        const servers =
+            readJSON(
+                FILES.servers,
+                []
+            );
+
+        const logs =
+            readJSON(
+                FILES.logs,
+                []
+            );
+
+        const settings =
+            readJSON(
+                FILES.settings,
+                {}
+            );
+
+        const running =
+            servers.filter(
+                server =>
+                    serverProcess(server)
+            ).length;
+
+        const totalMemory =
+            os.totalmem();
+
+        const freeMemory =
+            os.freemem();
+
+        const usedMemory =
+            totalMemory -
+            freeMemory;
 
         res.send(
             page(
-                "Admin Panel",
+                req,
+                "Admin",
                 `
-                <h1>👑 Admin Panel</h1>
+                <h1>
+                👑 Admin Panel
+                </h1>
 
                 <div class="grid">
 
                     <div class="card">
 
                         <h3>
-                            Bestellungen
+                        Server
                         </h3>
 
                         <div class="price">
-                            ${
-                                allOrders.filter(
-                                    o =>
-                                        o.status ===
-                                        "pending"
-                                ).length
-                            }
+                        ${servers.length}
                         </div>
 
                     </div>
@@ -2241,12 +2219,50 @@ app.get(
                     <div class="card">
 
                         <h3>
-                            Server
+                        Laufende Server
                         </h3>
 
                         <div class="price">
-                            ${allServers.length}
+                        ${running}
                         </div>
+
+                    </div>
+
+                    <div class="card">
+
+                        <h3>
+                        RAM-Auslastung
+                        </h3>
+
+                        <div class="price">
+
+                        ${Math.round(
+                            usedMemory /
+                                1024 /
+                                1024 /
+                                1024 *
+                                10
+                        ) / 10}
+
+                        GB
+
+                        </div>
+
+                        <p class="muted">
+
+                        von
+
+                        ${Math.round(
+                            totalMemory /
+                                1024 /
+                                1024 /
+                                1024 *
+                                10
+                        ) / 10}
+
+                        GB
+
+                        </p>
 
                     </div>
 
@@ -2254,211 +2270,39 @@ app.get(
 
                 <div class="card">
 
-                    <h2>📦 Bestellungen</h2>
-
-                    ${
-                        allOrders.length === 0
-                            ? "<p>Keine Bestellungen.</p>"
-                            :
-                            allOrders
-                                .map(
-                                    order => `
-                                    <div class="card">
-
-                                        <h3>
-                                            ${escape(
-                                                order.serverName
-                                            )}
-                                        </h3>
-
-                                        <p>
-                                            Bestellnummer:
-                                            <strong>
-                                                ${escape(
-                                                    order.orderNumber
-                                                )}
-                                            </strong>
-                                        </p>
-
-                                        <p>
-                                            Kunde:
-                                            ${escape(
-                                                order.username
-                                            )}
-                                            <br>
-                                            ${escape(
-                                                order.email
-                                            )}
-                                        </p>
-
-                                        <p>
-                                            Version:
-                                            ${escape(
-                                                order.version
-                                            )}
-                                        </p>
-
-                                        <p>
-                                            Preis:
-                                            ${order.price.toFixed(
-                                                2
-                                            )} €
-                                        </p>
-
-                                        <p>
-                                            Status:
-
-                                            <span
-                                                class="status ${
-                                                    order.status
-                                                }"
-                                            >
-                                                ${escape(
-                                                    order.status
-                                                )}
-                                            </span>
-
-                                        </p>
-
-                                        ${
-                                            order.status ===
-                                            "pending"
-                                                ? `
-                                                <div
-                                                    class="actions"
-                                                >
-
-                                                    <form
-                                                        method="POST"
-                                                        action="/admin/order/${encodeURIComponent(
-                                                            order.id
-                                                        )}/accept"
-                                                    >
-
-                                                        <button>
-                                                            ✅ Annehmen
-                                                        </button>
-
-                                                    </form>
-
-                                                    <form
-                                                        method="POST"
-                                                        action="/admin/order/${encodeURIComponent(
-                                                            order.id
-                                                        )}/reject"
-                                                    >
-
-                                                        <button
-                                                            class="danger"
-                                                        >
-                                                            ❌ Ablehnen
-                                                        </button>
-
-                                                    </form>
-
-                                                </div>
-                                                `
-                                                : ""
-                                        }
-
-                                    </div>
-                                    `
-                                )
-                                .join("")
-                    }
-
-                </div>
-
-                <div class="card">
-
-                    <h2>🖥 Alle Server</h2>
-
-                    ${
-                        allServers.length === 0
-                            ? "<p>Noch keine Server.</p>"
-                            :
-                            allServers
-                                .map(
-                                    server => `
-                                    <div class="card">
-
-                                        <h3>
-                                            ${escape(
-                                                server.name
-                                            )}
-                                        </h3>
-
-                                        <p>
-                                            Besitzer:
-                                            ${escape(
-                                                server.username
-                                            )}
-                                        </p>
-
-                                        <p>
-                                            IP:
-                                            <strong>
-                                                ${escape(
-                                                    server.address
-                                                )}
-                                            </strong>
-                                        </p>
-
-                                        <p>
-                                            Status:
-                                            ${escape(
-                                                server.status
-                                            )}
-                                        </p>
-
-                                        <a
-                                            class="button"
-                                            href="/server/${encodeURIComponent(
-                                                server.id
-                                            )}"
-                                        >
-                                            Konsole
-                                        </a>
-
-                                    </div>
-                                    `
-                                )
-                                .join("")
-                    }
-
-                </div>
-
-                <div class="card">
-
-                    <h2>🔧 Wartungsmodus</h2>
+                    <h2>
+                    🔧 Wartungsmodus
+                    </h2>
 
                     <form
                         method="POST"
-                        action="/admin/maintenance"
-                    >
+                        action="/admin/maintenance">
 
                         <textarea
                             name="message"
-                            rows="4"
-                        >${escape(
-                            config.maintenanceText
-                        )}</textarea>
+                            placeholder="Wartungstext">${escapeHTML(
+                                settings.maintenanceMessage ||
+                                    ""
+                            )}</textarea>
 
                         <div class="actions">
 
                             <button
                                 name="action"
-                                value="on"
-                            >
-                                Wartung AN
+                                value="on">
+
+                                🔧 Wartung AN
+                                + Server stoppen
+
                             </button>
 
                             <button
-                                class="secondary"
+                                class="dark"
                                 name="action"
-                                value="off"
-                            >
+                                value="off">
+
                                 Wartung AUS
+
                             </button>
 
                         </div>
@@ -2469,44 +2313,297 @@ app.get(
 
                 <div class="card">
 
-                    <h2>📜 System-Logs</h2>
+                    <h2>
+                    📦 Bestellungen
+                    </h2>
 
-                    <pre class="console">${
-                        logs()
-                            .slice(0, 300)
-                            .map(
-                                item =>
-                                    `[${item.date}] [${item.type}] ${item.message}`
-                            )
-                            .join("\n")
-                    }</pre>
+                    ${
+                        orders.length
+                            ? orders
+                                  .map(
+                                      order => `
+                                      <div class="card">
+
+                                          <b>
+                                          ${escapeHTML(
+                                              order.orderNumber
+                                          )}
+                                          </b>
+
+                                          <p>
+                                          ${escapeHTML(
+                                              order.serverName
+                                          )}
+
+                                          ·
+
+                                          ${escapeHTML(
+                                              order.email
+                                          )}
+
+                                          ·
+
+                                          ${order.price.toFixed(
+                                              2
+                                          )} €
+
+                                          </p>
+
+                                          <span
+                                            class="status ${
+                                                order.status
+                                            }">
+
+                                            ${escapeHTML(
+                                                order.status
+                                            )}
+
+                                          </span>
+
+                                          ${
+                                              order.status ===
+                                              "pending"
+                                                  ? `
+                                                  <div class="actions">
+
+                                                      <form
+                                                        method="POST"
+                                                        action="/admin/order/${order.id}/accept">
+
+                                                        <button>
+                                                        ✅ Annehmen
+                                                        </button>
+
+                                                      </form>
+
+                                                      <form
+                                                        method="POST"
+                                                        action="/admin/order/${order.id}/reject">
+
+                                                        <button class="red">
+                                                        ❌ Ablehnen
+                                                        </button>
+
+                                                      </form>
+
+                                                  </div>
+                                                  `
+                                                  : ""
+                                          }
+
+                                      </div>
+                                      `
+                                  )
+                                  .join("")
+                            : "<p>Keine Bestellungen.</p>"
+                    }
 
                 </div>
-                `,
-                req
+
+                <div class="card">
+
+                    <h2>
+                    🖥 Alle Server
+                    </h2>
+
+                    ${
+                        servers.length
+                            ? servers
+                                  .map(
+                                      server => `
+                                      <div class="card">
+
+                                          <h3>
+                                          ${escapeHTML(
+                                              server.name
+                                          )}
+                                          </h3>
+
+                                          <p>
+                                          ${escapeHTML(
+                                              server.address
+                                          )}
+                                          </p>
+
+                                          <a
+                                            class="btn"
+                                            href="/server/${server.id}">
+
+                                            Konsole
+
+                                          </a>
+
+                                          <form
+                                            style="display:inline"
+                                            method="POST"
+                                            action="/admin/server/${server.id}/delete"
+                                            onsubmit="return confirm('Server wirklich löschen?')">
+
+                                            <button
+                                                class="red">
+
+                                                🗑 Löschen
+
+                                            </button>
+
+                                          </form>
+
+                                      </div>
+                                      `
+                                  )
+                                  .join("")
+                            : "<p>Keine Server.</p>"
+                    }
+
+                </div>
+
+                <div class="card">
+
+                    <h2>
+                    👥 Benutzer sperren
+                    </h2>
+
+                    ${
+                        users
+                            .map(
+                                user => `
+                                <div class="card">
+
+                                    <b>
+                                    ${escapeHTML(
+                                        user.username
+                                    )}
+                                    </b>
+
+                                    <p>
+                                    ${escapeHTML(
+                                        user.email
+                                    )}
+                                    </p>
+
+                                    ${
+                                        user.email.toLowerCase() !==
+                                        ADMIN_EMAIL.toLowerCase()
+                                            ? `
+                                            <form
+                                                method="POST"
+                                                action="/admin/user/${user.id}/ban">
+
+                                                <input
+                                                    name="reason"
+                                                    placeholder="Grund"
+                                                    required
+                                                >
+
+                                                <select
+                                                    name="duration">
+
+                                                    <option value="1h">
+                                                    1 Stunde
+                                                    </option>
+
+                                                    <option value="1d">
+                                                    1 Tag
+                                                    </option>
+
+                                                    <option value="7d">
+                                                    7 Tage
+                                                    </option>
+
+                                                    <option value="30d">
+                                                    30 Tage
+                                                    </option>
+
+                                                    <option value="permanent">
+                                                    Dauerhaft
+                                                    </option>
+
+                                                </select>
+
+                                                <button
+                                                    class="red">
+
+                                                    🚫 Sperren
+
+                                                </button>
+
+                                            </form>
+
+                                            ${
+                                                user.bannedUntil
+                                                    ? `
+                                                    <form
+                                                        method="POST"
+                                                        action="/admin/user/${user.id}/unban">
+
+                                                        <button class="dark">
+                                                        Sperre aufheben
+                                                        </button>
+
+                                                    </form>
+                                                    `
+                                                    : ""
+                                            }
+
+                                            `
+                                            : `
+                                            <p class="muted">
+                                            👑 Hauptadministrator
+                                            </p>
+                                            `
+                                    }
+
+                                </div>
+                                `
+                            )
+                            .join("")
+                    }
+
+                </div>
+
+                <div class="card">
+
+                    <h2>
+                    📜 System-Logs
+                    </h2>
+
+                    <pre class="console">${escapeHTML(
+                        logs
+                            .slice(0, 300)
+                            .map(
+                                log =>
+                                    `[${log.date}] [${log.type}] ${log.message}`
+                            )
+                            .join("\n")
+                    )}</pre>
+
+                </div>
+                `
             )
         );
     }
 );
 
-/*
-=========================================================
-ADMIN ACCEPT
-=========================================================
-*/
+/* =========================================================
+   ADMIN - ORDER ACCEPT
+========================================================= */
 
 app.post(
     "/admin/order/:id/accept",
-    adminRequired,
+    requireLogin,
+    requireAdmin,
     async (req, res) => {
 
-        const data =
-            orders();
+        const orders =
+            readJSON(
+                FILES.orders,
+                []
+            );
 
         const order =
-            data.find(
-                item =>
-                    item.id ===
+            orders.find(
+                x =>
+                    x.id ===
                     req.params.id
             );
 
@@ -2525,112 +2622,124 @@ app.post(
             );
         }
 
-        try {
-
-            const port =
-                await findFreePort();
-
-            const id =
-                "srv-" +
-                crypto
-                    .randomBytes(6)
-                    .toString("hex");
-
-            const server = {
-                id,
-                orderId: order.id,
-                orderNumber:
-                    order.orderNumber,
-                ownerId:
-                    order.userId,
-                username:
-                    order.username,
-                email:
-                    order.email,
-                name:
-                    order.serverName,
-                version:
-                    order.version,
-                port,
-                address:
-                    `${
-                        process.env.MINECRAFT_HOST ||
-                        "localhost"
-                    }:${port}`,
-                memory:
-                    Number(
-                        process.env.SERVER_MEMORY_MB ||
-                        1024
-                    ),
-                status:
-                    "stopped",
-                pid:
-                    null,
-                console:
-                    "",
-                createdAt:
-                    new Date().toISOString()
-            };
-
-            const serverData =
-                servers();
-
-            serverData.push(server);
-
-            write(
-                SERVERS_FILE,
-                serverData
+        const servers =
+            readJSON(
+                FILES.servers,
+                []
             );
 
-            order.status =
-                "accepted";
-
-            order.reviewedAt =
-                new Date().toISOString();
-
-            write(
-                ORDERS_FILE,
-                data
+        const usedPorts =
+            new Set(
+                servers.map(
+                    x =>
+                        Number(x.port)
+                )
             );
 
-            log(
-                "ORDER_ACCEPTED",
-                `Bestellung ${order.orderNumber} angenommen. Port ${port}.`
-            );
+        let port = 25565;
 
-            res.redirect(
-                "/admin"
-            );
-
-        } catch (error) {
-
-            res.status(500).send(
-                escape(error.message)
-            );
-
+        while (
+            usedPorts.has(port)
+        ) {
+            port++;
         }
 
+        const server = {
+            id: makeId("server"),
+
+            orderId:
+                order.id,
+
+            orderNumber:
+                order.orderNumber,
+
+            ownerId:
+                order.userId,
+
+            username:
+                order.username,
+
+            email:
+                order.email,
+
+            name:
+                order.serverName,
+
+            version:
+                order.version,
+
+            port,
+
+            address:
+                `${process.env.MINECRAFT_HOST || "localhost"}:${port}`,
+
+            ramMB:
+                SERVER_RAM,
+
+            status:
+                "stopped",
+
+            pid:
+                null,
+
+            console:
+                "",
+
+            createdAt:
+                new Date().toISOString()
+        };
+
+        servers.push(
+            server
+        );
+
+        writeJSON(
+            FILES.servers,
+            servers
+        );
+
+        order.status =
+            "accepted";
+
+        order.reviewedAt =
+            new Date().toISOString();
+
+        writeJSON(
+            FILES.orders,
+            orders
+        );
+
+        addLog(
+            "ORDER_ACCEPTED",
+            `${order.orderNumber} -> ${server.address}`
+        );
+
+        res.redirect(
+            "/admin"
+        );
     }
 );
 
-/*
-=========================================================
-ADMIN REJECT
-=========================================================
-*/
+/* =========================================================
+   ADMIN - ORDER REJECT
+========================================================= */
 
 app.post(
     "/admin/order/:id/reject",
-    adminRequired,
+    requireLogin,
+    requireAdmin,
     (req, res) => {
 
-        const data =
-            orders();
+        const orders =
+            readJSON(
+                FILES.orders,
+                []
+            );
 
         const order =
-            data.find(
-                item =>
-                    item.id ===
+            orders.find(
+                x =>
+                    x.id ===
                     req.params.id
             );
 
@@ -2646,170 +2755,375 @@ app.post(
         order.reviewedAt =
             new Date().toISOString();
 
-        write(
-            ORDERS_FILE,
-            data
+        writeJSON(
+            FILES.orders,
+            orders
         );
 
-        log(
+        addLog(
             "ORDER_REJECTED",
-            `Bestellung ${order.orderNumber} abgelehnt.`
+            order.orderNumber
         );
 
-        res.redirect("/admin");
-
+        res.redirect(
+            "/admin"
+        );
     }
 );
 
-/*
-=========================================================
-MAINTENANCE
-=========================================================
-*/
+/* =========================================================
+   ADMIN - DELETE SERVER
+========================================================= */
+
+app.post(
+    "/admin/server/:id/delete",
+    requireLogin,
+    requireAdmin,
+    (req, res) => {
+
+        const server =
+            findServer(
+                req.params.id
+            );
+
+        if (!server) {
+            return res.redirect(
+                "/admin"
+            );
+        }
+
+        stopMinecraft(
+            server
+        );
+
+        const servers =
+            readJSON(
+                FILES.servers,
+                []
+            ).filter(
+                x =>
+                    x.id !==
+                    server.id
+            );
+
+        writeJSON(
+            FILES.servers,
+            servers
+        );
+
+        try {
+            fs.rmSync(
+                serverDirectory(
+                    server
+                ),
+                {
+                    recursive: true,
+                    force: true
+                }
+            );
+        } catch {}
+
+        addLog(
+            "SERVER_DELETE",
+            server.name
+        );
+
+        res.redirect(
+            "/admin"
+        );
+    }
+);
+
+/* =========================================================
+   ADMIN - MAINTENANCE
+========================================================= */
 
 app.post(
     "/admin/maintenance",
-    adminRequired,
+    requireLogin,
+    requireAdmin,
     (req, res) => {
 
-        const config =
-            settings();
+        const settings =
+            readJSON(
+                FILES.settings,
+                {}
+            );
 
-        config.maintenance =
-            req.body.action === "on";
+        settings.maintenance =
+            req.body.action ===
+            "on";
 
-        config.maintenanceText =
+        settings.maintenanceMessage =
             String(
                 req.body.message ||
-                "Die Webseite befindet sich momentan im Wartungsmodus."
+                    "Die Webseite befindet sich im Wartungsmodus."
             );
 
-        write(
-            SETTINGS_FILE,
-            config
+        writeJSON(
+            FILES.settings,
+            settings
         );
 
-        log(
-            "MAINTENANCE",
-            config.maintenance
-                ? "Wartungsmodus aktiviert."
-                : "Wartungsmodus deaktiviert."
+        if (
+            settings.maintenance
+        ) {
+            const servers =
+                readJSON(
+                    FILES.servers,
+                    []
+                );
+
+            for (
+                const server
+                of servers
+            ) {
+                if (
+                    serverProcess(
+                        server
+                    )
+                ) {
+                    stopMinecraft(
+                        server
+                    );
+                }
+            }
+
+            addLog(
+                "MAINTENANCE",
+                "Wartungsmodus AN - Server werden gestoppt"
+            );
+        } else {
+            addLog(
+                "MAINTENANCE",
+                "Wartungsmodus AUS"
+            );
+        }
+
+        res.redirect(
+            "/admin"
         );
-
-        res.redirect("/admin");
-
     }
 );
 
-/*
-=========================================================
-404
-=========================================================
-*/
+/* =========================================================
+   ADMIN - BAN
+========================================================= */
 
-app.use(
+function banDuration(
+    duration
+) {
+    const durations = {
+        "1h": 60 * 60 * 1000,
+
+        "1d":
+            24 *
+            60 *
+            60 *
+            1000,
+
+        "7d":
+            7 *
+            24 *
+            60 *
+            60 *
+            1000,
+
+        "30d":
+            30 *
+            24 *
+            60 *
+            60 *
+            1000
+    };
+
+    return durations[
+        duration
+    ] || 0;
+}
+
+app.post(
+    "/admin/user/:id/ban",
+    requireLogin,
+    requireAdmin,
     (req, res) => {
 
-        res.status(404).send(
-            page(
-                "404",
-                `
-                <div class="card center">
+        const users =
+            readJSON(
+                FILES.users,
+                []
+            );
 
-                    <h1>404</h1>
+        const user =
+            users.find(
+                x =>
+                    x.id ===
+                    req.params.id
+            );
 
-                    <p>
-                        Diese Seite existiert nicht.
-                    </p>
+        if (!user) {
+            return res.redirect(
+                "/admin"
+            );
+        }
 
-                    <a
-                        class="button"
-                        href="/"
-                    >
-                        Home
-                    </a>
+        if (
+            user.email.toLowerCase() ===
+            ADMIN_EMAIL.toLowerCase()
+        ) {
+            return res.status(403).send(
+                "Der Hauptadministrator kann nicht gesperrt werden."
+            );
+        }
 
-                </div>
-                `,
-                req
-            )
+        const duration =
+            String(
+                req.body.duration ||
+                    "1d"
+            );
+
+        user.banReason =
+            String(
+                req.body.reason ||
+                    "Kein Grund"
+            );
+
+        if (
+            duration ===
+            "permanent"
+        ) {
+            user.bannedUntil =
+                "permanent";
+        } else {
+            user.bannedUntil =
+                new Date(
+                    Date.now() +
+                        banDuration(
+                            duration
+                        )
+                ).toISOString();
+        }
+
+        writeJSON(
+            FILES.users,
+            users
+        );
+
+        addLog(
+            "BAN",
+            `${user.email} - ${user.banReason}`
+        );
+
+        res.redirect(
+            "/admin"
+        );
+    }
+);
+
+/* =========================================================
+   ADMIN - UNBAN
+========================================================= */
+
+app.post(
+    "/admin/user/:id/unban",
+    requireLogin,
+    requireAdmin,
+    (req, res) => {
+
+        const users =
+            readJSON(
+                FILES.users,
+                []
+            );
+
+        const user =
+            users.find(
+                x =>
+                    x.id ===
+                    req.params.id
+            );
+
+        if (user) {
+
+            user.bannedUntil =
+                null;
+
+            user.banReason =
+                null;
+
+            writeJSON(
+                FILES.users,
+                users
+            );
+
+            addLog(
+                "UNBAN",
+                user.email
+            );
+        }
+
+        res.redirect(
+            "/admin"
+        );
+    }
+);
+
+/* =========================================================
+   START SERVER
+========================================================= */
+
+app.listen(
+    PORT,
+    "0.0.0.0",
+    () => {
+
+        console.log(
+            `Minecraft Hosting läuft auf Port ${PORT}`
+        );
+
+        addLog(
+            "SYSTEM",
+            `Webseite gestartet auf Port ${PORT}`
         );
 
     }
 );
 
-/*
-=========================================================
-SERVER START
-=========================================================
-*/
-
-const httpServer =
-    app.listen(
-        PORT,
-        () => {
-
-            console.log("");
-            console.log(
-                "================================"
-            );
-            console.log(
-                " Minecraft Hosting"
-            );
-            console.log(
-                "================================"
-            );
-            console.log(
-                `Webseite läuft auf Port ${PORT}`
-            );
-            console.log(
-                `Admin: ${ADMIN_EMAIL}`
-            );
-            console.log(
-                "================================"
-            );
-
-            log(
-                "SYSTEM",
-                `Webseite gestartet auf Port ${PORT}.`
-            );
-
-        }
-    );
-
-/*
-=========================================================
-CLEAN SHUTDOWN
-=========================================================
-*/
+/* =========================================================
+   CLEAN SHUTDOWN
+========================================================= */
 
 function shutdown() {
 
     console.log(
-        "Server wird beendet..."
+        "Server wird heruntergefahren..."
     );
 
+    const servers =
+        readJSON(
+            FILES.servers,
+            []
+        );
+
     for (
-        const child of processes.values()
+        const server
+        of servers
     ) {
-
-        try {
-            child.stdin.write(
-                "stop\n"
+        if (
+            serverProcess(
+                server
+            )
+        ) {
+            stopMinecraft(
+                server
             );
-        } catch {}
-
+        }
     }
 
     setTimeout(
-        () => {
-            httpServer.close(
-                () => process.exit(0)
-            );
-        },
+        () => process.exit(0),
         3000
     );
-
 }
 
 process.on(
