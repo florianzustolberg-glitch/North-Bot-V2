@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: minecraft-hosting
+    runtime: node
+
+    buildCommand: npm install
+
+    startCommand: node webseite.js
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      - key: JAVA_COMMAND
+        value: java
+
+      - key: SERVER_RAM_MB
+        value: "5120"
+
+      - key: MINECRAFT_HOST
+        value: localhost
+
+      - key: SESSION_SECRET
+        generateValue: true
